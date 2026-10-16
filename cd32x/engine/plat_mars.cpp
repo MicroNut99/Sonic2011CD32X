@@ -546,7 +546,12 @@ static void scene_stop(unsigned short code, const char *what, unsigned int file)
     for (;;) {
     }
 }
-static uint16_t cart_scene16(uint32_t off) { return *(volatile uint16_t *)(0x22080000 + off); } /* S7d2: CartRead16's own types (uint32_t = unsigned long on the SH2) */
+static uint16_t cart_scene16(uint32_t off) /* S7d2: CartRead16's own types (uint32_t = unsigned long on the SH2) */
+{
+    if ((off & 0xFFFF) == 0)
+        STATE(0x5800 | (off >> 16)); /* R1D: line 10 58nn = the image check is reading at 0x080000 + nn * 64 KB */
+    return *(volatile uint16_t *)(0x22080000 + off);
+}
 void plat_stage_loading()
 {
 #if SCD_PLANES
