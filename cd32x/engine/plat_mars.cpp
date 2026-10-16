@@ -234,6 +234,9 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
         return;
     }
     STATE(0x5C65); /* R1C: the MDG is in the cart; command 68 next */
+    SC_COMM4 = 0; /* R1P: COMM4 still held the Sub-CPU's start-up check 0x1234 - the 68000 took it as a
+                     record id and copied frame-buffer junk (R1H: ID 1234, REC 0004 0004 0006 ...; R1G's dot
+                     in every blank tile). Cleared here by the SH2, before the planes go on. */
     if (sgb_cmd(1, SGB_CART_OFFSET) != 1) {
         STATE(0x5C63);
         return;
@@ -275,22 +278,11 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
         else
             unsupported = true;
     }
-    int usedMask = 0, activeMask = 0;
-    for (int s = 0; s < 4; ++s) {
-        usedMask |= (slotUsed[s] ? 1 : 0) << s;
-        activeMask |= (activeTileLayers[s] < LAYER_COUNT ? 1 : 0) << s;
-        slotUsed[s] = false;
-    }
+    for (int s = 0; s < 4; ++s) slotUsed[s] = false;
     int bgSeen = frameBg;
     frameBg    = -1;
-    if (unsupported || !fgSlots || bgLayer != bgSeen) {
-        /* R1O (from R1J): line 10 Bxxx = no record this frame: bit 11 a layer the planes cannot show (or not drawn),
-           bit 10 no foreground slot, bit 9 the background layer differs from the one drawn; bits 4-7 the
-           slots drawn this frame, bits 0-3 the slots with a layer (R1H: the SH2 sent no record in 7 minutes) */
-        STATE(0xB000 | (unsupported ? 0x800 : 0) | (!fgSlots ? 0x400 : 0) | (bgLayer != bgSeen ? 0x200 : 0) |
-              (usedMask << 4) | activeMask);
+    if (unsupported || !fgSlots || bgLayer != bgSeen)
         return; /* the planes keep the last picture */
-    }
     const unsigned char *f = SGB_FILE;
     MdLayer LA, LB;
     LA.chunks       = (const uint16_t *)(f + *(const unsigned int *)(f + 24));
@@ -335,7 +327,6 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
         }
     }
     if (sgb_out_end(&o, vA, vB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc) < 0) {
-        STATE(0xB100 | (usedMask << 4) | activeMask); /* R1O (from R1J): bit 8 = the record did not fit */
         md_plane_reset(&sgbA); /* too big: both planes from scratch next frame */
         md_plane_reset(&sgbB);
         return;
@@ -344,7 +335,6 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     recId = (unsigned short)(recId + 1);
     if (!recId)
         recId = 1;
-    STATE(0xC000 | (recId & 0xFFF)); /* R1O (from R1J): Cnnn = record nnn handed over */
     sgb_give_fb();
     SC_COMM4 = recId;
     unsigned int n = 0;
