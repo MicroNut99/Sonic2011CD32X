@@ -570,7 +570,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.cpp	2026-10-15 21:43:01.363597777 -0700
++++ engine/Drawing.cpp	2026-10-16 10:42:03.403907638 -0700
 @@ -15,9 +15,15 @@
  // it rather than remove it outright.
  #define DONT_USE_VIEW_ANGLE (1)
@@ -775,6 +775,15 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      for (int i = 0; i < SURFACE_COUNT; ++i) {
          if (gfxSurface[i].texStartY + gfxSurface[i].height <= HW_TEXTURE_SIZE && gfxSurface[i].texStartX > -1) {
              int gfxPos = gfxSurface[i].dataPosition;
+@@ -1888,7 +1958,7 @@
+ 
+         if (type) {
+             activePlayer = 0;
+-            if (scriptCode[objectScriptList[type].subDraw.scriptCodePtr] > 0)
++            if (ScriptSubExists(objectScriptList[type].subDraw.scriptCodePtr))
+                 ProcessScript(objectScriptList[type].subDraw.scriptCodePtr, objectScriptList[type].subDraw.jumpTablePtr, SUB_DRAW);
+         }
+     }
 @@ -2037,6 +2107,7 @@
  #if !RETRO_USE_ORIGINAL_CODE
  void DrawDebugOverlays()
@@ -1392,7 +1401,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void CalculateTrigAngles();
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.cpp engine/Object.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Object.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Object.cpp	2026-10-15 21:43:01.365581528 -0700
++++ engine/Object.cpp	2026-10-16 10:42:03.401047548 -0700
 @@ -4,7 +4,11 @@
  int curObjectType = 0;
  Entity objectEntityList[ENTITY_COUNT];
@@ -1426,6 +1435,27 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      PrintLog("Set Object (%d) name to: %s", objectID, objectName);
  }
  
+@@ -39,7 +49,7 @@
+         scriptInfo->frameListOffset = scriptFrameCount;
+         scriptInfo->spriteSheetID   = 0;
+         entity->type                = i;
+-        if (scriptCode[scriptInfo->subStartup.scriptCodePtr] > 0)
++        if (ScriptSubExists(scriptInfo->subStartup.scriptCodePtr))
+             ProcessScript(scriptInfo->subStartup.scriptCodePtr, scriptInfo->subStartup.jumpTablePtr, SUB_SETUP);
+         scriptInfo->frameCount = scriptFrameCount - scriptInfo->frameListOffset;
+     }
+@@ -92,9 +102,9 @@
+         if (active && entity->type > OBJ_TYPE_BLANKOBJECT) {
+             ObjectScript *scriptInfo = &objectScriptList[entity->type];
+             activePlayer             = 0;
+-            if (scriptCode[scriptInfo->subMain.scriptCodePtr] > 0)
++            if (ScriptSubExists(scriptInfo->subMain.scriptCodePtr))
+                 ProcessScript(scriptInfo->subMain.scriptCodePtr, scriptInfo->subMain.jumpTablePtr, SUB_MAIN);
+-            if (scriptCode[scriptInfo->subPlayerInteraction.scriptCodePtr] > 0) {
++            if (ScriptSubExists(scriptInfo->subPlayerInteraction.scriptCodePtr)) {
+                 while (activePlayer < activePlayerCount) {
+                     if (playerList[activePlayer].objectInteractions)
+                         ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
 @@ -103,8 +113,14 @@
                  }
              }
@@ -1443,6 +1473,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          }
      }
  }
+@@ -119,9 +135,9 @@
+         if (entity->priority == PRIORITY_ALWAYS && entity->type > OBJ_TYPE_BLANKOBJECT) {
+             ObjectScript *scriptInfo = &objectScriptList[entity->type];
+             activePlayer             = 0;
+-            if (scriptCode[scriptInfo->subMain.scriptCodePtr] > 0)
++            if (ScriptSubExists(scriptInfo->subMain.scriptCodePtr))
+                 ProcessScript(scriptInfo->subMain.scriptCodePtr, scriptInfo->subMain.jumpTablePtr, SUB_MAIN);
+-            if (scriptCode[scriptInfo->subPlayerInteraction.scriptCodePtr] > 0) {
++            if (ScriptSubExists(scriptInfo->subPlayerInteraction.scriptCodePtr)) {
+                 while (activePlayer < PLAYER_COUNT) {
+                     if (playerList[activePlayer].objectInteractions)
+                         ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
 @@ -130,8 +146,14 @@
                  }
              }
@@ -3043,7 +3085,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.hpp engine/Script.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.hpp	2026-10-15 21:43:01.368449350 -0700
++++ engine/Script.hpp	2026-10-16 10:42:44.505729846 -0700
 @@ -8,7 +8,11 @@
  #define JUMPSTACK_COUNT (0x400)
  #define FUNCSTACK_COUNT (0x400)
@@ -3056,7 +3098,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  struct ScriptPtr {
      int scriptCodePtr;
-@@ -50,7 +54,11 @@
+@@ -50,7 +54,18 @@
  extern ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  extern int scriptFunctionCount;
  
@@ -3065,6 +3107,13 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +#else
  extern int scriptCode[SCRIPTDATA_COUNT];
 +#endif
++// PORT32X R1R: does this object sub have a script? The engine's own test (scriptCode[ptr] > 0), plus: the "no script"
++// index SCRIPTDATA_COUNT - 1 (ClearScriptData, and the bytecode's absent subs) never has one. On the PC the array is
++// zeroed there, so the answer is the same as before. On the SH2, scriptCode is the cart image's script part (R11A: 0xE304
++// entries, not 0x40000), so index 0x3FFFF lies in the image's sprite pixels (R11A: 0x08090900 > 0): the engine ran
++// pixels as script code for every object type without that sub (R1Q: the SH2 died in ProcessStartupObjects - found by
++// running the R1Q build in tools/sh2emu).
++inline bool ScriptSubExists(int scriptCodePtr) { return scriptCodePtr != SCRIPTDATA_COUNT - 1 && scriptCode[scriptCodePtr] > 0; }
  extern int jumpTableData[JUMPTABLE_COUNT];
  
  extern int jumpTableStack[JUMPSTACK_COUNT];

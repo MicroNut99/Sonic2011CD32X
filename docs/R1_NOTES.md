@@ -104,6 +104,19 @@ check) - line 10 `5E00`-`5E02` while it compares, `5E0F` = skipped. **Hold A+B+C
 copy it anyway. The engine, the data pack and the MDG are always copied (they change with every
 build). The loader's whole-image check still runs at boot.
 
+## Before burning: tools/sh2emu (from R1R)
+
+Every build goes through the SH2 emulator first (`tools/sh2emu/README.md`): it boots the build folder's own loader and
+engine with the disc files and reports what would hang or corrupt the console.
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+gcc -O2 -o tools/sh2emu/sh2emu tools/sh2emu/sh2emu.c
+tools/sh2emu/sh2emu cd32x/build_engine > sh2emu_log.txt; tail -25 sh2emu_log.txt
+```
+
+Burn only on `VERDICT  no problems found on the SH2 side`. It does not see the 68000 / VDP side.
+
 ## Command numbers (for the docs ledger)
 
 | Where | Number | Meaning |
@@ -138,3 +151,5 @@ build). The loader's whole-image check still runs at boot.
 | R1P | **R1G exactly** (the last disc with level graphics; R1H/R1O were text-only diagnosis discs) + one engine change: the SH2 clears COMM4 before switching the planes on. |
 | R1P | R1G + the SH2 clearing COMM4 (one statement, reached only after the stop): stopped at `STATE:101` after the L1S000 load, twice, 10 minutes each. |
 | R1Q | **R1G + no double load**, nothing else. Boot stack R1G exactly. Game data: the disc's `L0S000.IMG` is Palmtree Panic 1's image (copied from `L1S000.IMG`); the engine treats its start scene as file 0x100, so it finds it already in the cart. One 1.9 MB scene load instead of two. |
+| R1Q | one load, all 60 chunks OK, `5C03` → `5C11` → `5C16`, one sample `8F33` / CKPT `9550` (FileRead, called from LoadBytecode), then line 10 **froze** (no `6001` half a second later: the SH2 stopped taking its vertical-blank interrupt), `101` about 9 s later. **Found on the PC** with the R1Q build itself in `tools/sh2emu`: the same first sample (`8F34` / `9550`), then from frame 502 the engine runs **the cart image's sprite pixels as script code**. On the SH2, `scriptCode` is the scene image's script part (R11A: 0xE304 entries); the "no script" index `SCRIPTDATA_COUNT - 1` (0x3FFFF) lies in the image's graphics there (`0x08090900`, not 0), so `ProcessStartupObjects` / `ProcessObjects` / `DrawObjectList` ran garbage for every object type without that sub, reading at wild addresses (`0x2348B304`, `0x4A4CFC90`, `0x8E4BB728`...). Every build that ran R11A did this; where the reads land depends on where the engine's tables lie - the likely reason it killed some builds and not engine A. |
+| R1R | **R1Q + one change** (engine): the six "has this object sub a script?" tests skip the no-script index (`ScriptSubExists`, `engine/Script.hpp`; `engine/Object.cpp` ×5, `engine/Drawing.cpp` ×1 - the PC's answer is unchanged). Boot stack R1G exactly, game data as R1Q. `tools/sh2emu` with this fix simulated on R1Q: stage loaded (`5100`), `G1S000.MDG`, command 68, records sent, no wild reads in 3000 frames. The COMM4 clear (R1P) is not on this disc: the 0x1234 junk record / dot grid may still show. |
