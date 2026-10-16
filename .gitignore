@@ -8,6 +8,7 @@ host/obj*/
 host/soniccd_host*
 host/test_*
 !host/test_*.c
+!host/test_*.cpp
 host/cart_build
 host/cart_verify_host
 cd32x/build*/
