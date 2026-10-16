@@ -601,7 +601,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.cpp	2026-10-16 14:42:52.661539627 -0700
++++ engine/Drawing.cpp	2026-10-16 15:07:48.385497542 -0700
 @@ -15,9 +15,15 @@
  // it rather than remove it outright.
  #define DONT_USE_VIEW_ANGLE (1)
@@ -865,7 +865,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (showHitboxes) {
          for (int i = 0; i < debugHitboxCount; ++i) {
              DebugHitboxInfo *info = &debugHitboxList[i];
-@@ -2127,8 +2208,59 @@
+@@ -2127,8 +2208,79 @@
  }
  #endif
  
@@ -891,6 +891,26 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +        if (x >= width)
 +            x -= width;
 +        for (int n = (above > 0 ? above : 0) + (below > 0 ? below : 0); n > 0; --n) *out++ = x;
++        return;
++    }
++    if (!scdHDeformAny) {
++        // R1X: no entry deforms (the background of a stage without line deformation): each line is its scroll entry's
++        // position, wrapped - the loop below without the deform test; a run of lines with one entry wraps it once
++        int lastS = -1, x = 0;
++        for (int n = (above > 0 ? above : 0) + (below > 0 ? below : 0); n > 0; --n) {
++            const int s = lineScroll[ly];
++            if (s != lastS) {
++                lastS = s;
++                x     = linePos[s];
++                if (x < 0)
++                    x += width;
++                if (x >= width)
++                    x -= width;
++            }
++            *out++ = x;
++            if (++ly == lh)
++                ly = 0;
++        }
 +        return;
 +    }
 +    for (int pass = 0; pass < 2; ++pass) {
@@ -925,7 +945,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer   = &stageLayouts[activeTileLayers[layerID]];
          int screenwidth16  = (GFX_LINESIZE >> 4) - 1;
-@@ -2173,7 +2305,24 @@
+@@ -2173,7 +2325,24 @@
                      if (hParallax.scrollPos[i] < 0)
                          hParallax.scrollPos[i] += fullLayerwidth << 16;
                      hParallax.linePos[i] += hParallax.scrollPos[i] >> 16;
@@ -950,7 +970,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  }
              }
              lastXSize = layerwidth;
-@@ -2184,6 +2333,13 @@
+@@ -2184,6 +2353,13 @@
          int tileYPos           = yscrollOffset % (layerheight << 7);
          if (tileYPos < 0)
              tileYPos += layerheight << 7;
@@ -964,7 +984,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          byte *scrollIndex = &lineScroll[tileYPos];
          int tileY16       = tileYPos & 0xF;
          int chunkY        = tileYPos >> 7;
-@@ -2191,6 +2347,22 @@
+@@ -2191,6 +2367,22 @@
  
          // Draw Above Water (if applicable)
          int drawableLines[2] = { waterDrawPos, SCREEN_YSIZE - waterDrawPos };
@@ -987,7 +1007,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          for (int i = 0; i < 2; ++i) {
              while (drawableLines[i]--) {
                  activePalette   = fullPalette[*lineBuffer];
-@@ -2203,8 +2375,9 @@
+@@ -2203,8 +2395,9 @@
                          deform = *deformationData;
  
                      // Fix for SS5 mobile bug
@@ -999,7 +1019,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                          deform >>= 4;
  
                      chunkX += deform;
-@@ -2221,6 +2394,10 @@
+@@ -2221,6 +2414,10 @@
                      chunkX += fullLayerwidth;
                  if (chunkX >= fullLayerwidth)
                      chunkX -= fullLayerwidth;
@@ -1010,7 +1030,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  int chunkXPos         = chunkX >> 7;
                  int tilePxXPos        = chunkX & 0xF;
                  int tileXPxRemain     = TILE_SIZE - tilePxXPos;
-@@ -2637,6 +2814,7 @@
+@@ -2637,6 +2834,7 @@
                      }
                  }
  
@@ -1018,7 +1038,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  if (++tileY16 > TILE_SIZE - 1) {
                      tileY16 = 0;
                      ++tileY;
-@@ -2650,8 +2828,21 @@
+@@ -2650,8 +2848,21 @@
                  }
              }
          }
@@ -1040,7 +1060,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          TileLayer *layer      = &stageLayouts[activeTileLayers[layerID]];
          byte *lineScrollPtr   = NULL;
          int chunkPosX         = 0;
-@@ -3481,6 +3672,7 @@
+@@ -3481,6 +3692,7 @@
  }
  void DrawVLineScrollLayer(int layerID)
  {
@@ -1048,7 +1068,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
          if (!layer->xsize || !layer->ysize)
-@@ -3535,6 +3727,7 @@
+@@ -3535,6 +3747,7 @@
          ushort *frameBufferPtr = Engine.frameBuffer;
          activePalette          = fullPalette[gfxLineBuffer[0]];
          activePalette32        = fullPalette32[gfxLineBuffer[0]];
@@ -1056,7 +1076,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          int tileXPos           = xscrollOffset % (layerheight << 7);
          if (tileXPos < 0)
              tileXPos += layerheight << 7;
-@@ -4064,6 +4257,8 @@
+@@ -4064,6 +4277,8 @@
  }
  void Draw3DFloorLayer(int layerID)
  {
@@ -1065,7 +1085,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4644,6 +4839,8 @@
+@@ -4644,6 +4859,8 @@
  }
  void Draw3DSkyLayer(int layerID)
  {
@@ -1074,7 +1094,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4727,6 +4924,8 @@
+@@ -4727,6 +4944,8 @@
  
  void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
  {
@@ -1083,7 +1103,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A > 0xFF)
          A = 0xFF;
      if (renderType == RENDER_SW) {
-@@ -4828,6 +5027,7 @@
+@@ -4828,6 +5047,7 @@
  
  void SetFadeHQ(int R, int G, int B, int A)
  {
@@ -1091,7 +1111,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A <= 0)
          return;
      if (A > 0xFF)
-@@ -4871,6 +5071,8 @@
+@@ -4871,6 +5091,8 @@
  
  void DrawTintRectangle(int XPos, int YPos, int width, int height)
  {
@@ -1100,7 +1120,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -4907,6 +5109,8 @@
+@@ -4907,6 +5129,8 @@
  void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                          int sheetID)
  {
@@ -1109,7 +1129,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5008,6 +5212,8 @@
+@@ -5008,6 +5232,8 @@
  
  void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
@@ -1118,7 +1138,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -5102,6 +5308,8 @@
+@@ -5102,6 +5328,8 @@
  
  void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
  {
@@ -1127,7 +1147,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int widthFlip  = width;
          int heightFlip = height;
-@@ -5399,6 +5607,8 @@
+@@ -5399,6 +5627,8 @@
  void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                        int sheetID)
  {
@@ -1136,7 +1156,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5558,6 +5768,8 @@
+@@ -5558,6 +5788,8 @@
  void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                      int sheetID)
  {
@@ -1145,7 +1165,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      // Not avaliable in SW Render mode
  
      if (renderType == RENDER_HW) {
-@@ -5616,6 +5828,8 @@
+@@ -5616,6 +5848,8 @@
  void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                         int sheetID)
  {
@@ -1154,7 +1174,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int sprXPos    = (pivotX + sprX) << 9;
          int sprYPos    = (pivotY + sprY) << 9;
-@@ -5880,6 +6094,8 @@
+@@ -5880,6 +6114,8 @@
  void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
                          int sheetID)
  {
@@ -1163,7 +1183,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (scale == 0)
          return;
  
-@@ -6148,6 +6364,8 @@
+@@ -6148,6 +6384,8 @@
  
  void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
@@ -1172,7 +1192,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6236,6 +6454,8 @@
+@@ -6236,6 +6474,8 @@
  }
  void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1181,7 +1201,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -6359,6 +6579,8 @@
+@@ -6359,6 +6599,8 @@
  }
  void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1190,7 +1210,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6459,6 +6681,8 @@
+@@ -6459,6 +6701,8 @@
  }
  void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1199,7 +1219,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6664,6 +6888,8 @@
+@@ -6664,6 +6908,8 @@
  
  void DrawFace(void *v, uint colour)
  {
@@ -1208,7 +1228,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -6849,6 +7075,8 @@
+@@ -6849,6 +7095,8 @@
  }
  void DrawTexturedFace(void *v, byte sheetID)
  {
@@ -1217,7 +1237,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -7022,6 +7250,7 @@
+@@ -7022,6 +7270,7 @@
  
  void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
  {
@@ -1225,7 +1245,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int Y           = YPos << 9;
      if (rowCount < 0)
-@@ -7052,6 +7281,7 @@
+@@ -7052,6 +7301,7 @@
  
  void DrawTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1233,7 +1253,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7062,6 +7292,7 @@
+@@ -7062,6 +7312,7 @@
  }
  void DrawStageTextEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1241,7 +1261,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7077,6 +7308,7 @@
+@@ -7077,6 +7328,7 @@
  }
  void DrawBlendedTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1249,7 +1269,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7087,6 +7319,8 @@
+@@ -7087,6 +7339,8 @@
  }
  void DrawTextMenu(void *menu, int XPos, int YPos)
  {
@@ -1643,11 +1663,17 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void CalculateTrigAngles();
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.cpp engine/Object.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Object.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Object.cpp	2026-10-16 14:08:49.230866693 -0700
-@@ -4,7 +4,11 @@
++++ engine/Object.cpp	2026-10-16 14:59:01.551989069 -0700
+@@ -3,8 +3,16 @@
+ int objectLoop    = 0;
  int curObjectType = 0;
  Entity objectEntityList[ENTITY_COUNT];
- 
+-
++#if defined(SONICCD32X)
++unsigned int scdLive[(ENTITY_COUNT + 31) / 32]; // PORT32X R1X (Object.hpp)
++bool scdLiveOk = false;
++#endif
++
 +#if SCD32X_CARTDATA
 +char (&typeNames)[OBJECT_COUNT][0x40] = *(char(*)[OBJECT_COUNT][0x40])plat_cart_data(SCD_CART_TYPENAMES); // PORT32X S5j: cart image (filled while loading)
 +#else
@@ -1656,7 +1682,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  int OBJECT_BORDER_X1       = 0x80;
  int OBJECT_BORDER_X2       = 0;
-@@ -15,12 +19,18 @@
+@@ -15,12 +23,18 @@
  {
      int objNameID  = 0;
      int typeNameID = 0;
@@ -1677,7 +1703,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      PrintLog("Set Object (%d) name to: %s", objectID, objectName);
  }
  
-@@ -39,7 +49,7 @@
+@@ -39,22 +53,69 @@
          scriptInfo->frameListOffset = scriptFrameCount;
          scriptInfo->spriteSheetID   = 0;
          entity->type                = i;
@@ -1686,8 +1712,11 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              ProcessScript(scriptInfo->subStartup.scriptCodePtr, scriptInfo->subStartup.jumpTablePtr, SUB_SETUP);
          scriptInfo->frameCount = scriptFrameCount - scriptInfo->frameListOffset;
      }
-@@ -47,6 +57,8 @@
+     entity->type  = 0;
      curObjectType = 0;
++#if defined(SONICCD32X)
++    scdLiveOk = false; // PORT32X R1X: rebuilt at the next ProcessObjects
++#endif
  }
  
 +// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
@@ -1695,7 +1724,23 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void ProcessObjects()
  {
      for (int i = 0; i < DRAWLAYER_COUNT; ++i) drawListEntries[i].listSize = 0;
-@@ -55,6 +67,18 @@
++#if defined(SONICCD32X)
++    if (!scdLiveOk) { // PORT32X R1X: after a stage load - from the types themselves
++        for (int w = 0; w < (ENTITY_COUNT + 31) / 32; ++w) scdLive[w] = 0;
++        for (int i = 0; i < ENTITY_COUNT; ++i)
++            if (objectEntityList[i].type != OBJ_TYPE_BLANKOBJECT)
++                SCD_LIVE(i);
++        scdLiveOk = true;
++    }
++#if !defined(__sh__)
++    // the PC builds prove the rule every frame: a slot with a type has its bit
++    for (int i = 0; i < ENTITY_COUNT; ++i)
++        if (objectEntityList[i].type != OBJ_TYPE_BLANKOBJECT && !((scdLive[i >> 5] >> (i & 31)) & 1))
++            plat_fatal("PORT32X R1X: an object with no live bit");
++#endif
++#endif
+ 
+     for (objectLoop = 0; objectLoop < ENTITY_COUNT; ++objectLoop) {
          bool active = false;
          int x = 0, y = 0;
          Entity *entity = &objectEntityList[objectLoop];
@@ -1703,18 +1748,33 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +        // PORT32X R1T: an empty slot (about 860 of the 1,184 in Palmtree Panic 1) does nothing below - the only
 +        // write, BOUNDS_DESTROY's type = 0, would store the 0 it already holds - so it is skipped at once.
 +        if (entity->type == OBJ_TYPE_BLANKOBJECT) {
-+            // PORT32X R1W: and every empty slot after it, in one tight loop - nothing reads objectLoop before the
-+            // next live slot, and the for's ++objectLoop lands on it (or on ENTITY_COUNT, as before)
-+            int n = objectLoop + 1;
-+            while (n < ENTITY_COUNT && objectEntityList[n].type == OBJ_TYPE_BLANKOBJECT) ++n;
-+            objectLoop = n - 1;
++            // PORT32X R1W: and every empty slot after it - nothing reads objectLoop before the next live slot, and the
++            // for's ++objectLoop lands on it (or on ENTITY_COUNT, as before). R1X: by the live bits - this slot's bit
++            // cleared (it is empty), a word of clear bits = 32 empty slots passed at once, a set bit's slot read
++            unsigned int n = (unsigned int)objectLoop;
++            scdLive[n >> 5] &= ~(1u << (n & 31));
++            for (++n; n < (unsigned int)ENTITY_COUNT; ++n) {
++                unsigned int w = scdLive[n >> 5] >> (n & 31);
++                if (!w) {
++                    n |= 31; /* the rest of this word: empty slots */
++                    continue;
++                }
++                while (!(w & 1)) {
++                    w >>= 1;
++                    ++n;
++                }
++                if (objectEntityList[n].type != OBJ_TYPE_BLANKOBJECT)
++                    break;
++                scdLive[n >> 5] &= ~(1u << (n & 31)); /* empty after all */
++            }
++            objectLoop = (int)n - 1;
 +            continue;
 +        }
 +#endif
          switch (entity->priority) {
              case PRIORITY_BOUNDS:
                  x      = entity->XPos >> 16;
-@@ -92,9 +116,9 @@
+@@ -92,9 +153,9 @@
          if (active && entity->type > OBJ_TYPE_BLANKOBJECT) {
              ObjectScript *scriptInfo = &objectScriptList[entity->type];
              activePlayer             = 0;
@@ -1726,7 +1786,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  while (activePlayer < activePlayerCount) {
                      if (playerList[activePlayer].objectInteractions)
                          ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
-@@ -103,8 +127,14 @@
+@@ -103,8 +164,14 @@
                  }
              }
  
@@ -1743,7 +1803,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          }
      }
  }
-@@ -119,9 +149,9 @@
+@@ -119,9 +186,9 @@
          if (entity->priority == PRIORITY_ALWAYS && entity->type > OBJ_TYPE_BLANKOBJECT) {
              ObjectScript *scriptInfo = &objectScriptList[entity->type];
              activePlayer             = 0;
@@ -1755,7 +1815,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  while (activePlayer < PLAYER_COUNT) {
                      if (playerList[activePlayer].objectInteractions)
                          ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
-@@ -130,8 +160,14 @@
+@@ -130,8 +197,14 @@
                  }
              }
  
@@ -1775,10 +1835,26 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 \ No newline at end of file
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.hpp engine/Object.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Object.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Object.hpp	2026-10-15 21:43:01.365733736 -0700
-@@ -49,7 +49,11 @@
++++ engine/Object.hpp	2026-10-16 14:59:01.550256266 -0700
+@@ -48,8 +48,27 @@
+ extern int objectLoop;
  extern int curObjectType;
  extern Entity objectEntityList[ENTITY_COUNT];
++#if defined(SONICCD32X)
++// PORT32X R1X: one bit per entity slot - set wherever a slot gets a type (it may hold an object), cleared by
++// ProcessObjects when it finds the slot empty; a clear bit is an empty slot, so ProcessObjects passes 32 empty slots
++// at a time instead of reading each one's type (an SDRAM cache line each: ~870 a frame in Palmtree Panic 1).
++extern unsigned int scdLive[(ENTITY_COUNT + 31) / 32];
++extern bool scdLiveOk; // false: rebuilt from the types at the next ProcessObjects (a stage load wrote them all)
++inline void scd_live(int slot)
++{
++    if ((unsigned int)slot < (unsigned int)ENTITY_COUNT)
++        scdLive[(unsigned int)slot >> 5] |= 1u << ((unsigned int)slot & 31);
++}
++#define SCD_LIVE(slot) scd_live(slot)
++#else
++#define SCD_LIVE(slot) ((void)0)
++#endif
  
 +#if SCD32X_CARTDATA
 +extern char (&typeNames)[OBJECT_COUNT][0x40]; // PORT32X S5j
@@ -2265,7 +2341,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #if RETRO_USE_MOD_LOADER
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene.cpp engine/Scene.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Scene.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Scene.cpp	2026-10-16 14:15:18.861745668 -0700
++++ engine/Scene.cpp	2026-10-16 14:59:01.552555128 -0700
 @@ -8,7 +8,11 @@
      "Bonus Stages",
      "Special Stages",
@@ -2430,7 +2506,16 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      StopAllSfx();
      FileInfo infoStore;
      FileInfo info;
-@@ -598,6 +728,12 @@
+@@ -592,12 +722,21 @@
+         objectEntityList[i].scale     = 512;
+     }
+     LoadActLayout();
++#if defined(SONICCD32X)
++    scdLiveOk = false; // PORT32X R1X: every slot written - the live bits from the types at the next ProcessObjects
++#endif
+     Init3DFloorBuffer(0);
+     ProcessStartupObjects();
+     xScrollA = (playerList[0].XPos >> 16) - SCREEN_CENTERX;
      xScrollB = (playerList[0].XPos >> 16) - SCREEN_CENTERX + SCREEN_XSIZE;
      yScrollA = (playerList[0].YPos >> 16) - SCREEN_SCROLL_UP;
      yScrollB = (playerList[0].YPos >> 16) - SCREEN_SCROLL_UP + SCREEN_YSIZE;
@@ -2443,7 +2528,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  }
  int LoadActFile(const char *ext, int stageID, FileInfo *info)
  {
-@@ -643,6 +779,9 @@
+@@ -643,6 +782,9 @@
  
          FileRead(&stageLayouts[0].xsize, 1);
          FileRead(&stageLayouts[0].ysize, 1);
@@ -2453,7 +2538,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          xBoundary1    = 0;
          newXBoundary1 = 0;
          yBoundary1    = 0;
-@@ -653,7 +792,11 @@
+@@ -653,7 +795,11 @@
          newXBoundary2 = stageLayouts[0].xsize << 7;
          newYBoundary2 = stageLayouts[0].ysize << 7;
  
@@ -2465,7 +2550,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
          byte fileBuffer = 0;
          for (int y = 0; y < stageLayouts[0].ysize; ++y) {
-@@ -728,6 +871,9 @@
+@@ -728,6 +874,9 @@
  }
  void LoadStageBackground()
  {
@@ -2475,7 +2560,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      for (int i = 0; i < LAYER_COUNT; ++i) {
          stageLayouts[i].type               = LAYER_NOSCROLL;
          stageLayouts[i].deformationOffset  = 0;
-@@ -757,6 +903,14 @@
+@@ -757,6 +906,14 @@
  
              FileRead(&hParallax.deform[i], 1);
          }
@@ -2490,7 +2575,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
          FileRead(&vParallax.entryCount, 1);
          for (int i = 0; i < vParallax.entryCount; ++i) {
-@@ -788,9 +942,16 @@
+@@ -788,9 +945,16 @@
              stageLayouts[i].scrollSpeed = fileBuffer << 10;
              stageLayouts[i].scrollPos   = 0;
  
@@ -2507,7 +2592,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
              // Read Line Scroll
              byte buf[3];
-@@ -831,6 +992,18 @@
+@@ -831,6 +995,18 @@
  }
  void LoadStageChunks()
  {
@@ -2526,7 +2611,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      FileInfo info;
      byte entry[3];
  
-@@ -860,6 +1033,16 @@
+@@ -860,6 +1036,16 @@
  }
  void LoadStageCollisions()
  {
@@ -2543,7 +2628,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      FileInfo info;
      if (LoadStageFile("CollisionMasks.bin", stageListPosition, &info)) {
  
-@@ -1082,6 +1265,7 @@
+@@ -1082,6 +1268,7 @@
              } while (c != 256);
          }
  
@@ -2551,7 +2636,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          ReadGifPictureData(width, height, interlaced, tilesetGFXData, 0);
  
          byte transparent = tilesetGFXData[0];
-@@ -1089,6 +1273,7 @@
+@@ -1089,6 +1276,7 @@
              if (tilesetGFXData[i] == transparent)
                  tilesetGFXData[i] = 0;
          }
@@ -2559,7 +2644,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
          CloseFile();
      }
-@@ -1114,6 +1299,7 @@
+@@ -1114,6 +1302,7 @@
              SetPaletteEntry(-1, c, clr[0], clr[1], clr[2]);
          }
  
@@ -2567,7 +2652,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          byte *gfxData = tilesetGFXData;
          byte buf[3];
          while (true) {
-@@ -1138,6 +1324,7 @@
+@@ -1138,6 +1327,7 @@
              if (tilesetGFXData[i] == transparent)
                  tilesetGFXData[i] = 0;
          }
@@ -2575,7 +2660,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
          CloseFile();
      }
-@@ -1214,6 +1401,8 @@
+@@ -1214,6 +1404,8 @@
      }
  }
  
@@ -2907,7 +2992,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.cpp	2026-10-16 14:11:28.342832355 -0700
++++ engine/Script.cpp	2026-10-16 14:59:01.555153456 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -3232,7 +3317,23 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  switch (scriptEng.operands[1]) {
                      default: break;
                      case FX_SCALE:
-@@ -3771,8 +3913,10 @@
+@@ -3563,6 +3705,7 @@
+                 opcodeSize            = 0;
+                 Entity *newEnt        = &objectEntityList[scriptEng.operands[0]];
+                 newEnt->type          = scriptEng.operands[1];
++                SCD_LIVE(scriptEng.operands[0]); // PORT32X R1X
+                 newEnt->propertyValue = scriptEng.operands[2];
+                 newEnt->XPos          = scriptEng.operands[3];
+                 newEnt->YPos          = scriptEng.operands[4];
+@@ -3633,6 +3776,7 @@
+                     scriptEng.arrayPosition[2] = TEMPENTITY_START;
+                 Entity *temp         = &objectEntityList[scriptEng.arrayPosition[2]];
+                 temp->type           = scriptEng.operands[0];
++                SCD_LIVE(scriptEng.arrayPosition[2]); // PORT32X R1X
+                 temp->propertyValue  = scriptEng.operands[1];
+                 temp->XPos           = scriptEng.operands[2];
+                 temp->YPos           = scriptEng.operands[3];
+@@ -3771,8 +3915,10 @@
              case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
              case FUNC_DRAW3DSCENE:
                  opcodeSize = 0;
@@ -3245,7 +3346,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  Draw3DScene(scriptInfo->spriteSheetID);
                  break;
              case FUNC_SETIDENTITYMATRIX:
-@@ -3897,9 +4041,19 @@
+@@ -3897,9 +4043,19 @@
                  }
                  break;
              case FUNC_GETTILELAYERENTRY:
@@ -3265,7 +3366,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
                  break;
              case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
-@@ -3923,18 +4077,39 @@
+@@ -3923,18 +4079,39 @@
                  break;
              case FUNC_ADDDRAWLISTENTITYREF: {
                  opcodeSize                                                                                           = 0;
@@ -3307,7 +3408,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  int index = tiles128x128.tileIndex[scriptEng.operands[6]];
                  switch (scriptEng.operands[3]) {
-@@ -3956,9 +4131,18 @@
+@@ -3956,9 +4133,18 @@
                  Copy16x16Tile(scriptEng.operands[0], scriptEng.operands[1]);
                  break;
              case FUNC_SET16X16TILEINFO: {
@@ -3327,7 +3428,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  switch (scriptEng.operands[3]) {
                      case TILEINFO_INDEX:
-@@ -4021,7 +4205,14 @@
+@@ -4021,7 +4207,14 @@
                  TextMenu *menu = &gameMenu[scriptEng.operands[1]];
                  switch (scriptEng.operands[2]) {
                      case TEXTINFO_TEXTDATA:
@@ -3342,7 +3443,15 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                          break;
                      case TEXTINFO_TEXTSIZE: scriptEng.operands[0] = menu->entrySize[scriptEng.operands[3]]; break;
                      case TEXTINFO_ROWCOUNT: scriptEng.operands[0] = menu->rowCount; break;
-@@ -4608,7 +4799,16 @@
+@@ -4115,6 +4308,7 @@
+                     case VAR_OBJECTENTITYNO: break;
+                     case VAR_OBJECTTYPE: {
+                         objectEntityList[arrayVal].type = scriptEng.operands[i];
++                        SCD_LIVE(arrayVal); // PORT32X R1X
+                         break;
+                     }
+                     case VAR_OBJECTPROPERTYVALUE: {
+@@ -4608,7 +4802,16 @@
                      case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
                      case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
                      case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
@@ -3360,7 +3469,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_TILELAYERTYPE: stageLayouts[arrayVal].type = scriptEng.operands[i]; break;
                      case VAR_TILELAYERANGLE:
                          stageLayouts[arrayVal].angle = scriptEng.operands[i];
-@@ -4636,6 +4836,54 @@
+@@ -4636,6 +4839,54 @@
                      case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
@@ -3415,7 +3524,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
                      case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
                      case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-@@ -4649,12 +4897,34 @@
+@@ -4649,12 +4900,34 @@
                      case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
@@ -3451,7 +3560,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
                      case VAR_OBJECTSPRITESHEET: {
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
-@@ -4704,3 +4974,107 @@
+@@ -4704,3 +4977,107 @@
          }
      }
  }

@@ -66,8 +66,11 @@ static void write_cols(MdPlane *p, const MdLayer *L, uint16_t nameBase, int r, i
         cwi += wCells;
     cw = (unsigned)cwi;
     while (left > 0) {
-        int n = left > (int32_t)(MD_PLANE_W - col) ? (int)(MD_PLANE_W - col) : (int)left, k;
-        for (k = 0; k < n; k++) {
+        int n = left > (int32_t)(MD_PLANE_W - col) ? (int)(MD_PLANE_W - col) : (int)left, k = 0;
+        while (k < n) {
+            /* R1X: a whole 16-pixel tile (two cells, an even column) at a time; one cell for an odd column or the last
+               one. The layer's width is whole chunks, so a tile never straddles its wrap. */
+            const int two = !(cw & 1) && k + 1 < n;
             if ((cw >> 4) != lastChunk) {
                 lastChunk = cw >> 4;
                 chunkBase = (uint32_t)lrow[lastChunk] << 6;
@@ -84,8 +87,18 @@ static void write_cols(MdPlane *p, const MdLayer *L, uint16_t nameBase, int r, i
                     front = (uint16_t)(f << 15);
                 }
             }
-            names[k] = q ? (uint16_t)(q[cw & 1] | front) : (uint16_t)0;
-            if (++cw == wc)
+            if (two) {
+                names[k]     = q ? (uint16_t)(q[0] | front) : (uint16_t)0;
+                names[k + 1] = q ? (uint16_t)(q[1] | front) : (uint16_t)0;
+                k += 2;
+                cw += 2;
+            }
+            else {
+                names[k] = q ? (uint16_t)(q[cw & 1] | front) : (uint16_t)0;
+                k++;
+                cw++;
+            }
+            if (cw == wc)
                 cw = 0;
         }
 #if MD_SGB_RUN
@@ -141,7 +154,14 @@ void md_plane_update(MdPlane *p, const MdLayer *L, uint16_t nameBase, int tileYP
                 kW  = p->rowK[r];
             }
             for (k = y; k < yEnd; k++) {
-                int32_t x = lineX[k] + kW;
+                int32_t x;
+                /* R1X: a line with the previous line's x has its x, its scroll and no new min / max (the previous
+                   line left x within halfW of ref: no step below) */
+                if (k > y && lineX[k] == lineX[k - 1]) {
+                    hscroll[k] = hscroll[k - 1];
+                    continue;
+                }
+                x = lineX[k] + kW;
                 /* normally no or one step; a camera jump takes a few */
                 while (x - ref > halfW) {
                     x -= W;
