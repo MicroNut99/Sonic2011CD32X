@@ -180,15 +180,30 @@ libgcc's division and shift helpers - about 17 KB. The native dispatch reads a t
 - The master stack's reservation 12 KB → 8 KB (the engine's deepest use is 3.9 KB); the 4 KB went to `.sdtext`.
 - `FlipScreen` no longer computes the PC's idle-dim timer on the console (only the OpenGL / SDL paths draw it).
 
-| sh2emu, Palmtree Panic 1 | R1S | R1T | R1U | R1V | R1W |
-|---|---|---|---|---|---|
-| frames a second | 23-27 | 29.1 | 43.7 | 59.8 | 59.9 |
-| busy per engine frame, mean (vertical blanks) | 1.55 | 1.31 | 0.97 | 0.73 | 0.59 |
-| slowest frame | 2.56 | | 1.28 | 1.09 | 0.83 |
-| frames that fit in one vertical blank | 0% | | 63% | 99% | 100% |
+**R1X.**
+- Live bits for the object slots (`scdLive`, `engine/Object.hpp`): one bit per slot, set wherever a slot gets a type
+  (a script's `object.type` write, `ResetObjectEntity`, `CreateTempObject`; rebuilt from the types after a stage
+  load), cleared when `ProcessObjects` finds the slot empty. A word of clear bits passes 32 empty slots unread. The PC
+  builds check the rule every frame (a slot with a type has its bit): 18 acts x 2,400 frames, no miss.
+- Shared functions for big script instructions (`tools/scd_aot.py`, `OUTLINE_TOKENS`): an instruction whose code is
+  60+ tokens is one function (`scdop_<name>`) with the same statements and locals, called by every sub that uses it,
+  instead of a copy in each - the native code ~200 → ~150 KB, the HUD's draw sub 5.2 → 1.2 KB (now in SDRAM).
+- The SDRAM set by measured value (sh2emu's `code in SDRAM` list: cycles saved per byte).
+- The background's lines without deformation: no deform test, one wrap per run of equal entries; the foreground's
+  second slot does not refill `linePos` or its line table when they already hold the same number; the plane rows one
+  tile at a time; a line with the previous line's x takes its scroll.
+
+| sh2emu, Palmtree Panic 1 | R1S | R1T | R1U | R1V | R1W | R1X |
+|---|---|---|---|---|---|---|
+| frames a second | 23-27 | 29.1 | 43.7 | 59.8 | 59.9 | 59.9 |
+| busy per engine frame, mean (vertical blanks) | 1.55 | 1.31 | 0.97 | 0.73 | 0.58 | 0.49 |
+| slowest frame | 2.56 | | 1.28 | 1.09 | 0.82 | 0.73 |
+| frames that fit in one vertical blank | 0% | | 63% | 99% | 100% | 100% |
 
 The slowest frames now are the vertical scroll ones (new plane rows: ~300 name words), whose record the 68000 copies
-for up to 0.1 vertical blanks while the SH2 waits (`planes_frame`), and the object loop (0.13).
+for up to 0.1 vertical blanks while the SH2 waits (`planes_frame`), and the object loop (0.09). The copy is the 68000's
+`move.w` loop in `sgb_poll` (75 SH2 cycles a word): twice as fast, it would take the slowest frame from 0.82 to 0.77
+(sh2emu `-k68word 38` on R1W).
 
 Speed rounds, one change per disc, every one checked before burning: the PC check (`tools/test_sh2cfg.sh` with
 `REF=`: camera, layer scroll, palettes and every object's state the same as the previous round, frame by frame) and

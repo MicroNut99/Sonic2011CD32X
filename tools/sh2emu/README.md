@@ -165,6 +165,7 @@ ENGINE FRAMES     568: busy cycles each - mean 594438 (1.55 vertical blanks), me
 | `cart code stalls by function, cumulative` | the functions whose code costs the most cart fetches, with their sizes added up: what to move into SDRAM first |
 | `cart data stalls by 4 KB of the cart` | which cart data (engine tables, the stage image's parts by name) the SH2 waits for |
 | the slowest engine frames | (R1W) the six slowest frames, the console frame each ended in, and the functions that took most of each |
+| `code in SDRAM` | (R1X) each function in `.sdtext`: the cycles a frame it saves against the cart (its code cache lines x 76) and per byte - with the cart list above, what to swap in and out |
 
 `-callers NAME` adds who calls NAME (e.g. `-callers __sdivsi3`: who divides). `-pcprof NAME` (up to 8) adds NAME's every
 instruction: per address the count, the cycles and the stalls by kind per frame (`PCP` lines; join them with
@@ -201,6 +202,7 @@ All options go after the build folder.
 -profile A B   where the SH2's time goes between frames A and B (section 4)
 -callers NAME  with -profile: who calls the function NAME, how often a frame
 -pcprof NAME   with -profile: NAME's every instruction - count, cycles, stalls per address (up to 8 functions)
+-frames A B    with -profile: every engine frame that ended in console frames A..B, with the functions that took it
 -cartwait N    cart waits for a single access (default 15); -cartrd N / -cartfill N set the read / line costs directly
 -fbread N      frame buffer read cost (default 8); -k68word N the 68000's cycles per record word (default 75)
 -nofifo        no frame-buffer write FIFO model; -fbword N = SH2 cycles per FIFO word (default 5)
