@@ -32,9 +32,20 @@ static int opt_maxlog      = 4;     /* log lines per (event, PC) */
 static u64 opt_trace_from  = ~0ull; /* instruction trace from this instruction count */
 static u64 opt_trace_count = 0;
 static int opt_cpf         = 383500; /* SH2 cycles per frame (23.01 MHz / 60) */
-static int opt_cart_rd     = 12;     /* extra cycles: uncached cart word read */
-static int opt_cart_fill   = 40;     /* extra cycles: cache line fill from the cart */
-static int opt_sdram_fill  = 8;
+/* bus timing, in SH2 cycles beyond the instruction's own (32X hardware manual 1.12, "Access Timing of each CPU to
+   32X Block": a bus cycle is 2 clocks plus the wait states) */
+static int opt_cart_wait   = 15;     /* cart: "6 wait (min) ~ 15 wait (max)" per 16-bit access (-cartwait) */
+static int opt_cart_rd     = -1;     /* uncached cart longword read, 2 accesses (-cartrd; default from the waits) */
+static int opt_cart_fill   = 87;     /* cache line fill from the cart, 8 accesses in a row (-cartfill). Measured against
+                                        the console (R1S, 16 Oct 2026): with 15 waits for single reads and 87 for a line,
+                                        the emulator loads the stage in the console's 2.5-2.8 s and stays within 0.1 s
+                                        of the console's video through the loop and the climb (20 s of play) */
+static int opt_sdram_fill  = 11;     /* SDRAM "Read: 12 Clock / 8 Word" = one cache line */
+static int opt_sdram_unc   = 11;     /* "the SDRAM is read using cache-through ... 8-word-burst-read-fixed" */
+static int opt_fb_rd       = 8;      /* frame buffer read: "5 wait (min) ~ 12 wait (max)" (-fbread) */
+static int opt_68k_word    = 75;     /* the 68000 copying one record word out of the frame buffer (sgb_poll: move.w
+                                        (a0)+,(a1)+ / dbra = 24-26 68000 clocks = 3 SH2 cycles each) (-k68word) */
+static int opt_68k_poll    = 150;    /* the 68000's command loop seeing a new COMM4 (half its ~100-clock loop) */
 static int opt_stop_on_vbi_loss = 1;
 static const char *opt_dir = "cd32x/build_engine";
 static u32 opt_hooks[16];
@@ -124,6 +135,29 @@ static void load_map_syms(const char *path) /* loader: "0x0000000006000820      
             add_sym((u32)a, nm + 1);
     }
     fclose(f);
+}
+static u32 sym_addr(const char *name) /* 0 if not there */
+{
+    for (int i = 0; i < nsyms; ++i)
+        if (!strcmp(syms[i].name, name))
+            return syms[i].a;
+    return 0;
+}
+static int sym_index(u32 a) /* the symbol at or below a, -1 if none near */
+{
+    int lo = 0, hi = nsyms - 1, best = -1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (syms[mid].a <= a) {
+            best = mid;
+            lo   = mid + 1;
+        }
+        else
+            hi = mid - 1;
+    }
+    if (best < 0 || a - syms[best].a > 0x40000)
+        return -1;
+    return best;
 }
 static const char *symname(u32 a, char *buf)
 {
@@ -225,8 +259,30 @@ static struct {
     u32 target, ret, sp;
 } cstack[CSD];
 static int csp;
+static const char *opt_callers; /* -callers NAME: who calls NAME, while profiling */
+static u32 callers_addr;
+static u64 *callers_count;
+static int prof_active_c; /* prof_active, for the call stack (declared before it) */
+static int sym_index(u32 a);
+/* -profile: the script cycles by object type and event (ProcessScript and everything it calls) */
+static u32 scr_fn, scr_loop_addr, scr_ents_addr;
+static int scr_active, scr_ctx;
+static u32 scr_ret;
+static u8 sdram_byte(u32 a);
+static u32 sdram_read32(u32 a);
 static void call_push(u32 target, u32 ret)
 {
+    if (scr_fn && target == scr_fn && !scr_active) {
+        u32 loop = sdram_read32(scr_loop_addr);
+        u8 type  = loop < 0x4A0 ? sdram_byte(scr_ents_addr + loop * 68 + 56) : 0;
+        scr_active = 1;
+        scr_ctx    = type * 4 + (int)(R[6] & 3);
+        scr_ret    = ret;
+    }
+    if (callers_addr && target == callers_addr && prof_active_c) {
+        int k = sym_index(cur_pc);
+        callers_count[k < 0 ? nsyms : k]++;
+    }
     if (csp < CSD) {
         cstack[csp].target = target;
         cstack[csp].ret    = ret;
@@ -236,6 +292,8 @@ static void call_push(u32 target, u32 ret)
 }
 static void call_ret(u32 to)
 {
+    if (scr_active && to == scr_ret)
+        scr_active = 0;
     for (int i = (csp < CSD ? csp : CSD) - 1; i >= 0 && i >= csp - 8; --i)
         if (cstack[i].ret == to) {
             csp = i;
@@ -249,6 +307,391 @@ static void dump_calls(void)
     printf("  call stack (%d):\n", csp);
     for (int i = n - 1; i >= 0 && i >= n - 24; --i)
         printf("    %s  (ret %08X sp %08X)\n", symname(cstack[i].target, b), cstack[i].ret, cstack[i].sp);
+}
+/* ---- profiler (-profile FROM TO): every PROF_STEP cycles, the function the SH2 is in (self) and every function on
+   the shadow call stack (inclusive), between two frames */
+static int prof_from = -1, prof_to = -1;
+#define PROF_STEP 64
+static u64 *prof_self, *prof_incl, prof_samples, prof_next;
+static void prof_sample(u32 pc)
+{
+    if (!prof_self) {
+        prof_self = calloc((size_t)nsyms + 1, sizeof(u64));
+        prof_incl = calloc((size_t)nsyms + 1, sizeof(u64));
+    }
+    prof_samples++;
+    int k = sym_index(pc);
+    prof_self[k < 0 ? nsyms : k]++;
+    /* inclusive: each distinct function on the call stack once */
+    static int seen[CSD + 1];
+    int ns = 0, n = csp < CSD ? csp : CSD;
+    if (k >= 0)
+        seen[ns++] = k;
+    for (int i = n - 1; i >= 0; --i) {
+        int f = sym_index(cstack[i].target), dup = 0;
+        if (f < 0)
+            continue;
+        for (int j = 0; j < ns; ++j)
+            if (seen[j] == f)
+                dup = 1;
+        if (!dup && ns < CSD)
+            seen[ns++] = f;
+    }
+    for (int j = 0; j < ns; ++j) prof_incl[seen[j]]++;
+}
+static int prof_cmp_self(const void *a, const void *b)
+{
+    u64 x = prof_self[*(const int *)a], y = prof_self[*(const int *)b];
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+static int prof_cmp_incl(const void *a, const void *b)
+{
+    u64 x = prof_incl[*(const int *)a], y = prof_incl[*(const int *)b];
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+static void prof_report(void)
+{
+    if (!prof_samples)
+        return;
+    int frames = prof_to - prof_from;
+    double cyc_per_frame = (double)prof_samples * PROF_STEP / (frames > 0 ? frames : 1);
+    printf("\n==================== PROFILE frames %d-%d (%.0f SH2 cycles per vertical blank sampled) ====================\n",
+           prof_from, prof_to, cyc_per_frame);
+    int *idx = malloc(sizeof(int) * (size_t)nsyms);
+    for (int i = 0; i < nsyms; ++i) idx[i] = i;
+    printf("self time (the function itself):\n");
+    qsort(idx, (size_t)nsyms, sizeof(int), prof_cmp_self);
+    for (int i = 0; i < 30 && prof_self[idx[i]]; ++i)
+        printf("  %5.1f%%  %.60s\n", 100.0 * (double)prof_self[idx[i]] / (double)prof_samples, syms[idx[i]].name);
+    if (prof_self[nsyms])
+        printf("  %5.1f%%  (no symbol)\n", 100.0 * (double)prof_self[nsyms] / (double)prof_samples);
+    printf("inclusive time (the function and everything it calls):\n");
+    qsort(idx, (size_t)nsyms, sizeof(int), prof_cmp_incl);
+    for (int i = 0; i < 30 && prof_incl[idx[i]]; ++i)
+        printf("  %5.1f%%  %.60s\n", 100.0 * (double)prof_incl[idx[i]] / (double)prof_samples, syms[idx[i]].name);
+    free(idx);
+}
+static u32 eng_text_hi; /* defined with the engine layout below */
+/* the profiler's view of an instruction's stalls (-profile): by kind, and line fills by kind */
+enum { PK_IF_CART, PK_D_CART, PK_IF_SD, PK_D_SD, PK_FB, PK_OTHER, PK_N };
+static const char *pk_name[PK_N] = { "cart code", "cart data", "SDRAM code", "SDRAM data", "frame buffer", "other" };
+static int pen_kind[PK_N], fill_kind[PK_N], pen_quiet;
+static u64 *dpage_stall; /* -profile: cart data stalls per 4 KB of the cart */
+static int prof_active;
+/* ---- exact cost (-profile): every instruction's cycles, with its stalls by kind, to its function */
+typedef struct {
+    u64 cyc, insn, kind[PK_N], fills[PK_N];
+} Cost;
+static Cost *cost;
+static int cost_k = -1;
+static u32 cost_lo = 1, cost_hi;
+static int cost_frames;
+/* per engine frame: the cycles outside plat_present's wait for the vertical blank */
+static int idle_k = -2;
+static u32 presented_addr, presented_at_loaded, last_presented;
+static u64 eng_busy, *eng_busy_list;
+static int eng_n, eng_cap;
+static u32 *eng_fn_cur, *eng_fn_all; /* per engine frame: cycles by function (nsyms+1 each) */
+static u32 scr_cur[1024], *scr_all;    /* per engine frame: script cycles by type * 4 + event */
+static u32 sdram_read32(u32 a);
+static void prof_account(u32 pc, u64 c)
+{
+    if (!cost)
+        cost = calloc((size_t)nsyms + 1, sizeof(Cost));
+    if (!(pc >= cost_lo && pc < cost_hi)) {
+        int k = sym_index(pc);
+        if (k < 0) {
+            cost_k  = nsyms;
+            cost_lo = 1;
+            cost_hi = 0;
+        }
+        else {
+            cost_k  = k;
+            cost_lo = syms[k].a;
+            cost_hi = k + 1 < nsyms ? syms[k + 1].a : syms[k].a + 0x1000;
+        }
+    }
+    Cost *e = &cost[cost_k];
+    e->cyc += c;
+    e->insn++;
+    if (idle_k == -2) {
+        idle_k = -1;
+        for (int i = 0; i < nsyms; ++i)
+            if (!strncmp(syms[i].name, "plat_present(", 13) && syms[i].a < 0x04000000u && !strstr(syms[i].name, "::"))
+                idle_k = i;
+    }
+    if (scr_active)
+        scr_cur[scr_ctx] += (u32)c;
+    if (cost_k != idle_k) {
+        eng_busy += c;
+        if (!eng_fn_cur)
+            eng_fn_cur = calloc((size_t)nsyms + 1, sizeof(u32));
+        eng_fn_cur[cost_k] += (u32)c;
+    }
+    if (presented_addr) {
+        u32 n = sdram_read32(presented_addr);
+        if (n != last_presented) { /* an engine frame ended */
+            if (last_presented && eng_busy) {
+                if (eng_n == eng_cap) {
+                    eng_cap       = eng_cap ? eng_cap * 2 : 1024;
+                    eng_busy_list = realloc(eng_busy_list, sizeof(u64) * (size_t)eng_cap);
+                    eng_fn_all    = realloc(eng_fn_all, sizeof(u32) * ((size_t)nsyms + 1) * (size_t)eng_cap);
+                    scr_all       = realloc(scr_all, sizeof(u32) * 1024 * (size_t)eng_cap);
+                }
+                memcpy(scr_all + (size_t)eng_n * 1024, scr_cur, sizeof scr_cur);
+                if (eng_fn_cur)
+                    memcpy(eng_fn_all + (size_t)eng_n * ((size_t)nsyms + 1), eng_fn_cur, sizeof(u32) * ((size_t)nsyms + 1));
+                else
+                    memset(eng_fn_all + (size_t)eng_n * ((size_t)nsyms + 1), 0, sizeof(u32) * ((size_t)nsyms + 1));
+                eng_busy_list[eng_n++] = eng_busy;
+            }
+            if (eng_fn_cur)
+                memset(eng_fn_cur, 0, sizeof(u32) * ((size_t)nsyms + 1));
+            memset(scr_cur, 0, sizeof scr_cur);
+            eng_busy       = 0;
+            last_presented = n;
+        }
+    }
+    for (int i = 0; i < PK_N; ++i) {
+        e->kind[i] += (u64)pen_kind[i];
+        e->fills[i] += (u64)fill_kind[i];
+    }
+}
+static int cost_cmp(const void *a, const void *b)
+{
+    u64 x = cost[*(const int *)a].cyc, y = cost[*(const int *)b].cyc;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+static const char *cart_area(u32 off, char *buf) /* what lies at this cart offset (cd32x/engine/plat_mars.cpp layout) */
+{
+    static const char *part[17] = { "scriptcode", "jumptable", "chunks", "collision", "scriptframes", "animframes",
+                                    "animlist", "arctan", "stagelist", "typenames", "globalnames", "animfiles", "font",
+                                    "trig", "gfxdata", "tilegfx", "blend" };
+    if (off < 0x080000) {
+        u32 a = 0x02000000u + off;
+        if (a < eng_text_hi) {
+            char b[128];
+            sprintf(buf, "engine code (%s)", symname(a, b));
+        }
+        else
+            sprintf(buf, "engine constants / data image");
+        return buf;
+    }
+    if (off < 0x180000) {
+        const u8 *h = cart + 0x080000;
+        u32 n = (u32)h[8] << 24 | (u32)h[9] << 16 | (u32)h[10] << 8 | h[11];
+        if (h[0] == 'S' && h[1] == 'C' && h[2] == 'C' && h[3] == 'B')
+            for (u32 k = 0; k < n && k < 17; ++k) {
+                const u8 *e = h + 12 + 20 * k;
+                u32 o = (u32)e[0] << 24 | (u32)e[1] << 16 | (u32)e[2] << 8 | e[3];
+                u32 l = (u32)e[4] << 24 | (u32)e[5] << 16 | (u32)e[6] << 8 | e[7];
+                if (off - 0x080000 >= o && off - 0x080000 < o + l) {
+                    sprintf(buf, "stage image: %s +%X", part[k], off - 0x080000 - o);
+                    return buf;
+                }
+            }
+        sprintf(buf, "stage image");
+        return buf;
+    }
+    if (off < 0x380000)
+        sprintf(buf, "stage data pack");
+    else
+        sprintf(buf, "Genesis plane data (MDG)");
+    return buf;
+}
+static void cost_report(void)
+{
+    if (!cost || cost_frames <= 0)
+        return;
+    double F = cost_frames, vb = opt_cpf;
+    Cost all;
+    memset(&all, 0, sizeof all);
+    int idle = -1; /* plat_present: the engine's wait for the vertical blank */
+    for (int i = 0; i < nsyms; ++i)
+        if (!strncmp(syms[i].name, "plat_present(", 13) && syms[i].a < 0x04000000u && !strstr(syms[i].name, "::"))
+            idle = i;
+    for (int i = 0; i <= nsyms; ++i) {
+        all.cyc += cost[i].cyc;
+        all.insn += cost[i].insn;
+        for (int k = 0; k < PK_N; ++k) {
+            all.kind[k] += cost[i].kind[k];
+            all.fills[k] += cost[i].fills[k];
+        }
+    }
+    u64 idle_cyc = idle >= 0 ? cost[idle].cyc : 0;
+    printf("\n==================== COST frames %d-%d: exact SH2 cycles per frame (a vertical blank = %d) ====================\n",
+           prof_from, prof_to, opt_cpf);
+    printf("bus timing: cart word read +%d, cart line fill +%d, SDRAM line fill +%d, frame buffer read +%d, 68000 copy "
+           "%d per record word\n", opt_cart_rd / 2, opt_cart_fill, opt_sdram_fill, opt_fb_rd, opt_68k_word);
+    printf("busy (all but the vertical-blank wait in plat_present): %.0f cycles per vertical blank (%.0f%%)\n",
+           (all.cyc - idle_cyc) / F, 100.0 * (all.cyc - idle_cyc) / F / vb);
+    if (eng_n > 2) {
+        u64 *v = malloc(sizeof(u64) * (size_t)eng_n);
+        memcpy(v, eng_busy_list, sizeof(u64) * (size_t)eng_n);
+        for (int a = 1; a < eng_n; ++a) { /* insertion sort: a few thousand at most */
+            u64 x = v[a];
+            int b = a - 1;
+            while (b >= 0 && v[b] > x) {
+                v[b + 1] = v[b];
+                --b;
+            }
+            v[b + 1] = x;
+        }
+        double sum = 0;
+        int under1 = 0, under08 = 0;
+        for (int a = 0; a < eng_n; ++a) {
+            sum += (double)v[a];
+            under1 += v[a] < (u64)opt_cpf;
+            under08 += v[a] < (u64)(opt_cpf * 8 / 10);
+        }
+        printf("ENGINE FRAMES     %d: busy cycles each - mean %.0f (%.2f vertical blanks), median %.2f, 90%% %.2f, max %.2f; "
+               "%d%% fit in one vertical blank, %d%% in 0.8 (60 frames per second needs them all in one)\n",
+               eng_n, sum / eng_n, sum / eng_n / vb, v[eng_n / 2] / vb, v[eng_n * 9 / 10] / vb, v[eng_n - 1] / vb,
+               100 * under1 / eng_n, 100 * under08 / eng_n);
+        /* what the slowest tenth of the frames spend more on (per engine frame, in vertical blanks) */
+        if (eng_fn_all) {
+            u64 cut = v[eng_n * 9 / 10];
+            size_t W = (size_t)nsyms + 1;
+            double *slow = calloc(W, sizeof(double)), *mean = calloc(W, sizeof(double));
+            int ns = 0;
+            for (int f = 0; f < eng_n; ++f) {
+                const u32 *row = eng_fn_all + (size_t)f * W;
+                int isslow = eng_busy_list[f] >= cut;
+                ns += isslow;
+                for (size_t k = 0; k < W; ++k) {
+                    mean[k] += row[k];
+                    if (isslow)
+                        slow[k] += row[k];
+                }
+            }
+            printf("  per engine frame, all frames vs the slowest tenth (%d frames), in vertical blanks:\n", ns);
+            for (int r = 0; r < 14; ++r) {
+                size_t best = W;
+                for (size_t k = 0; k < W; ++k)
+                    if (slow[k] > 0 && (best == W || slow[k] > slow[best]))
+                        best = k;
+                if (best == W)
+                    break;
+                printf("    %5.2f  %5.2f  %.60s\n", mean[best] / eng_n / vb, slow[best] / (ns ? ns : 1) / vb,
+                       best < (size_t)nsyms ? syms[best].name : "(no symbol)");
+                slow[best] = 0;
+            }
+            free(slow);
+            free(mean);
+        }
+        if (scr_all) { /* the scripts: by object type and event */
+            static const char *ev[4] = { "main", "player", "draw", "setup" };
+            u64 cut = v[eng_n * 9 / 10];
+            double slow[1024] = { 0 }, mean[1024] = { 0 };
+            int ns = 0;
+            for (int f = 0; f < eng_n; ++f) {
+                const u32 *row = scr_all + (size_t)f * 1024;
+                int isslow = eng_busy_list[f] >= cut;
+                ns += isslow;
+                for (int k = 0; k < 1024; ++k) {
+                    mean[k] += row[k];
+                    if (isslow)
+                        slow[k] += row[k];
+                }
+            }
+            const u8 *h = cart + 0x080000; /* the stage image's type names (part 9) */
+            u32 tn = (u32)h[12 + 20 * 9] << 24 | (u32)h[13 + 20 * 9] << 16 | (u32)h[14 + 20 * 9] << 8 | h[15 + 20 * 9];
+            printf("  scripts per engine frame by object type and event, all frames vs the slowest tenth, in vertical blanks:\n");
+            for (int r = 0; r < 16; ++r) {
+                int best = -1;
+                for (int k = 0; k < 1024; ++k)
+                    if (slow[k] > 0 && (best < 0 || slow[k] > slow[best]))
+                        best = k;
+                if (best < 0)
+                    break;
+                char nm[0x41];
+                memcpy(nm, h + tn + (u32)(best / 4) * 0x40, 0x40);
+                nm[0x40] = 0;
+                printf("    %5.3f  %5.3f  type %3d %-24.24s %s\n", mean[best] / eng_n / vb, slow[best] / (ns ? ns : 1) / vb,
+                       best / 4, nm, ev[best & 3]);
+                slow[best] = 0;
+            }
+        }
+        free(v);
+    }
+    printf("  instructions %.0f per frame; stalls inside that: ", all.insn / F);
+    for (int k = 0; k < PK_N; ++k)
+        printf("%s %.0f%s", pk_name[k], all.kind[k] / F, k + 1 < PK_N ? ", " : "\n");
+    printf("  cache line fills per frame: ");
+    for (int k = 0; k < PK_N; ++k)
+        printf("%s %.0f%s", pk_name[k], all.fills[k] / F, k + 1 < PK_N ? ", " : "\n");
+    int *idx = malloc(sizeof(int) * ((size_t)nsyms + 1));
+    for (int i = 0; i <= nsyms; ++i) idx[i] = i;
+    qsort(idx, (size_t)nsyms + 1, sizeof(int), cost_cmp);
+    printf("by function, per frame (the stalls are part of the cycles); 'in SDRAM' = the cycles if the function's code "
+           "were in SDRAM:\n");
+    printf("  %9s %6s %8s %9s %9s %8s %8s %7s %6s %9s  %s\n", "cycles", "%blank", "insns", "cart code", "cart data",
+           "SDRAM", "fb", "other", "size", "in SDRAM", "function");
+    for (int i = 0; i < 40 && cost[idx[i]].cyc; ++i) {
+        const Cost *e = &cost[idx[i]];
+        int k = idx[i];
+        u32 size = k < nsyms ? (k + 1 < nsyms ? syms[k + 1].a - syms[k].a : 0) : 0;
+        double insd = (double)e->cyc - (double)e->kind[PK_IF_CART] + (double)e->fills[PK_IF_CART] * opt_sdram_fill;
+        printf("  %9.0f %5.1f%% %8.0f %9.0f %9.0f %8.0f %8.0f %7.0f %6u %9.0f  %.70s\n", e->cyc / F, 100.0 * e->cyc / F / vb,
+               e->insn / F, e->kind[PK_IF_CART] / F, e->kind[PK_D_CART] / F, (e->kind[PK_IF_SD] + e->kind[PK_D_SD]) / F,
+               e->kind[PK_FB] / F, e->kind[PK_OTHER] / F, size, insd / F, k < nsyms ? syms[k].name : "(no symbol)");
+    }
+    /* the code to move: functions by cart-code stall, with their sizes */
+    printf("cart code stalls by function, cumulative (what moving code to SDRAM would save):\n");
+    {
+        int *j = malloc(sizeof(int) * ((size_t)nsyms + 1));
+        int n = 0;
+        for (int i = 0; i < nsyms; ++i)
+            if (cost[i].kind[PK_IF_CART])
+                j[n++] = i;
+        for (int a = 0; a < n; ++a) /* by stall, largest first */
+            for (int b = a + 1; b < n; ++b)
+                if (cost[j[b]].kind[PK_IF_CART] > cost[j[a]].kind[PK_IF_CART]) {
+                    int t = j[a];
+                    j[a]  = j[b];
+                    j[b]  = t;
+                }
+        double cum = 0, tot = (double)all.kind[PK_IF_CART];
+        u32 bytes = 0;
+        for (int a = 0; a < n && a < 40; ++a) {
+            int k = j[a];
+            u32 size = k + 1 < nsyms ? syms[k + 1].a - syms[k].a : 0;
+            bytes += size;
+            double save = (double)cost[k].kind[PK_IF_CART] - (double)cost[k].fills[PK_IF_CART] * opt_sdram_fill;
+            cum += save;
+            printf("  %8.0f saved/frame, %5.1f%% of all cart code stalls so far, %6u bytes so far  %.60s\n", save / F,
+                   100.0 * cum / (tot > 0 ? tot : 1), bytes, syms[k].name);
+        }
+        free(j);
+    }
+    if (callers_count) {
+        printf("calls to %s per frame, by caller:\n", opt_callers);
+        for (int r = 0; r < 12; ++r) {
+            int best = -1;
+            for (int k = 0; k <= nsyms; ++k)
+                if (callers_count[k] && (best < 0 || callers_count[k] > callers_count[best]))
+                    best = k;
+            if (best < 0)
+                break;
+            printf("  %8.1f  %.70s\n", callers_count[best] / F, best < nsyms ? syms[best].name : "(no symbol)");
+            callers_count[best] = 0;
+        }
+    }
+    if (dpage_stall) {
+        printf("cart data stalls by 4 KB of the cart (per frame):\n");
+        for (int r = 0; r < 16; ++r) {
+            int best = -1;
+            for (int pg = 0; pg < 1024; ++pg)
+                if (dpage_stall[pg] && (best < 0 || dpage_stall[pg] > dpage_stall[best]))
+                    best = pg;
+            if (best < 0)
+                break;
+            char b[160];
+            printf("  %8.0f  cart %06X  %s\n", dpage_stall[best] / F, best << 12, cart_area((u32)best << 12, b));
+            dpage_stall[best] = 0;
+        }
+    }
+    free(idx);
 }
 static void dump_state(void)
 {
@@ -365,6 +808,17 @@ static u8 vdp_read8(u32 off)
     return vdpreg[off];
 }
 static int bus_penalty;
+static void pen_note(int rg, int ifetch, int add, u32 p)
+{
+    if (pen_quiet)
+        return;
+    int k = rg == RG_CART ? (ifetch ? PK_IF_CART : PK_D_CART)
+          : rg == RG_SDRAM ? (ifetch ? PK_IF_SD : PK_D_SD)
+          : (rg == RG_FB || rg == RG_FBOV) ? PK_FB : PK_OTHER;
+    pen_kind[k] += add;
+    if (k == PK_D_CART && prof_active && dpage_stall)
+        dpage_stall[(p & 0x3FFFFF) >> 12] += (u64)add;
+}
 /* ---- the frame buffer's 4-word write FIFO (32X manual 1.12: "a 4 word component of FIFO is held for frame buffer
    writing ... 5 clock if FIFO is FULL"). SH2 writes wait in it; a read waits until it is empty. When the SH2 gives
    the frame buffer to the 68000 (FM 1 -> 0) with words still in it, the manual guarantees nothing ("access from SH2
@@ -401,8 +855,11 @@ static void fbq_flush_wait(void) /* an SH2 read of the frame buffer waits until 
     if (!fbq_n)
         return;
     u64 now = now_cycles();
-    if (fbq[fbq_n - 1].t > now)
+    if (fbq[fbq_n - 1].t > now) {
         bus_penalty += (int)(fbq[fbq_n - 1].t - now);
+        if (!pen_quiet)
+            pen_kind[PK_FB] += (int)(fbq[fbq_n - 1].t - now);
+    }
     while (fbq_n) fbq_commit_one();
 }
 static void fb_queue_word(int bank, u32 off, const u8 *b, int n, int ov)
@@ -411,6 +868,8 @@ static void fb_queue_word(int bank, u32 off, const u8 *b, int n, int ov)
     fbq_drain(now);
     if (fbq_n >= 4) { /* full: the SH2 waits for the oldest word */
         bus_penalty += (int)(fbq[0].t - now);
+        if (!pen_quiet)
+            pen_kind[PK_FB] += (int)(fbq[0].t - now);
         fbq_commit_one();
         now = now_cycles();
     }
@@ -476,21 +935,23 @@ static u32 bus_read(u32 p, int size, int ifetch)
         }
         v = (v << 8) | b;
     }
-    (void)ifetch;
+    int add;
     switch (rg) {
         case RG_CART:
-            bus_penalty += size == 4 ? opt_cart_rd : opt_cart_rd / 2;
+            add = size == 4 ? opt_cart_rd : opt_cart_rd / 2;
             break;
         case RG_SDRAM:
-            bus_penalty += 2;
+            add = opt_sdram_unc;
             break;
         case RG_FB:
         case RG_FBOV:
-            bus_penalty += 4;
+            add = (size == 4 ? 2 : 1) * opt_fb_rd;
             break;
         default:
-            bus_penalty += 3;
+            add = 3;
     }
+    bus_penalty += add;
+    pen_note(rg, ifetch, add, p);
     return v;
 }
 static void onchip_write(u32 off, u32 v, int size);
@@ -568,16 +1029,19 @@ static void bus_write(u32 p, u32 v, int size)
                 break;
         }
     }
+    int add;
     switch (rg) {
         case RG_CART:
-            bus_penalty += 6;
+            add = (size == 4 ? 2 : 1) * (2 + opt_cart_wait) - 1;
             break;
         case RG_SDRAM:
-            bus_penalty += 1;
+            add = size == 4 ? 3 : 1; /* "Write: 2 Clock / 1 Word" */
             break;
         default:
-            bus_penalty += 3;
+            add = 3;
     }
+    bus_penalty += add;
+    pen_note(rg, 0, add, p);
 }
 
 /* ------------------------------------------------------------------ the CPU's view: areas, cache, checks */
@@ -592,6 +1056,12 @@ static int engine_started;
 
 static int ms_engine = -1, ms_setup = -1, ms_loaded = -1, ms_planes = -1;
 static u16 ms_loaded_code;
+static u8 sdram_byte(u32 a) { return sdram[(a - 0x06000000u) & (SDRAM_SIZE - 1)]; }
+static u32 sdram_read32(u32 a)
+{
+    u32 o = (a - 0x06000000u) & (SDRAM_SIZE - 1);
+    return (u32)sdram[o] << 24 | (u32)sdram[o + 1] << 16 | (u32)sdram[o + 2] << 8 | sdram[o + 3];
+}
 static void note_state(u16 v)
 {
     if (v == 0x5C16 && ms_setup < 0)
@@ -599,6 +1069,8 @@ static void note_state(u16 v)
     if ((v & 0xF000) == 0x5000 && (v & 0x0F00) < 0x0C00 && ms_loaded < 0 && ms_setup >= 0) {
         ms_loaded      = frame_no();
         ms_loaded_code = v;
+        if (presented_addr)
+            presented_at_loaded = sdram_read32(presented_addr);
     }
 }
 static void check_data_access(u32 a, int size, int write, u32 v)
@@ -712,6 +1184,7 @@ static u32 cache_read(u32 a, int size, int ifetch)
         }
         u32 base = p & ~15u;
         int save = bus_penalty;
+        pen_quiet++; /* the line fill is charged as a whole below */
         for (int i = 0; i < 16; i += 4) {
             u32 x                  = bus_read(base + i, 4, ifetch);
             cl[set][victim].d[i]     = (u8)(x >> 24);
@@ -719,9 +1192,14 @@ static u32 cache_read(u32 a, int size, int ifetch)
             cl[set][victim].d[i + 2] = (u8)(x >> 8);
             cl[set][victim].d[i + 3] = (u8)x;
         }
+        pen_quiet--;
         u32 off;
         int rg      = region(p, &off);
-        bus_penalty = save + (rg == RG_CART ? opt_cart_fill : opt_sdram_fill);
+        int fillc   = rg == RG_CART ? opt_cart_fill : (rg == RG_FB || rg == RG_FBOV) ? 8 * opt_fb_rd : opt_sdram_fill;
+        bus_penalty = save + fillc;
+        pen_note(rg, ifetch, fillc, p);
+        if (!pen_quiet)
+            fill_kind[rg == RG_CART ? (ifetch ? PK_IF_CART : PK_D_CART) : rg == RG_SDRAM ? (ifetch ? PK_IF_SD : PK_D_SD) : PK_OTHER]++;
         cl[set][victim].valid = 1;
         cl[set][victim].tag   = tag;
         hit                   = victim;
@@ -732,7 +1210,9 @@ static u32 cache_read(u32 a, int size, int ifetch)
     /* stale check: the cached copy against memory */
     {
         int save = bus_penalty;
+        pen_quiet++;
         u32 m    = bus_read(p, size, ifetch);
+        pen_quiet--;
         bus_penalty = save;
         if (m != v) {
             if (ifetch)
@@ -979,9 +1459,12 @@ static u16 sgb_last;
 static u16 sgb_rec[6002];
 static u64 rec_sent, rec_taken, rec_applied, rec_junk;
 static int opt_records = 3;   /* print the first N records */
-static int shot_frame[8];
-static const char *shot_file[8];
+#define MAX_SHOTS 64
+static int shot_frame[MAX_SHOTS];
+static const char *shot_file[MAX_SHOTS];
 static int nshots;
+static int shots_from = -1, shots_to, shots_step = 1; /* -shots A B STEP PREFIX: a picture every STEP frames */
+static const char *shots_prefix;
 static u32 rd_be32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
 static void vdp_planes_on(u32 mdg_off)
 {
@@ -996,14 +1479,18 @@ static void vdp_planes_on(u32 mdg_off)
     sgb_last = 0;
 }
 static void vram_w(u32 byteaddr, u16 v) { vram[(byteaddr >> 1) & 0x7FFF] = v; }
+/* the 68000's time (hw_md.s): sgb_poll copies a record word by word out of the frame buffer before it answers
+   COMM6, and it does not poll while its vertical-blank handler (sgb_vblank) writes the previous record to the VDP */
+static u64 k68_free_at; /* the 68000 is in sgb_vblank until this cycle */
+static u64 k68_done_at; /* the record being copied is answered at this cycle */
+static u16 k68_copy_id; /* that record's id (0: none) */
 static void sgb_poll_model(void) /* the 68000 command loop: a new id in COMM4 -> copy the record, answer COMM6 */
 {
     if (!sgb_on || sgb_ready)
         return;
-    u16 id = COMM(4);
-    if (!id || id == sgb_last)
-        return;
-    if (!fm) { /* the SH2 gave the frame buffer: the record at its start (68000 0x840000) */
+    if (k68_copy_id) { /* copying */
+        if (cycles < k68_done_at)
+            return;
         const u8 *f = fb[fs_bit];
         u16 len = rd_be16(f);
         if (len > 6000)
@@ -1012,6 +1499,21 @@ static void sgb_poll_model(void) /* the 68000 command loop: a new id in COMM4 ->
             for (u32 i = 0; i <= len; ++i) sgb_rec[i] = rd_be16(f + 2 * i);
             sgb_ready = 1;
         }
+        sgb_last = k68_copy_id;
+        SET_COMM(6, k68_copy_id);
+        rec_taken++;
+        k68_copy_id = 0;
+        return;
+    }
+    u16 id = COMM(4);
+    if (!id || id == sgb_last)
+        return;
+    if (!fm) { /* the SH2 gave the frame buffer: the record at its start (68000 0x840000), copied word by word */
+        u16 len   = rd_be16(fb[fs_bit]);
+        u64 start = cycles > k68_free_at ? cycles : k68_free_at;
+        k68_done_at = start + (u64)opt_68k_poll + (u64)(len > 6000 ? 1 : len + 1) * (u64)opt_68k_word;
+        k68_copy_id = id;
+        return;
     }
     else { /* the SH2 still holds the frame buffer: what the 68000 copied on the console (R1H rows 12-13) */
         static const u16 junk[5] = { 4, 4, 6, 4, 4 };
@@ -1026,8 +1528,23 @@ static void sgb_poll_model(void) /* the 68000 command loop: a new id in COMM4 ->
     SET_COMM(6, id);
     rec_taken++;
 }
+/* the records' contents in order (CRC-32), for the first opt_rec_crc_n records: a speed change must not change them */
+static int opt_rec_crc_n = 600;
+static u32 rec_crc = 0xFFFFFFFFu, rec_crc_count;
+static void rec_crc_add(const u16 *w, u32 n)
+{
+    for (u32 i = 0; i < n; ++i)
+        for (int b = 1; b >= 0; --b) {
+            rec_crc ^= (u8)(w[i] >> (8 * b));
+            for (int k = 0; k < 8; ++k) rec_crc = (rec_crc >> 1) ^ (0xEDB88320u & (0u - (rec_crc & 1)));
+        }
+}
 static void sgb_apply_model(void) /* sgb_vblank: the waiting record into the VDP */
 {
+    if (rec_crc_count < (u32)opt_rec_crc_n && sgb_rec[0] <= 6000) {
+        rec_crc_add(sgb_rec, (u32)sgb_rec[0] + 1);
+        rec_crc_count++;
+    }
     const u16 *p = sgb_rec + 1, *end = sgb_rec + 6002;
 #define NEXTW (p < end ? *p++ : 0)
     int G = NEXTW, wordsA = 0, wordsB = 0, wordsX = 0;
@@ -1061,6 +1578,9 @@ static void sgb_apply_model(void) /* sgb_vblank: the waiting record into the VDP
         vcram[idx] = NEXTW;
     }
 #undef NEXTW
+    /* sgb_vblank's 68000 clocks: name words 22 each (move.w (a0)+,(a3) / dbra), a group's command ~60, the h-scroll
+       table 18 a line for both planes, a colour ~40; 3 SH2 cycles a 68000 clock */
+    k68_free_at = cycles + 3u * (u64)(400 + 22 * (wordsA + wordsB + wordsX) + 60 * G + 18 * 448 + 40 * P);
     rec_applied++;
     if (rec_applied <= (u64)opt_records)
         printf("[f%5d] 68000: record %llu into the VDP: %u words, name words plane A %d / B %d / other %d, vscroll %04X "
@@ -1282,6 +1802,11 @@ static void frame_tick(void)
     for (int i = 0; i < nshots; ++i)
         if (shot_frame[i] == frame_no())
             write_shot(shot_file[i]);
+    if (shots_prefix && frame_no() >= shots_from && frame_no() <= shots_to && (frame_no() - shots_from) % shots_step == 0) {
+        char path[600];
+        snprintf(path, sizeof path, "%s_%05d.bmp", shots_prefix, frame_no());
+        write_shot(path);
+    }
     /* the Sub-CPU heartbeat in COMM14 */
     if ((frame_no() & 7) == 0)
         SET_COMM(14, (u16)(0x4000 | ((frame_no() >> 3) & 0xFFF)));
@@ -1967,6 +2492,12 @@ static void summary(void)
     if (ms_planes >= 0)
         printf(" (frame %d)\n", ms_planes);
     printf("line 10 now       STATE:%X CKPT:%04X COMM4:%04X\n", COMM(12), COMM(8), COMM(4));
+    if (ms_loaded >= 0 && presented_addr && frame_no() > ms_loaded + 60) {
+        u32 n    = sdram_read32(presented_addr) - presented_at_loaded;
+        double s = (frame_no() - ms_loaded) / 60.0;
+        printf("game speed        %u engine frames in %.1f s of play = %.1f frames per second (the game is made for 60)\n", n, s,
+               n / s);
+    }
     if (fifo_lost_events)
         printf("frame-buffer FIFO %llu word(s) dropped in %llu hand-over(s) to the 68000\n", (unsigned long long)fifo_lost_words,
                (unsigned long long)fifo_lost_events);
@@ -1975,6 +2506,9 @@ static void summary(void)
                (unsigned long long)rec_sent, (unsigned long long)rec_taken, (unsigned long long)rec_applied,
                rec_junk ? " - INCLUDING A JUNK RECORD (COMM4 held a value when the planes came on: dots in every "
                           "blank cell)" : "");
+    if (rec_crc_count)
+        printf("record contents   records 1-%u: CRC %08X (the same for the same picture sequence, at any speed)\n",
+               rec_crc_count, ~rec_crc);
     int problems = 0;
     for (int sev = 2; sev >= 0; --sev) {
         int any = 0;
@@ -2022,9 +2556,16 @@ int main(int argc, char **argv)
                    "  -hook ADDR     print registers whenever the SH2 reaches ADDR (up to -hookmax, default 50)\n"
                    "  -trace N COUNT print COUNT instructions from instruction N\n"
                    "  -dumpsdram FRAME FILE   write the 256 KB SDRAM at FRAME\n"
-                   "  -shot FRAME FILE.bmp   the Genesis picture at FRAME (planes model: records into a VDP model)\n"
+                   "  -shot FRAME FILE.bmp   the Genesis picture at FRAME (planes model: records into a VDP model), up to 64\n"
+                   "  -shots A B STEP PREFIX a picture every STEP frames from A to B (PREFIX_<frame>.bmp)\n"
                    "  -records N     print the first N plane records (default 3)\n"
+                   "  -reccrc N      CRC of the first N records' contents (default 600): the same pictures at any speed\n"
                    "  -nofifo        no frame-buffer write FIFO model; -fbword N cycles per FIFO word (default 5)\n"
+                   "  -profile A B   where the SH2's time goes between frames A and B (per engine frame, by function,\n"
+                   "                 by script object type, cart stalls)\n"
+                   "  -callers NAME  with -profile: who calls NAME\n"
+                   "  -cartwait N    cart waits per single access (default 15); -cartrd N, -cartfill N (default 87) set\n"
+                   "                 an uncached long read / a cache line directly; -fbread N (default 8); -k68word N (75)\n"
                    "  -novbistop     keep running when line 10 freezes\n");
             return 0;
         }
@@ -2050,6 +2591,12 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "-cpf") && i + 1 < argc)
             opt_cpf = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-cartwait") && i + 1 < argc)
+            opt_cart_wait = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-fbread") && i + 1 < argc)
+            opt_fb_rd = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-k68word") && i + 1 < argc)
+            opt_68k_word = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-cartrd") && i + 1 < argc)
             opt_cart_rd = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-cartfill") && i + 1 < argc)
@@ -2064,10 +2611,27 @@ int main(int argc, char **argv)
             opt_dump_frame = atoi(argv[++i]);
             opt_dump_file  = argv[++i];
         }
-        else if (!strcmp(argv[i], "-shot") && i + 2 < argc && nshots < 8) {
+        else if (!strcmp(argv[i], "-shot") && i + 2 < argc && nshots < MAX_SHOTS) {
             shot_frame[nshots] = atoi(argv[++i]);
             shot_file[nshots]  = argv[++i];
             nshots++;
+        }
+        else if (!strcmp(argv[i], "-reccrc") && i + 1 < argc)
+            opt_rec_crc_n = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-callers") && i + 1 < argc)
+            opt_callers = argv[++i];
+        else if (!strcmp(argv[i], "-shots") && i + 4 < argc) {
+            shots_from   = atoi(argv[++i]);
+            shots_to     = atoi(argv[++i]);
+            shots_step   = atoi(argv[++i]);
+            shots_prefix = argv[++i];
+            if (shots_step < 1)
+                shots_step = 1;
+        }
+        else if (!strcmp(argv[i], "-profile") && i + 2 < argc) {
+            prof_from   = atoi(argv[++i]);
+            prof_to     = atoi(argv[++i]);
+            dpage_stall = calloc(1024, sizeof(u64));
         }
         else if (!strcmp(argv[i], "-nofifo"))
             opt_fifo = 0;
@@ -2078,6 +2642,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-novbistop"))
             opt_stop_on_vbi_loss = 0;
     }
+    if (opt_cart_rd < 0) /* a bus cycle is 2 clocks plus the waits; the instruction's own cycle overlaps the first */
+        opt_cart_rd = 2 * (2 + opt_cart_wait) - 1;
+    if (opt_cart_fill < 0) /* -cartfill -1: 8 full accesses */
+        opt_cart_fill = 8 * (2 + opt_cart_wait) - 1;
     char path[512];
     u32 seed = opt_seed;
     fill_garbage(sdram, SDRAM_SIZE, &seed);
@@ -2090,6 +2658,25 @@ int main(int argc, char **argv)
     load_map_syms(path);
     qsort(syms, nsyms, sizeof(Sym), sym_cmp);
     parse_layout();
+    presented_addr = sym_addr("presented");
+    for (int i = 0; i < nsyms && !scr_fn; ++i) /* the function (code), not its static variables ("...::told") */
+        if (!strncmp(syms[i].name, "ProcessScript(", 14) && syms[i].a < 0x04000000u && !strstr(syms[i].name, "::"))
+            scr_fn = syms[i].a;
+    scr_loop_addr = sym_addr("objectLoop");
+    scr_ents_addr = sym_addr("objectEntityList");
+    if (!scr_loop_addr || !scr_ents_addr)
+        scr_fn = 0;
+    if (opt_callers) {
+        for (int i = 0; i < nsyms; ++i)
+            if (!strcmp(syms[i].name, opt_callers) ||
+                (!callers_addr && !strncmp(syms[i].name, opt_callers, strlen(opt_callers)) &&
+                 syms[i].name[strlen(opt_callers)] == '('))
+                callers_addr = syms[i].a;
+        if (callers_addr)
+            callers_count = calloc((size_t)nsyms + 1, sizeof(u64));
+        else
+            printf("-callers: no function %s\n", opt_callers);
+    }
 
     /* the CD boot table + the loader program (Kobo crt0 + sh2_engboot) */
     u32 blen;
@@ -2132,6 +2719,12 @@ int main(int argc, char **argv)
     while (!stopped) {
         if (frame_no() >= opt_frames)
             break;
+        /* this instruction's time starts here: the interrupt entry and the instruction fetch count too */
+        bus_penalty = 0;
+        for (int k = 0; k < PK_N; ++k) pen_kind[k] = fill_kind[k] = 0;
+        prof_active   = prof_from >= 0 && frame_no() >= prof_from && frame_no() < prof_to;
+        prof_active_c = prof_active;
+        u64 c_start   = cycles;
         if (opt_dump_file && frame_no() == opt_dump_frame) {
             FILE *df = fopen(opt_dump_file, "wb");
             if (df) {
@@ -2183,9 +2776,18 @@ int main(int argc, char **argv)
                    (unsigned long long)insns, symname(pc, b), op, R[0], R[1], R[2], R[3], R[4], R[5], R[14], R[15], SR);
         }
         PC = pc + 2;
-        bus_penalty = 0;
         exec(op, pc);
         cycles += 1 + (u64)bus_penalty;
+        if (prof_active)
+            prof_account(pc, cycles - c_start);
+        if (prof_from >= 0 && frame_no() >= prof_from && frame_no() < prof_to) {
+            if (!prof_next)
+                prof_next = cycles;
+            while (prof_next <= cycles) {
+                prof_sample(cur_pc);
+                prof_next += PROF_STEP;
+            }
+        }
         insns++;
         if (pending_addr_err) {
             pending_addr_err = 0;
@@ -2226,5 +2828,11 @@ int main(int argc, char **argv)
     if (opt_verbose || stopped)
         dump_state();
     summary();
+    prof_report();
+    if (prof_from >= 0) {
+        int last  = frame_no() < prof_to ? frame_no() : prof_to;
+        cost_frames = last - prof_from;
+        cost_report();
+    }
     return 0;
 }

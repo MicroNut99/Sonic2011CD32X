@@ -14,6 +14,9 @@ When the Genesis planes are on, it also plays the 68000's part: it takes each pl
 `sgb_poll` does, and writes it into a model of the Genesis VDP in vertical blank, as `sgb_vblank` does. With `-shot`
 it saves the Genesis picture as a `.bmp` file, so you can see what the console should show before you burn.
 
+Its timing matches the console (measured on R1S): the game speed it reports is the speed you will see. With
+`-profile` it shows where the SH2's time goes (section 4).
+
 ## 1. Build it (once)
 
 ```bash
@@ -36,7 +39,7 @@ tail -25 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
 It runs 25 seconds of console time (1500 frames) in about 15 seconds. The full log is in `sh2emu_log.txt`. Send me
 that file whenever the verdict is not clean.
 
-To see the Genesis picture, add `-shot FRAME FILE.bmp` (up to 8 of them) and open the `.bmp` files in Windows:
+To see the Genesis picture, add `-shot FRAME FILE.bmp` (up to 64 of them) and open the `.bmp` files in Windows:
 
 ```bash
 cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
@@ -84,7 +87,9 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `stage set-up 5C16` | the engine began loading its first stage (line 10 `5C16` on the console) |
 | `stage loaded` | the stage finished loading (`5Lnn`: list L, scene nn; `5100` = Palmtree Panic 1) |
 | `planes on (CMD 68)` | the SH2 asked for the Genesis planes and the Sub-CPU accepted |
+| `game speed` | engine frames per second of play, after the stage loaded. The game is made for 60; R1S: 26-29 |
 | `plane records` | records the SH2 sent, the 68000 took, and the VDP got. `INCLUDING A JUNK RECORD` = COMM4 held a value when the planes came on, and the 68000 took it as a record: a dot in every blank cell (R1G, R1R). Listed as the problem `JUNK-RECORD` |
+| `record contents` | a CRC of the first 600 records (option `-reccrc N`). It depends only on the pictures, not on the speed: a speed change that keeps this CRC keeps every picture the same |
 | `frame-buffer FIFO` | (only when it happens) words the SH2 wrote to the frame buffer that were still in the 32X's 4-word write FIFO when it gave the frame buffer to the 68000. The 32X does not guarantee them |
 | `line 10 now` | what line 10 would show at the end |
 | `PROBLEMS` | **do not burn.** Each kind of problem is listed with how many times it happened and where it happened first (the function and the offset into it) |
@@ -136,7 +141,39 @@ Each kind of event is logged at most 4 times per instruction (option `-maxlog`).
 To find the source line for an address, look the function up in `cd32x/build_engine/engine.map`. Then add the offset
 and disassemble around it with the toolchain's `objdump -d` on `engine.elf`.
 
-## 4. Options
+## 4. Speed: where the time goes
+
+`-profile A B` measures frames A to B (60 a second). Use a stretch of play, e.g. `-f 2600 -profile 1300 2500`. After
+the summary it prints:
+
+```
+ENGINE FRAMES     568: busy cycles each - mean 594438 (1.55 vertical blanks), median 1.46, 90% 2.30, max 2.56; 0% fit in one vertical blank ...
+  per engine frame, all frames vs the slowest tenth (57 frames), in vertical blanks:
+     0.57   1.38  ProcessScript(int, int, unsigned char)
+     0.29   0.29  DrawHLineScrollLayer(int)
+  scripts per engine frame by object type and event, all frames vs the slowest tenth, in vertical blanks:
+    0.120  0.909  type  66 3DRamp                   player
+    0.234  0.310  type   1 PlayerObject             main
+```
+
+| Part | What it means |
+|---|---|
+| `ENGINE FRAMES` | the SH2's busy time for each engine frame (everything but waiting for the vertical blank), in vertical blanks (383,500 cycles). **60 frames a second needs every frame under 1.00** |
+| all frames vs the slowest tenth | per function, its average time per frame, and its average in the slowest 10% of frames: what makes the slow frames slow |
+| scripts by object type and event | the script time (`ProcessScript` and everything it calls) by object type and sub (`main`, `player` = player interaction, `draw`) |
+| `by function, per frame` | per vertical blank: cycles, instructions, and the stall cycles inside them - waiting for the cart (code or data), SDRAM, the frame buffer. `in SDRAM` = the cycles if the function's code were in SDRAM |
+| `cart code stalls by function, cumulative` | the functions whose code costs the most cart fetches, with their sizes added up: what to move into SDRAM first |
+| `cart data stalls by 4 KB of the cart` | which cart data (engine tables, the stage image's parts by name) the SH2 waits for |
+
+`-callers NAME` adds who calls NAME (e.g. `-callers __sdivsi3`: who divides). `-shots A B STEP PREFIX` saves a picture
+every STEP frames from A to B (to compare with a video of the console).
+
+The bus timing comes from the 32X manual (section 1.12) and was measured against the console on R1S: a single cart read
+waits 15 cycles a word, a cart cache line (8 words in a row) costs 87 cycles, an SDRAM line 11, a frame buffer read 8;
+the 68000 copies a record word in 75 SH2 cycles and is busy in its vertical blank handler. Options `-cartwait`,
+`-cartrd`, `-cartfill`, `-fbread`, `-k68word` change these.
+
+## 5. Options
 
 All options go after the build folder.
 
@@ -150,8 +187,14 @@ All options go after the build folder.
 -hook ADDR     print the registers each time the SH2 reaches ADDR (at most -hookmax N times, default 50)
 -trace N COUNT print COUNT instructions, starting at instruction number N
 -dumpsdram FRAME FILE   save the 256 KB SDRAM at that frame (for checking the engine's tables afterwards)
--shot FRAME FILE.bmp    save the Genesis picture (planes model) at that frame; up to 8
+-shot FRAME FILE.bmp    save the Genesis picture (planes model) at that frame; up to 64
+-shots A B STEP PREFIX  a picture every STEP frames from A to B: PREFIX_<frame>.bmp
 -records N     print the first N plane records the 68000 model applies (default 3)
+-reccrc N      the record contents CRC over the first N records (default 600)
+-profile A B   where the SH2's time goes between frames A and B (section 4)
+-callers NAME  with -profile: who calls the function NAME, how often a frame
+-cartwait N    cart waits for a single access (default 15); -cartrd N / -cartfill N set the read / line costs directly
+-fbread N      frame buffer read cost (default 8); -k68word N the 68000's cycles per record word (default 75)
 -nofifo        no frame-buffer write FIFO model; -fbword N = SH2 cycles per FIFO word (default 5)
 -novbistop     keep running after line 10 freezes
 -h             this list
@@ -167,21 +210,23 @@ cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 650 -hook 0x02015d48 | grep HOOK | head
 ```
 
-## 5. Limits
+## 6. Limits
 
-- **Timing.** It is not cycle exact, but frame timing is close. R1Q's first sample came out as `8F34` / `9550`. The
-  console showed `8F33` / `9550`: the same function, in the same frame.
+- **Timing.** It is not cycle exact, but it matches the console where it was measured: R1Q's first sample came out as
+  `8F34` / `9550` (console `8F33` / `9550`); R1S loads its stage in 2.5 s (console 2.5-3.0 s) and stays within 0.1 s of
+  the console's video for 20 s of play. Up to 16 Oct 2026 it did not charge the cart for instruction fetches; profiles
+  from before then undercount the cart.
 - **After the first problem.** Reads where nothing answers return 0 here. On the console they can return anything,
   or hang the bus. So the first problem is what counts, not what the program does after it.
 - **The 68000 and the VDP are models.** The model follows `sgb_poll` and `sgb_vblank` exactly. When the 68000 takes
   an id while the SH2 still holds the frame buffer, the console reads undefined data; the model then uses what the
   console copied on R1H (`REC 0004 0004 0006 ...`). The VDP model draws the two planes, their scroll and the colours.
-  It has no sprites, no window, and no 32X layer. The 68000's timing is not modelled: it takes a record the moment the
-  SH2 hands it over.
+  It has no sprites, no window, and no 32X layer. The 68000's copy takes 75 SH2 cycles a word, and it does not take a
+  record while its vertical blank handler runs (`-k68word`).
 - **Loading speed.** The Sub-CPU answers at once. On the console a 32 KB chunk takes about a second, so the loading
   part of the timeline is much shorter here.
 
-## 6. What it found
+## 7. What it found
 
 **R1Q.** On the console the SH2 died after the stage set-up started: line 10 showed `8F33` / `9550`, then nothing.
 In sh2emu, from frame 502 the engine ran the cart image's sprite pixels as script code:
@@ -200,3 +245,9 @@ Fixed in R1R: `ScriptSubExists` in `engine/Script.hpp`.
 `-shot` shows Palmtree Panic 1 drawn correctly from the SH2's records, with the same dots. Those come from the junk
 record the 68000 took from COMM4's start-up value `1234`. R1S clears COMM4 first. sh2emu, with that line simulated
 on R1R, draws the level with no dots.
+
+**R1S (speed).** The console runs the game at 27-29 frames a second. `-profile` on R1S: each engine frame needs 1.55
+vertical blanks on average and up to 2.56; about 45% of that is waiting for the cart. The slowest frames are the 3D
+ramp's player script (a 128-turn script loop, 0.9 vertical blanks). R1T removed three pieces of pure waste (a variable
+looked up by name every frame, the empty object slots, the scroll loop's per-line work): 1.31 on average, with the same
+record contents CRC as R1S.

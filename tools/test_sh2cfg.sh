@@ -7,6 +7,7 @@
 # frame); they must be identical. S5c: the SH2 configuration takes scripts, chunks and collision
 # from the cart image the normal build wrote (as the console will from the cart). The SH2 configuration runs under AddressSanitizer: a write into
 # a shrunk array stops it at that line. Must say "camera logs identical".
+# Speed rounds: SAVE_REF=<file> before the change, REF=<file> after it - must also say "same as the reference".
 set -e
 cd "$(dirname "$0")/.."
 make -s -C host
@@ -58,6 +59,19 @@ fi
     "$OLDPWD/host/soniccd_host_sh2cfg_asan" > selftest.txt 2>&1) || true
 grep -h "overlay self-test" "$T/soniccd_host_sh2cfg_asan/selftest.txt" "$T/soniccd_host_sh2cfg_asan/"*.txt 2>/dev/null | sort -u | head -1
 N1=$(wc -l < "$T/soniccd_host/camlog.txt")
+# REV speed rounds: SAVE_REF=file keeps this run's log as the reference; REF=file compares this run against
+# it (an engine change that must not change the game: same camera, scroll, palettes and object state)
+[ -n "$SAVE_REF" ] && cp "$T/soniccd_host/camlog.txt" "$SAVE_REF" && echo "reference log saved: $SAVE_REF"
+if [ -n "$REF" ]; then
+    if cmp -s "$REF" "$T/soniccd_host/camlog.txt"; then
+        echo "same as the reference $REF: $N1 frames"
+    else
+        echo "DIFFERENT from the reference $REF - first differences (reference < > this engine):"
+        diff "$REF" "$T/soniccd_host/camlog.txt" | head -6
+        echo "logs kept in $T"
+        exit 1
+    fi
+fi
 if cmp -s "$T/soniccd_host/camlog.txt" "$T/soniccd_host_sh2cfg_asan/camlog.txt"; then
     echo "camera logs identical: $N1 frames (camera, layer scroll, palettes, all object state; SH2 configuration from the cart image)"
     rm -rf "$T"
