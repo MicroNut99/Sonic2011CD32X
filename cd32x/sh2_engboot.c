@@ -253,6 +253,7 @@ int main(void)
        first scene change the engine made itself, never tried on hardware before R1). */
     BOOT_RECORD[6] = (uint32_t)scd_load_file;      /* the engine loads scenes through this (SDRAM) */
     BOOT_RECORD[5] = FILE_FIRST_SCENE;             /* the scene now in the cart */
+    BOOT_RECORD[7] = (uint32_t)&scdSampling;       /* R1C: the engine switches the PC sampler on / off */
     show_status(0x5C05);
     SC_CCR = 0x11; /* purge + enable the cache: the engine runs from the cart */
     { /* S7e6: PC sampling from here on (vector 70 = V blank; Kobo's handler stays, chained) */

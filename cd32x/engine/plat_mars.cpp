@@ -21,6 +21,15 @@ extern "C" {
 #define SC_CRAM ((volatile unsigned short *)0x20004200)
 #define SC_FB ((volatile unsigned short *)0x24000000)
 #define VBLANK_COUNT (*(volatile unsigned int *)0x06001F10) /* S7b5: counted by the loader's VBI */
+/* R1C: the loader's PC sampler (sh2_engboot.c, boot record [7] = &scdSampling). On, every 30 vertical
+   blanks line 10 shows where the SH2 is: 8xxx = cart code 0x02000000 + xxx * 16, 7xxx = SDRAM. Only on
+   while nothing waits for a COMM12 reply (scene loads and SH2 command 68 use COMM12). */
+static void scd_sampling(unsigned int on)
+{
+    unsigned int a = SCD_BOOT_RECORD[7];
+    if (a >= 0x06000000u && a < 0x06002000u)
+        *(volatile unsigned int *)a = on;
+}
 #define STATE(code) (*(volatile unsigned short *)0x2000402C = (unsigned short)(code)) /* Kobo's STATE (COMM12) */
 
 void scd_status(int row, const char *t, int color);
@@ -208,6 +217,7 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
 {
     unsigned int file  = 0x1000 + (((unsigned int)activeStageList + 1) << 8) + (unsigned int)stageListPosition;
     unsigned int bytes = 0;
+    STATE(0x5C60); /* R1C: the MDG load starts */
     int bad            = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
     if (bad < 0) {
         STATE(0x5C61);
@@ -220,6 +230,7 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
         STATE(0x5C62);
         return;
     }
+    STATE(0x5C65); /* R1C: the MDG is in the cart; command 68 next */
     if (sgb_cmd(1, SGB_CART_OFFSET) != 1) {
         STATE(0x5C63);
         return;
@@ -557,16 +568,26 @@ void plat_stage_loading()
             scene_stop(0x5CE2, "BAD LOAD ", file);
         *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
         SCD_BOOT_RECORD[5] = file;
+        STATE(0x5C14); /* R1C: the scene is in the cart */
         CartCheck r;
         if (cart_verify(cart_scene16, &r) != 0)
             scene_stop(0x5CE3, "BAD IMAGE ", file);
+        STATE(0x5C15); /* R1C: its image checked */
         for (int k = 0; k < (int)h[2] && k < 32; ++k)
             if (h[3 + 5 * k] != firstOffsets[k])
                 scene_stop(0x5CE9, "LAYOUT ", file); /* not the fixed layout */
     }
+    STATE(0x5C16); /* R1C: the engine's own stage load runs from here (until 5Lnn) */
+    scd_sampling(1);
 }
 void plat_stage_loaded() /* line 10: STATE:5Lnn = list L, scene nn (5000 = the title) */
 {
+    scd_sampling(0); /* R1C: COMM12 is a reply register again (MDG load, command 68) */
+    for (int k = 0; k < 4; ++k) {
+        unsigned int f = VBLANK_COUNT;
+        while (VBLANK_COUNT == f) {
+        }
+    } /* a sample posted just now must not overwrite the code below */
     STATE(0x5000 | ((unsigned int)activeStageList << 8) | ((unsigned int)stageListPosition & 0xFF));
 #if SCD_PLANES
     planes_load(); /* REV R1: the scene's Genesis planes (a failure leaves its 5C6x code on line 10) */

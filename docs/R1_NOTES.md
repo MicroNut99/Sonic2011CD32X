@@ -81,6 +81,10 @@ not come, line 10 tells why:
 
 | Line 10 shows | Meaning |
 |---|---|
+| `5C14` / `5C15` / `5C16` | (R1C) the engine's scene load: the scene in the cart / its image checked / the engine's own stage load running |
+| `8xxx` / `7xxx`, changing | (R1C) the PC sampler, on between `5C16` and `5Lnn`: where the SH2 is (`8xxx` = engine code at `0x02000000 + xxx × 16`, look it up in `engine.map`) |
+| `5100` | R11A (list 1, scene 0) loaded by the engine |
+| `5C60` / `5C65` | (R1C) the MDG load started / the MDG in the cart, SH2 command 68 next |
 | `5C61` | no `G1S000.MDG` on the disc (the build step was skipped) |
 | `5C62` | the MDG file is not what the SH2 expects (header) |
 | `5C63` | the Sub-CPU refused the load (header, or the file not in one 1 MB cart bank) |
