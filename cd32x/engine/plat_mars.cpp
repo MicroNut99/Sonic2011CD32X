@@ -208,7 +208,7 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
 {
     unsigned int file  = 0x1000 + (((unsigned int)activeStageList + 1) << 8) + (unsigned int)stageListPosition;
     unsigned int bytes = 0;
-    int bad            = ((ScdLoadFile)SCD_BOOT_RECORD[4])((unsigned short)file, &bytes);
+    int bad            = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
     if (bad < 0) {
         STATE(0x5C61);
         return;
@@ -550,7 +550,7 @@ void plat_stage_loading()
     STATE(0x5C13);
     if (file != SCD_BOOT_RECORD[5]) {
         unsigned int bytes = 0;
-        int bad = ((ScdLoadFile)SCD_BOOT_RECORD[4])((unsigned short)file, &bytes);
+        int bad = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
         if (bad < 0)
             scene_stop(0x5CE8, "NO SCENE ", file); /* the scene's .IMG is not on the disc */
         if (bad > 0)

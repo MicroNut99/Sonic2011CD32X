@@ -248,7 +248,10 @@ int main(void)
 
     /* ---- 5. hand over to the engine (interrupts stay on, as Kobo) ---- */
     BOOT_RECORD[0] = 0x53434442;                  /* "SCDB"; [1] engine, [2] data pack, [3] scene bytes */
-    BOOT_RECORD[4] = (uint32_t)scd_load_file;      /* the engine loads scenes through this (SDRAM) */
+    /* R1 fix: the routine's address in [6]. [4] is 0x06001F10 = VBLANK_COUNT - the vertical-blank
+       interrupt counted it up (the console's 5CEA at PC 0x06000851 = scd_load_file + 5 vblanks: the
+       first scene change the engine made itself, never tried on hardware before R1). */
+    BOOT_RECORD[6] = (uint32_t)scd_load_file;      /* the engine loads scenes through this (SDRAM) */
     BOOT_RECORD[5] = FILE_FIRST_SCENE;             /* the scene now in the cart */
     show_status(0x5C05);
     SC_CCR = 0x11; /* purge + enable the cache: the engine runs from the cart */
