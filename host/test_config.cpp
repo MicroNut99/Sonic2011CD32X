@@ -27,6 +27,7 @@ bool plat_running() { return false; }
 unsigned short *plat_layer_begin(int, int, int, unsigned short *frame) { return frame; }
 void plat_layer_line(int, int, int) {}
 void plat_layer_end(int) {}
+int *plat_layer_lines(int) { return 0; }
 void *plat_cart_data(int) { return calloc(1, 0x110000); }
 void plat_stage_loaded() {}
 void plat_stage_loading() {}

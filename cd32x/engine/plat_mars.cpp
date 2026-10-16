@@ -502,10 +502,21 @@ void plat_layer_line(int slot, int line, int x)
         xB[line] = x;
 }
 void plat_layer_end(int) {}
+int *plat_layer_lines(int slot) /* R1T: as plat_layer_line - layer 0 into xA, the frame's background layer into xB */
+{
+    if (slot < 0 || slot >= 4)
+        return 0;
+    if (slotLayer[slot] == 0)
+        return xA;
+    if (slotLayer[slot] == frameBg)
+        return xB;
+    return 0; /* a second background layer: no record this frame (planes_frame) - its lines are not used */
+}
 #else
 unsigned short *plat_layer_begin(int, int, int, unsigned short *frame) { return frame; }
 void plat_layer_line(int, int, int) {}
 void plat_layer_end(int) {}
+int *plat_layer_lines(int) { return 0; }
 #endif
 void plat_log(const char *) {} // S7c: the 32X layer stays blank during normal running (OpenLara); errors only
 void plat_fatal(const char *text)

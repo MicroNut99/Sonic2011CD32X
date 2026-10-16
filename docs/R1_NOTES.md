@@ -117,6 +117,34 @@ tools/sh2emu/sh2emu cd32x/build_engine > sh2emu_log.txt; tail -25 sh2emu_log.txt
 
 Burn only on `VERDICT  no problems found`. The 68000 and the Genesis VDP are models (`-shot FRAME FILE.bmp` saves the picture).
 
+## Speed (from R1S)
+
+R1S runs Palmtree Panic 1 at **27-29 engine frames a second**; Sonic CD's logic runs once a frame and is made for 60,
+so the game runs at half speed. Measured with `tools/sh2emu` after two fixes to its timing (it now charges the cart for
+instruction fetches and models the 68000's record copy), calibrated against the R1S console video: stage load 2.5-2.8 s
+(console: 2.5-3.0 s), and the same picture as the console within 0.1 s through the loop and the climb into the sky.
+
+`sh2emu -profile 1300 2500` on R1S, per engine frame (one vertical blank = 383,500 SH2 cycles):
+
+| | vertical blanks |
+|---|---|
+| busy, mean / median / slowest tenth / max | 1.55 / 1.46 / 2.30 / 2.56 |
+| scripts (`ProcessScript` and what it calls), mean / slowest tenth | 0.57 / 1.38 |
+| layer scroll (`DrawHLineScrollLayer`) | 0.29 |
+| object loop (`ProcessObjects`, its own time) | 0.22 |
+| plane record + the 68000's copy (`planes_frame`, `md_plane_update`, ...) | 0.17 |
+
+- About 45% of the busy time is the SH2 waiting for the cart: the engine's code, the script bytecode and the tables
+  live there (a cache line from the cart: ~88 cycles; from SDRAM: 12).
+- The slow frames are the **3D ramp's player script** (type 66 `3DRamp`, player event): a 128-turn loop, ~1,070
+  script instructions, 0.9 vertical blanks a frame while Sonic is near it. The interpreter costs ~320 cycles a script
+  instruction: its 31 KB in the cart, every operand through two jump tables whose targets miss the cache.
+- 60 frames a second needs every frame under one vertical blank.
+
+Speed rounds, one change per disc, every one checked before burning: the PC check (`tools/test_sh2cfg.sh` with
+`REF=`: camera, layer scroll, palettes and every object's state the same as the previous round, frame by frame) and
+sh2emu's `record contents` CRC (the 68000 gets the same records = the same pictures).
+
 ## Command numbers (for the docs ledger)
 
 | Where | Number | Meaning |
@@ -155,3 +183,5 @@ Burn only on `VERDICT  no problems found`. The 68000 and the Genesis VDP are mod
 | R1R | **R1Q + one change** (engine): the six "has this object sub a script?" tests skip the no-script index (`ScriptSubExists`, `engine/Script.hpp`; `engine/Object.cpp` ×5, `engine/Drawing.cpp` ×1 - the PC's answer is unchanged). Boot stack R1G exactly, game data as R1Q. `tools/sh2emu` with this fix simulated on R1Q: stage loaded (`5100`), `G1S000.MDG`, command 68, records sent, no wild reads in 3000 frames. The COMM4 clear (R1P) is not on this disc: the 0x1234 junk record / dot grid may still show. |
 | R1R | **ran the whole act, twice** (boot stack untouched): line 10 kept changing after `5C16` (`8F39`/`9554`, `6001`, `95EE`, `6002`), `G1S000.MDG` loaded, the planes came on. Then a dot in every blank cell, as R1G; ~5 minutes later the end of the act - red `NO SCENE 204` (the next act is not on the disc) - with a few rectangles of real level among the dots. `tools/sh2emu -shot` on the same build: the SH2's records draw Palmtree Panic 1 correctly (palm trees, grass, checkerboard, mountains) - plus the same dots from the junk record (COMM4 `1234` taken at planes-on). So the SH2 side is right; what is missing on the console happens after the hand-over. Every disc that reached the planes (R1F, R1G, R1R) took that junk record first. |
 | R1S | **R1R + one line** (engine, R1P's): the SH2 clears COMM4 before command 68, so the 68000 never takes the start-up value as a record. sh2emu with this line simulated on R1R: no junk, the full picture, no dots. If the console still shows no level, the fault is in the 68000's record handling (`sgb_poll` / `sgb_vblank` in `hw_md.s`, the frozen stack) - stop and ask before touching it. |
+| R1S | **Palmtree Panic 1 on the Genesis planes, scrolling with the engine** (MicroNut99's videos, 16 Oct): palm trees, mountains, checkerboard, the loop with the water behind it, the climb into the clouds - no dots, no junk. Slow: 27-29 engine frames a second (see *Speed*). **Last good disc.** |
+| R1T | **R1S + three engine speed changes, nothing visible changes** (one disc for the three: each alone stays under the console's 30-frame step). (1) `CheckKeyPress` looked up `input.pressButton` by name every frame - a mobile variable Sonic CD does not have: 109 name compares from the cart a frame, for nothing; now searched once per variable list. (2) `ProcessObjects` skips an empty slot at once (~860 of 1,184; the only write it could do, `type = 0`, stores the 0 it holds). (3) `DrawHLineScrollLayer`, no-draw build: only each line's position, written straight into the plane record's table (`plat_layer_lines`), the scroll byte read once, no special-stage name compare per line (it needs `RENDER_HW`); the parallax `%` only for values outside the width. PC check: 3,001 frames the same as R1S. sh2emu: records 1-1000 CRC `CCFAE2B9` = R1S's; busy per engine frame 1.55 → 1.31 vertical blanks; 26.5 → 29.1 frames a second over 44 s of play. Boot stack untouched. |

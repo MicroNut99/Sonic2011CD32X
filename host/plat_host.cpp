@@ -299,7 +299,25 @@ unsigned short *plat_layer_begin(int slot, int layer, int tileYPos, unsigned sho
     return md_layer_begin(slot, layer, tileYPos, frame);
 }
 void plat_layer_line(int slot, int line, int x) { md_layer_line(slot, line, x); }
-void plat_layer_end(int slot) { md_layer_end(slot); }
+// R1T: the no-draw build's lines come as one buffer per slot; the check gets them line by line at the end,
+// as the per-line calls would have given them
+static int hostLines[4][SCREEN_YSIZE];
+static bool hostLinesOut[4];
+int *plat_layer_lines(int slot)
+{
+    if (slot < 0 || slot >= 4)
+        return NULL;
+    hostLinesOut[slot] = true;
+    return hostLines[slot];
+}
+void plat_layer_end(int slot)
+{
+    if (slot >= 0 && slot < 4 && hostLinesOut[slot]) {
+        hostLinesOut[slot] = false;
+        for (int line = 0; line < SCREEN_YSIZE; ++line) md_layer_line(slot, line, hostLines[slot][line]);
+    }
+    md_layer_end(slot);
+}
 
 // ---------------------------------------------------------------- plat.hpp
 unsigned int plat_ticks_ms() { return frameCount * 1000 / 60; }

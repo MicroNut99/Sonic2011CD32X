@@ -570,7 +570,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.cpp	2026-10-16 10:42:03.403907638 -0700
++++ engine/Drawing.cpp	2026-10-16 12:34:59.634964757 -0700
 @@ -15,9 +15,15 @@
  // it rather than remove it outright.
  #define DONT_USE_VIEW_ANGLE (1)
@@ -800,7 +800,21 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer   = &stageLayouts[activeTileLayers[layerID]];
          int screenwidth16  = (GFX_LINESIZE >> 4) - 1;
-@@ -2184,6 +2256,13 @@
+@@ -2173,7 +2245,12 @@
+                     if (hParallax.scrollPos[i] < 0)
+                         hParallax.scrollPos[i] += fullLayerwidth << 16;
+                     hParallax.linePos[i] += hParallax.scrollPos[i] >> 16;
+-                    hParallax.linePos[i] %= fullLayerwidth;
++#if defined(SONICCD32X)
++                    // PORT32X R1T: a value already in 0 .. width-1 is its own remainder - the division (a library
++                    // call on the SH2, about 130 a frame) only for the others; the result is the same
++                    if ((unsigned int)hParallax.linePos[i] >= (unsigned int)fullLayerwidth)
++#endif
++                        hParallax.linePos[i] %= fullLayerwidth;
+                 }
+             }
+             lastXSize = layerwidth;
+@@ -2184,6 +2261,13 @@
          int tileYPos           = yscrollOffset % (layerheight << 7);
          if (tileYPos < 0)
              tileYPos += layerheight << 7;
@@ -814,7 +828,75 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          byte *scrollIndex = &lineScroll[tileYPos];
          int tileY16       = tileYPos & 0xF;
          int chunkY        = tileYPos >> 7;
-@@ -2221,6 +2300,10 @@
+@@ -2191,6 +2275,55 @@
+ 
+         // Draw Above Water (if applicable)
+         int drawableLines[2] = { waterDrawPos, SCREEN_YSIZE - waterDrawPos };
++#if SCD32X_NODRAW
++        // PORT32X R1T: the no-draw build (the Genesis planes draw the level) needs only each line's chunkX. The same
++        // arithmetic as the loop below, written where the platform wants it (no call per line), the line's scroll
++        // entry read once (the layout pool is in the frame buffer); not the per-line palette pointers (only drawing
++        // reads them: set once below, to the last line's, as the loop leaves them) nor the special-stage 5 fix
++        // (it needs renderType == RENDER_HW; this is the RENDER_SW branch). No lines wanted: no loop - it has no
++        // other effect.
++        {
++            int *lines = plat_layer_lines(layerID);
++            if (lines) {
++                const int fullLayerwidth = layerwidth << 7;
++                for (int i = 0; i < 2; ++i) {
++                    while (drawableLines[i]--) {
++                        const int s = *scrollIndex;
++                        int chunkX  = hParallax.linePos[s];
++                        if (i == 0) {
++                            if (hParallax.deform[s])
++                                chunkX += *deformationData;
++                            ++deformationData;
++                        }
++                        else {
++                            if (hParallax.deform[s])
++                                chunkX += *deformationDataW;
++                            ++deformationDataW;
++                        }
++                        ++scrollIndex;
++                        if (chunkX < 0)
++                            chunkX += fullLayerwidth;
++                        if (chunkX >= fullLayerwidth)
++                            chunkX -= fullLayerwidth;
++                        *lines++ = chunkX;
++                        if (++tileY16 > TILE_SIZE - 1) {
++                            tileY16 = 0;
++                            ++tileY;
++                        }
++                        if (tileY > 7) {
++                            if (++chunkY == layerheight) {
++                                chunkY = 0;
++                                scrollIndex -= 0x80 * layerheight;
++                            }
++                            tileY = 0;
++                        }
++                    }
++                }
++            }
++            activePalette   = fullPalette[gfxLineBuffer[SCREEN_YSIZE - 1]];
++            activePalette32 = fullPalette32[gfxLineBuffer[SCREEN_YSIZE - 1]];
++        }
++#else
+         for (int i = 0; i < 2; ++i) {
+             while (drawableLines[i]--) {
+                 activePalette   = fullPalette[*lineBuffer];
+@@ -2203,8 +2336,9 @@
+                         deform = *deformationData;
+ 
+                     // Fix for SS5 mobile bug
+-                    if (StrComp(stageList[activeStageList][stageListPosition].name, "5") && activeStageList == STAGELIST_SPECIAL
+-                        && renderType == RENDER_HW)
++                    // PORT32X R1T: the cheap tests first - the name compare ran for every line of every layer
++                    if (activeStageList == STAGELIST_SPECIAL && renderType == RENDER_HW
++                        && StrComp(stageList[activeStageList][stageListPosition].name, "5"))
+                         deform >>= 4;
+ 
+                     chunkX += deform;
+@@ -2221,6 +2355,10 @@
                      chunkX += fullLayerwidth;
                  if (chunkX >= fullLayerwidth)
                      chunkX -= fullLayerwidth;
@@ -825,7 +907,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  int chunkXPos         = chunkX >> 7;
                  int tilePxXPos        = chunkX & 0xF;
                  int tileXPxRemain     = TILE_SIZE - tilePxXPos;
-@@ -2637,6 +2720,7 @@
+@@ -2637,6 +2775,7 @@
                      }
                  }
  
@@ -833,17 +915,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  if (++tileY16 > TILE_SIZE - 1) {
                      tileY16 = 0;
                      ++tileY;
-@@ -2650,6 +2734,9 @@
+@@ -2650,6 +2789,10 @@
                  }
              }
          }
++#endif // SCD32X_NODRAW (R1T)
 +#if RETRO_PLATFORM == RETRO_SCD32X
 +        plat_layer_end(layerID); // PORT32X
 +#endif
      }
      else if (renderType == RENDER_HW) {
          TileLayer *layer      = &stageLayouts[activeTileLayers[layerID]];
-@@ -3481,6 +3568,7 @@
+@@ -3481,6 +3624,7 @@
  }
  void DrawVLineScrollLayer(int layerID)
  {
@@ -851,7 +934,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
          if (!layer->xsize || !layer->ysize)
-@@ -3535,6 +3623,7 @@
+@@ -3535,6 +3679,7 @@
          ushort *frameBufferPtr = Engine.frameBuffer;
          activePalette          = fullPalette[gfxLineBuffer[0]];
          activePalette32        = fullPalette32[gfxLineBuffer[0]];
@@ -859,7 +942,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          int tileXPos           = xscrollOffset % (layerheight << 7);
          if (tileXPos < 0)
              tileXPos += layerheight << 7;
-@@ -4064,6 +4153,8 @@
+@@ -4064,6 +4209,8 @@
  }
  void Draw3DFloorLayer(int layerID)
  {
@@ -868,7 +951,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4644,6 +4735,8 @@
+@@ -4644,6 +4791,8 @@
  }
  void Draw3DSkyLayer(int layerID)
  {
@@ -877,7 +960,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4727,6 +4820,8 @@
+@@ -4727,6 +4876,8 @@
  
  void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
  {
@@ -886,7 +969,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A > 0xFF)
          A = 0xFF;
      if (renderType == RENDER_SW) {
-@@ -4828,6 +4923,7 @@
+@@ -4828,6 +4979,7 @@
  
  void SetFadeHQ(int R, int G, int B, int A)
  {
@@ -894,7 +977,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A <= 0)
          return;
      if (A > 0xFF)
-@@ -4871,6 +4967,8 @@
+@@ -4871,6 +5023,8 @@
  
  void DrawTintRectangle(int XPos, int YPos, int width, int height)
  {
@@ -903,7 +986,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -4907,6 +5005,8 @@
+@@ -4907,6 +5061,8 @@
  void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                          int sheetID)
  {
@@ -912,7 +995,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5008,6 +5108,8 @@
+@@ -5008,6 +5164,8 @@
  
  void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
@@ -921,7 +1004,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -5102,6 +5204,8 @@
+@@ -5102,6 +5260,8 @@
  
  void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
  {
@@ -930,7 +1013,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int widthFlip  = width;
          int heightFlip = height;
-@@ -5399,6 +5503,8 @@
+@@ -5399,6 +5559,8 @@
  void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                        int sheetID)
  {
@@ -939,7 +1022,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5558,6 +5664,8 @@
+@@ -5558,6 +5720,8 @@
  void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                      int sheetID)
  {
@@ -948,7 +1031,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      // Not avaliable in SW Render mode
  
      if (renderType == RENDER_HW) {
-@@ -5616,6 +5724,8 @@
+@@ -5616,6 +5780,8 @@
  void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                         int sheetID)
  {
@@ -957,7 +1040,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int sprXPos    = (pivotX + sprX) << 9;
          int sprYPos    = (pivotY + sprY) << 9;
-@@ -5880,6 +5990,8 @@
+@@ -5880,6 +6046,8 @@
  void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
                          int sheetID)
  {
@@ -966,7 +1049,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (scale == 0)
          return;
  
-@@ -6148,6 +6260,8 @@
+@@ -6148,6 +6316,8 @@
  
  void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
@@ -975,7 +1058,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6236,6 +6350,8 @@
+@@ -6236,6 +6406,8 @@
  }
  void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -984,7 +1067,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -6359,6 +6475,8 @@
+@@ -6359,6 +6531,8 @@
  }
  void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -993,7 +1076,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6459,6 +6577,8 @@
+@@ -6459,6 +6633,8 @@
  }
  void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1002,7 +1085,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6664,6 +6784,8 @@
+@@ -6664,6 +6840,8 @@
  
  void DrawFace(void *v, uint colour)
  {
@@ -1011,7 +1094,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -6849,6 +6971,8 @@
+@@ -6849,6 +7027,8 @@
  }
  void DrawTexturedFace(void *v, byte sheetID)
  {
@@ -1020,7 +1103,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -7022,6 +7146,7 @@
+@@ -7022,6 +7202,7 @@
  
  void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
  {
@@ -1028,7 +1111,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int Y           = YPos << 9;
      if (rowCount < 0)
-@@ -7052,6 +7177,7 @@
+@@ -7052,6 +7233,7 @@
  
  void DrawTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1036,7 +1119,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7062,6 +7188,7 @@
+@@ -7062,6 +7244,7 @@
  }
  void DrawStageTextEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1044,7 +1127,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7077,6 +7204,7 @@
+@@ -7077,6 +7260,7 @@
  }
  void DrawBlendedTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1052,7 +1135,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7087,6 +7215,8 @@
+@@ -7087,6 +7271,8 @@
  }
  void DrawTextMenu(void *menu, int XPos, int YPos)
  {
@@ -1239,7 +1322,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (addPath) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Input.cpp engine/Input.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Input.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Input.cpp	2026-10-15 21:43:01.365221800 -0700
++++ engine/Input.cpp	2026-10-16 12:43:46.318952710 -0700
 @@ -329,6 +329,11 @@
  }
  #endif //! RETRO_USING_SDL2
@@ -1284,6 +1367,34 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #elif RETRO_USING_SDL1
      if (SDL_NumJoysticks() > 0) {
          controller = SDL_JoystickOpen(0);
+@@ -532,7 +555,27 @@
+             }
+         }
+ 
++#if defined(SONICCD32X)
++        // PORT32X R1T: the search by name runs once per variable list, not every frame. Sonic CD has no
++        // "input.pressButton" (a mobile variable): SetGlobalVariableByName compared all ~100 names, from the cart,
++        // every frame and found nothing (2% of the SH2's time). The list is the game config's, loaded once; it is
++        // searched again only if its length changes. Found or not, the result is the same as the old search.
++        static int pressButtonVar = -1, pressButtonCount = -1;
++        if (pressButtonCount != globalVariablesCount) {
++            pressButtonCount = globalVariablesCount;
++            pressButtonVar   = -1;
++            for (int v = 0; v < globalVariablesCount; ++v) {
++                if (StrComp("input.pressButton", globalVariableNames[v])) {
++                    pressButtonVar = v;
++                    break;
++                }
++            }
++        }
++        if (pressButtonVar >= 0)
++            globalVariables[pressButtonVar] = anyPress;
++#else
+         SetGlobalVariableByName("input.pressButton", anyPress);
++#endif
+     }
+ }
+ 
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Math.cpp engine/Math.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Math.cpp	2026-08-15 23:48:31.000000000 -0700
 +++ engine/Math.cpp	2026-10-15 21:43:01.365373424 -0700
@@ -1401,7 +1512,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void CalculateTrigAngles();
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.cpp engine/Object.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Object.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Object.cpp	2026-10-16 10:42:03.401047548 -0700
++++ engine/Object.cpp	2026-10-16 12:34:02.266966069 -0700
 @@ -4,7 +4,11 @@
  int curObjectType = 0;
  Entity objectEntityList[ENTITY_COUNT];
@@ -1444,7 +1555,20 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              ProcessScript(scriptInfo->subStartup.scriptCodePtr, scriptInfo->subStartup.jumpTablePtr, SUB_SETUP);
          scriptInfo->frameCount = scriptFrameCount - scriptInfo->frameListOffset;
      }
-@@ -92,9 +102,9 @@
+@@ -55,6 +65,12 @@
+         bool active = false;
+         int x = 0, y = 0;
+         Entity *entity = &objectEntityList[objectLoop];
++#if defined(SONICCD32X)
++        // PORT32X R1T: an empty slot (about 860 of the 1,184 in Palmtree Panic 1) does nothing below - the only
++        // write, BOUNDS_DESTROY's type = 0, would store the 0 it already holds - so it is skipped at once.
++        if (entity->type == OBJ_TYPE_BLANKOBJECT)
++            continue;
++#endif
+         switch (entity->priority) {
+             case PRIORITY_BOUNDS:
+                 x      = entity->XPos >> 16;
+@@ -92,9 +108,9 @@
          if (active && entity->type > OBJ_TYPE_BLANKOBJECT) {
              ObjectScript *scriptInfo = &objectScriptList[entity->type];
              activePlayer             = 0;
@@ -1456,7 +1580,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  while (activePlayer < activePlayerCount) {
                      if (playerList[activePlayer].objectInteractions)
                          ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
-@@ -103,8 +113,14 @@
+@@ -103,8 +119,14 @@
                  }
              }
  
@@ -1473,7 +1597,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          }
      }
  }
-@@ -119,9 +135,9 @@
+@@ -119,9 +141,9 @@
          if (entity->priority == PRIORITY_ALWAYS && entity->type > OBJ_TYPE_BLANKOBJECT) {
              ObjectScript *scriptInfo = &objectScriptList[entity->type];
              activePlayer             = 0;
@@ -1485,7 +1609,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  while (activePlayer < PLAYER_COUNT) {
                      if (playerList[activePlayer].objectInteractions)
                          ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
-@@ -130,8 +146,14 @@
+@@ -130,8 +152,14 @@
                  }
              }
  
@@ -3630,8 +3754,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
-+++ engine/plat.hpp	2026-10-15 21:43:01.369748787 -0700
-@@ -0,0 +1,67 @@
++++ engine/plat.hpp	2026-10-16 12:35:07.662964573 -0700
+@@ -0,0 +1,71 @@
 +#ifndef PLAT_H
 +#define PLAT_H
 +// PORT32X: the platform layer of the Sega CD32X port.
@@ -3664,6 +3788,10 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +unsigned short *plat_layer_begin(int slot, int layer, int tileYPos, unsigned short *frame);
 +void plat_layer_line(int slot, int line, int x);
 +void plat_layer_end(int slot);
++// PORT32X R1T: the no-draw build writes the slot's per-line positions (SCREEN_YSIZE ints, after
++// plat_layer_begin) straight into this buffer instead of a plat_layer_line call per line; NULL = the
++// platform does not use this slot's lines
++int *plat_layer_lines(int slot);
 +
 +// S5c: the cart image - arrays that are read-only once a stage is loaded (scripts, chunks,
 +// collision) live in the cart on the SH2. plat_cart_data returns where each one is.
