@@ -21,6 +21,9 @@ extern "C" {
 #define SC_CRAM ((volatile unsigned short *)0x20004200)
 #define SC_FB ((volatile unsigned short *)0x24000000)
 #define VBLANK_COUNT (*(volatile unsigned int *)0x06001F10) /* S7b5: counted by the loader's VBI */
+#ifndef SCD_SCENE_CHECK
+#define SCD_SCENE_CHECK 0 /* R1D */
+#endif
 /* R1C: the loader's PC sampler (sh2_engboot.c, boot record [7] = &scdSampling). On, every 30 vertical
    blanks line 10 shows where the SH2 is: 8xxx = cart code 0x02000000 + xxx * 16, 7xxx = SDRAM. Only on
    while nothing waits for a COMM12 reply (scene loads and SH2 command 68 use COMM12). */
@@ -546,12 +549,14 @@ static void scene_stop(unsigned short code, const char *what, unsigned int file)
     for (;;) {
     }
 }
+#if SCD_SCENE_CHECK
 static uint16_t cart_scene16(uint32_t off) /* S7d2: CartRead16's own types (uint32_t = unsigned long on the SH2) */
 {
     if ((off & 0xFFFF) == 0)
         STATE(0x5800 | (off >> 16)); /* R1D: line 10 58nn = the image check is reading at 0x080000 + nn * 64 KB */
     return *(volatile uint16_t *)(0x22080000 + off);
 }
+#endif
 void plat_stage_loading()
 {
 #if SCD_PLANES
@@ -574,10 +579,16 @@ void plat_stage_loading()
         *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
         SCD_BOOT_RECORD[5] = file;
         STATE(0x5C14); /* R1C: the scene is in the cart */
+#if SCD_SCENE_CHECK
         CartCheck r;
         if (cart_verify(cart_scene16, &r) != 0)
             scene_stop(0x5CE3, "BAD IMAGE ", file);
-        STATE(0x5C15); /* R1C: its image checked */
+#endif
+        /* R1D: as OpenJazz REV's level packs (port/plat_mars.c plat_load_pack): no check of the image
+           from the engine. The Sub-CPU has read every chunk back already ("CART I4 Cnn ... OK"); this
+           whole-image check, never run from the cart before, is where R1C's SH2 died (5C14 -> 101).
+           SCD_SCENE_CHECK=1 puts it back (line 10 58nn while it reads). */
+        STATE(0x5C15); /* R1C: its image checked (R1D: not checked) */
         for (int k = 0; k < (int)h[2] && k < 32; ++k)
             if (h[3 + 5 * k] != firstOffsets[k])
                 scene_stop(0x5CE9, "LAYOUT ", file); /* not the fixed layout */
