@@ -94,6 +94,16 @@ not come, line 10 tells why:
 
 A frozen picture with no line-10 change would point at the record handshake (COMM4 / COMM6).
 
+## Fast loading (R1J)
+
+The boot loader loads the scene the engine starts in (`FILE_FIRST_SCENE` in `cd32x/sh2_engboot.c`,
+0x200 = `L1S000.IMG`; it must match the Makefile's `START`), so the engine does not load a second
+1.9 MB image at once. A scene image already in the cart from an earlier run is not copied again: the
+Sub-CPU compares its first, middle and last chunk with the disc (command 47, OpenJazz REV's quick
+check) - line 10 `5E00`-`5E02` while it compares, `5E0F` = skipped. **Hold A+B+C** while it boots to
+copy it anyway. The engine, the data pack and the MDG are always copied (they change with every
+build). The loader's whole-image check still runs at boot.
+
 ## Command numbers (for the docs ledger)
 
 | Where | Number | Meaning |
@@ -102,6 +112,7 @@ A frozen picture with no line-10 change would point at the record handshake (COM
 | Sub-CPU → 68000 | none new | 68 uses the listener's existing commands (1 `md_init_hw`, 4 / 8 `clear_b` / `clear_a`, 7 `copy_vram`, 12 `set_palette`, 20–22 `read/write_32x`, 34 `set_vdp_reg`). |
 | COMM4 / COMM6 | – | while the planes are on: record id (SH2 writes COMM4) / record taken (68000 writes COMM6; its heartbeat stops). |
 | CMD 38 ids | `0x1100`–`0x14FF` | `G<list>S<pos>.MDG` → cart slot 28 (`0x380000`). |
+| SH2 → Sub-CPU | 47 | (R1J, as OpenJazz REV) compare a chunk with the cart, nothing written; reply COMM12 0 = the same. |
 | 68000 work RAM | `0xFF8000`–`0xFFAF22` | `SGB_FLAG`, `SGB_LAST`, `SGB_READY`, the record buffer. |
 
 68 is free on every stack (Jazz REV and SuperTux REV both use 67).

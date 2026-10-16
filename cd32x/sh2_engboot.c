@@ -50,9 +50,20 @@ const char sh2_build_marker[] = "SH2-VS7D"; /* the Sub-CPU looks for "SH2-V" */
 
 #define CMD_OPEN_FILE 38
 #define CMD_CHUNK_TO_CART 46
+#define CMD_CHUNK_COMPARE 47 /* R1J: compare a chunk with the cart, nothing written */
+#define CMD_GET_PAD 48
+#ifndef SCD_FAST_LOAD
+#define SCD_FAST_LOAD 1 /* R1J: skip files already in the cart (hold A+B+C at power-on to copy them anyway) */
+#endif
 #define FILE_ENGINE 21         /* Sub-CPU: 21 -> "SONICCD.PAK" at cart 0 */
 #define FILE_DATA 22           /* Sub-CPU: 22 -> "SCDDATA.PAK" at cart 0x180000 */
-#define FILE_FIRST_SCENE 0x100 /* Sub-CPU: 0x100 -> "L0S000.IMG" at cart 0x080000 */
+#ifndef FILE_FIRST_SCENE
+/* R1J: the scene the engine starts in (Makefile START = "1 0": 0x100 + (1 << 8) + 0 = L1S000.IMG), loaded
+   here so the engine does not load a second 1.9 MB image at once - and fast loading can skip it next time.
+   Every scene image has the same fixed part offsets (build_game_data.py), so the engine binds the same
+   layout. MUST match START: the title (START = "0 0") is 0x100. */
+#define FILE_FIRST_SCENE 0x200 /* Sub-CPU: 0x100 + list * 0x100 + position -> "L<list>S<pos>.IMG" at cart 0x080000 */
+#endif
 #define CHUNK_BYTES 32768
 #define ENGINE_MAX 0x080000
 #define SCENE_MAX 0x280000 /* S7e: 0x080000 - 0x300000 (sprite and tile pixels in the scene image) */
@@ -181,6 +192,39 @@ int scd_load_file(uint16_t number, uint32_t *bytes)
     *bytes      = len;
     SC_COMM8_32 = len;
     nchunks     = (len + CHUNK_BYTES - 1) >> 15;
+#if SCD_FAST_LOAD
+    if (number >= 0x100 && number < 0x500) {
+        /* R1J FAST LOADING (OpenJazz REV's quick check), for the scene images only (1.9 MB, 60 chunks
+           each): the cart keeps its contents across resets. If the first, middle and last chunk are
+           already in its cart place (Sub-CPU command 47 = compare, nothing written), the image is not
+           copied again. STATE 5E0n = probe n, 5E0F = already there (skipped). Holding A+B+C copies it
+           anyway. The engine (8 chunks), the data pack (5) and the MDG (4) are always copied: they
+           change with every build, and three probes would not see a change in between. */
+        uint32_t probe[3];
+        int i, same = 1;
+        probe[0] = 0;
+        probe[1] = nchunks >> 1;
+        probe[2] = nchunks - 1;
+        for (i = 0; i < 3 && same; i++) {
+            show_status((uint16_t)(0x5E00 | i));
+            SC_COMM2  = (uint16_t)probe[i];
+            SC_COMM12 = 0;
+            wait_cmd(CMD_CHUNK_COMPARE);
+            if (SC_COMM12 != 0)
+                same = 0;
+        }
+        if (same) {
+            uint16_t pad;
+            wait_cmd(CMD_GET_PAD);
+            pad = (uint16_t)(SC_COMM8_32 >> 16);
+            SC_COMM8_32 = len; /* command 48 used COMM8 */
+            if ((pad & 0x0070) != 0x0070) {
+                show_status(0x5E0F);
+                return 0;
+            }
+        }
+    }
+#endif
     for (c = 0; c < nchunks; c++) {
         SC_COMM2  = (uint16_t)c;
         SC_COMM12 = 0; /* the Sub-CPU replies 0 = chunk verified */
