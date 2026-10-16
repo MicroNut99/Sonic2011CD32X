@@ -105,3 +105,13 @@ A frozen picture with no line-10 change would point at the record handshake (COM
 | 68000 work RAM | `0xFF8000`–`0xFFAF22` | `SGB_FLAG`, `SGB_LAST`, `SGB_READY`, the record buffer. |
 
 68 is free on every stack (Jazz REV and SuperTux REV both use 67).
+
+## Console log
+
+| Disc | Result |
+|---|---|
+| R1 | 5CEA at PC 06000851: the loader routine's address was in boot record [4] = the vertical-blank counter. Fixed in R1B ([6]). |
+| R1B / R1C | stopped after the engine's L1S000 load: line 10 `101`, CKPT `0000` (R1C's short clips missed the steps in between). |
+| R1D | the engine's image check passed (`5800`-`581A`), then `8F35` (FileRead) for ~8 s, then `101`. |
+| R1E (no image check) | **the engine loaded R11A** (sampler `8F36`, `95D8`, `95EB`), `G1S000.MDG` loaded (4 chunks OK), SH2 command 68 ran (text off, screen blank), then a 68000 exception - printed in level tiles, unreadable. R1F prints it with the font. |
+

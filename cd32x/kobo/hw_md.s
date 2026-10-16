@@ -1411,6 +1411,10 @@ exc_common:
         move.w  #0x2700,sr
         move.w  (sp)+,d6                /* vector number */
         movea.l sp,a5                   /* exception frame */
+        clr.w   SGB_FLAG                /* SONIC REV R1F: the planes' cells replaced the font - the  */
+        bsr.w   md_init_hw              /* message came out in level tiles (R1E). Records off, the   */
+        move.w  #0x2700,sr              /* listener's VDP set-up and font back (keeps d2-d7/a2-a5),  */
+                                        /* interrupts off again                                      */
         move.w  #0x8174,0xC00004        /* K29: Genesis display ON so the message shows */
         lea     exc_buf(pc),a0
         lea     exc_txt1(pc),a1
