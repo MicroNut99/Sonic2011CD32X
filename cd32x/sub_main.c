@@ -1002,12 +1002,6 @@ int main(void)
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_DIAG_ADDR, SGB_DIAG);  /* R1H */
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_LAST_ADDR, 0);
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_READY_ADDR, 0);
-                    do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_BAD_ADDR, 0);
-                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15124, 0);            /* R1N (from R1I): COMM4 still held the start-up
-                                                                                  check 0x1234 - the 68000 took it as a
-                                                                                  record id and copied frame-buffer junk
-                                                                                  (R1H: ID 1234, REC 0004 0004 0006 ...;
-                                                                                  R1G's dot = VRAM 0x0006 written) */
                     planes_on = 1;                                            /* no more Kobo text */
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_FLAG_ADDR, 1);       /* heartbeat off ... */
                     do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15126, 0);            /* ... COMM6 = 0: no id yet */

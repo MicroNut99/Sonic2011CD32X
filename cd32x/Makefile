@@ -94,7 +94,7 @@ $(B)/scd_fs.o: kobo/scd_fs.c | $(B)
 $(B)/sub_stubs.o: kobo/sub_stubs.c | $(B)
 	$(M68K)gcc $(CCFLAGS) $(INCPATH) $< -o $@
 # S7b2: the first green line names the round and the disc type
-ROUND ?= R1N
+ROUND ?= R1O
 DISCTYPE = $(if $(ENGINE),GAME START,$(if $(CART_TEST),CART TEST,PLANE DEMO))
 $(B)/sub_main.o: sub_main.c Makefile | $(B)
 	$(M68K)gcc $(HWFLAGS) $(INCPATH) $(if $(CART_TEST)$(ENGINE),-DSCD_CART_TEST=1,) '-DSCD_BUILD_TEXT="BUILD: SONIC CD $(ROUND) $(DISCTYPE)"' $< -o $@
