@@ -115,7 +115,7 @@ gcc -O2 -o tools/sh2emu/sh2emu tools/sh2emu/sh2emu.c
 tools/sh2emu/sh2emu cd32x/build_engine > sh2emu_log.txt; tail -25 sh2emu_log.txt
 ```
 
-Burn only on `VERDICT  no problems found on the SH2 side`. It does not see the 68000 / VDP side.
+Burn only on `VERDICT  no problems found`. The 68000 and the Genesis VDP are models (`-shot FRAME FILE.bmp` saves the picture).
 
 ## Command numbers (for the docs ledger)
 

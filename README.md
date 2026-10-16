@@ -83,7 +83,7 @@ the R1 disc's steps are in [docs/R1_NOTES.md](docs/R1_NOTES.md). `SONICCD_HANDOF
 
 [tools/sh2emu](tools/sh2emu/README.md) runs a build folder's own SH2 loader and engine with the disc files on the
 PC (an SH2 emulator with the 32X's memory map) and reports anything that would hang or corrupt the console. It
-ends with a verdict: burn only on `no problems found on the SH2 side`. How to build it, run it and read its log:
+ends with a verdict: burn only on `no problems found`. How to build it, run it and read its log:
 [tools/sh2emu/README.md](tools/sh2emu/README.md).
 
 ## Credits

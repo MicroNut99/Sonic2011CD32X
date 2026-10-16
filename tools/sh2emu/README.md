@@ -84,13 +84,13 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `stage set-up 5C16` | the engine began loading its first stage (line 10 `5C16` on the console) |
 | `stage loaded` | the stage finished loading (`5Lnn`: list L, scene nn; `5100` = Palmtree Panic 1) |
 | `planes on (CMD 68)` | the SH2 asked for the Genesis planes and the Sub-CPU accepted |
-| `plane records` | records the SH2 sent, the 68000 took, and the VDP got. `INCLUDING A JUNK RECORD` = COMM4 held a value when the planes came on, and the 68000 took it as a record: a dot in every blank cell (R1G, R1R) |
+| `plane records` | records the SH2 sent, the 68000 took, and the VDP got. `INCLUDING A JUNK RECORD` = COMM4 held a value when the planes came on, and the 68000 took it as a record: a dot in every blank cell (R1G, R1R). Listed as the problem `JUNK-RECORD` |
 | `frame-buffer FIFO` | (only when it happens) words the SH2 wrote to the frame buffer that were still in the 32X's 4-word write FIFO when it gave the frame buffer to the 68000. The 32X does not guarantee them |
 | `line 10 now` | what line 10 would show at the end |
 | `PROBLEMS` | **do not burn.** Each kind of problem is listed with how many times it happened and where it happened first (the function and the offset into it) |
 | `warnings` | reads of memory nothing has written; worth a look, not a reason to stop |
 | `information` | normal register traffic, listed for reference |
-| `VERDICT` | `no problems found on the SH2 side` = safe to burn as far as the SH2 goes |
+| `VERDICT` | `no problems found` = safe to burn as far as the SH2 and the plane records go |
 
 Emulated time is counted in frames: 60 frames are 1 second on the console.
 

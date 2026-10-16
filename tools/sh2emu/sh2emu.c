@@ -1018,6 +1018,7 @@ static void sgb_poll_model(void) /* the 68000 command loop: a new id in COMM4 ->
         for (int i = 0; i < 5; ++i) sgb_rec[i] = junk[i];
         sgb_ready = 1;
         rec_junk++;
+        count_kind("JUNK-RECORD"); /* a problem: on the console a dot in every blank cell, or worse */
         printf("[f%5d] 68000: took id %04X while the SH2 held the frame buffer - a junk record (console R1H: REC 0004 "
                "0004 0006 ...): a dot into VRAM cell 0\n", frame_no(), id);
     }
@@ -1992,7 +1993,7 @@ static void summary(void)
     }
     if (stopped && strcmp(stop_reason, "frame limit"))
         problems++;
-    printf("VERDICT           %s\n", problems ? "PROBLEMS FOUND - do not burn yet" : "no problems found on the SH2 side");
+    printf("VERDICT           %s\n", problems ? "PROBLEMS FOUND - do not burn yet" : "no problems found");
 }
 static u64 last_vbi_cycle;
 static void fill_garbage(u8 *p, u32 n, u32 *seed)
