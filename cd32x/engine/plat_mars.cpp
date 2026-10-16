@@ -246,6 +246,8 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
     for (int s = 0; s < 4; ++s) slotUsed[s] = false;
     frameBg  = -1;
     planesOn = true;
+    scd_sampling(1); /* R1I: line 10 / R1H row 12 show where the SH2 is while the planes are on (COMM12 is
+                        a reply register only for scene loads and command 68 / 2: switched off before those) */
     MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000); /* 32X layer blank: the Genesis shows */
 }
 static bool sgb_shows(int slots, bool front)
@@ -342,6 +344,7 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     }
     sgb_take_fb();
     if (n >= 400000u) {
+        scd_sampling(0); /* R1I */
         planes_off();
         STATE(0x5C64);
     }
@@ -559,6 +562,12 @@ static uint16_t cart_scene16(uint32_t off) /* S7d2: CartRead16's own types (uint
 #endif
 void plat_stage_loading()
 {
+    scd_sampling(0); /* R1I */
+    for (int k = 0; k < 2; ++k) {
+        unsigned int f = VBLANK_COUNT;
+        while (VBLANK_COUNT == f) {
+        }
+    }
 #if SCD_PLANES
     planes_off(); /* REV R1: the loading lines need the Genesis text again */
 #endif
