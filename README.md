@@ -79,6 +79,13 @@ SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 6800
 The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
 the R1 disc's steps are in [docs/R1_NOTES.md](docs/R1_NOTES.md). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
 
+## Checking a build before burning: tools/sh2emu
+
+[tools/sh2emu](tools/sh2emu/README.md) runs a build folder's own SH2 loader and engine with the disc files on the
+PC (an SH2 emulator with the 32X's memory map) and reports anything that would hang or corrupt the console. It
+ends with a verdict: burn only on `no problems found on the SH2 side`. How to build it, run it and read its log:
+[tools/sh2emu/README.md](tools/sh2emu/README.md).
+
 ## Credits
 
 - Sonic CD © SEGA. The 2011 remaster by Christian Whitehead.
