@@ -8,7 +8,11 @@
    interrupt handlers and the PC sampler.
 
 While it runs, it watches every memory access for the things that hang or corrupt the console, and at the end it says
-whether the build is safe to burn. It cannot see the 68000 or the VDP (the Genesis picture), only what the SH2 does.
+whether the build is safe to burn.
+
+When the Genesis planes are on, it also plays the 68000's part: it takes each plane record the SH2 hands over, as
+`sgb_poll` does, and writes it into a model of the Genesis VDP in vertical blank, as `sgb_vblank` does. With `-shot`
+it saves the Genesis picture as a `.bmp` file, so you can see what the console should show before you burn.
 
 ## 1. Build it (once)
 
@@ -31,6 +35,17 @@ tail -25 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
 
 It runs 25 seconds of console time (1500 frames) in about 15 seconds. The full log is in `sh2emu_log.txt`. Send me
 that file whenever the verdict is not clean.
+
+To see the Genesis picture, add `-shot FRAME FILE.bmp` (up to 8 of them) and open the `.bmp` files in Windows:
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -shot 700 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_700.bmp -shot 1300 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_1300.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+tail -25 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+```
+
+The planes come on at about frame 590. Frame 700 is the start of Palmtree Panic 1. The scripted pad starts moving
+about 4 seconds later, so frame 1300 is further into the act.
 
 The build folder must hold:
 
@@ -69,6 +84,8 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `stage set-up 5C16` | the engine began loading its first stage (line 10 `5C16` on the console) |
 | `stage loaded` | the stage finished loading (`5Lnn`: list L, scene nn; `5100` = Palmtree Panic 1) |
 | `planes on (CMD 68)` | the SH2 asked for the Genesis planes and the Sub-CPU accepted |
+| `plane records` | records the SH2 sent, the 68000 took, and the VDP got. `INCLUDING A JUNK RECORD` = COMM4 held a value when the planes came on, and the 68000 took it as a record: a dot in every blank cell (R1G, R1R) |
+| `frame-buffer FIFO` | (only when it happens) words the SH2 wrote to the frame buffer that were still in the 32X's 4-word write FIFO when it gave the frame buffer to the 68000. The 32X does not guarantee them |
 | `line 10 now` | what line 10 would show at the end |
 | `PROBLEMS` | **do not burn.** Each kind of problem is listed with how many times it happened and where it happened first (the function and the offset into it) |
 | `warnings` | reads of memory nothing has written; worth a look, not a reason to stop |
@@ -110,6 +127,7 @@ Each kind of event is logged at most 4 times per instruction (option `-maxlog`).
 | `STACK`, `EXCEPTION`, `ILLEGAL`, `ADDRESS ERROR`, `EXEC OUTSIDE CODE` | the stack pointer left its area, or the SH2 crashed | crash |
 | `STALE-READ`, `STALE-CODE`, `REG-CACHED` | the cache gave back older data than memory holds | wrong data |
 | `FB-NOFM` | the frame buffer was used while the SH2 did not own it | bus conflict |
+| `FB-FIFO-LOST` | words still in the frame buffer's write FIFO when the SH2 gave the frame buffer to the 68000 | lost or late record words |
 | `CART-RV` | the cart was used while the 68000 held it | bus conflict |
 | `SR-HIGH` | engine code masked the vertical-blank interrupt | line 10 freezes |
 | `R-UNDEF` (warning) | a read of memory nothing has written (the frame buffer and SDRAM are not cleared at power-on) | random values |
@@ -132,6 +150,9 @@ All options go after the build folder.
 -hook ADDR     print the registers each time the SH2 reaches ADDR (at most -hookmax N times, default 50)
 -trace N COUNT print COUNT instructions, starting at instruction number N
 -dumpsdram FRAME FILE   save the 256 KB SDRAM at that frame (for checking the engine's tables afterwards)
+-shot FRAME FILE.bmp    save the Genesis picture (planes model) at that frame; up to 8
+-records N     print the first N plane records the 68000 model applies (default 3)
+-nofifo        no frame-buffer write FIFO model; -fbword N = SH2 cycles per FIFO word (default 5)
 -novbistop     keep running after line 10 freezes
 -h             this list
 ```
@@ -152,8 +173,11 @@ cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
   console showed `8F33` / `9550`: the same function, in the same frame.
 - **After the first problem.** Reads where nothing answers return 0 here. On the console they can return anything,
   or hang the bus. So the first problem is what counts, not what the program does after it.
-- **What it cannot see.** The 68000 and the VDP are not drawn. The Genesis planes show here only as records sent
-  (the COMM4 ids in the `W-COMM` lines) and taken (COMM6).
+- **The 68000 and the VDP are models.** The model follows `sgb_poll` and `sgb_vblank` exactly. When the 68000 takes
+  an id while the SH2 still holds the frame buffer, the console reads undefined data; the model then uses what the
+  console copied on R1H (`REC 0004 0004 0006 ...`). The VDP model draws the two planes, their scroll and the colours.
+  It has no sprites, no window, and no 32X layer. The 68000's timing is not modelled: it takes a record the moment the
+  SH2 hands it over.
 - **Loading speed.** The Sub-CPU answers at once. On the console a 32 KB chunk takes about a second, so the loading
   part of the timeline is much shorter here.
 
@@ -171,3 +195,8 @@ In sh2emu, from frame 502 the engine ran the cart image's sprite pixels as scrip
   from build to build.
 
 Fixed in R1R: `ScriptSubExists` in `engine/Script.hpp`.
+
+**R1R.** On the console it ran the whole act, and the planes came on with a dot in every blank cell. In sh2emu,
+`-shot` shows Palmtree Panic 1 drawn correctly from the SH2's records, with the same dots. Those come from the junk
+record the 68000 took from COMM4's start-up value `1234`. R1S clears COMM4 first. sh2emu, with that line simulated
+on R1R, draws the level with no dots.

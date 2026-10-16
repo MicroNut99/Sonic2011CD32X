@@ -278,6 +278,8 @@ static void wr_be16(u8 *p, u16 v)
 }
 #define COMM(n) rd_be16(&sysreg[0x20 + (n)])
 #define SET_COMM(n, v) wr_be16(&sysreg[0x20 + (n)], (u16)(v))
+static int sgb_on;      /* the 68000 takes plane records (SGB_FLAG) - the model further down */
+static u64 rec_sent;
 static u16 intmsk_lo;   /* interrupt enables (byte 0x4001) */
 static int fm = 0;      /* FM: 1 = the SH2 owns the VDP */
 static int vint_pending, cmdint_pending;
@@ -363,11 +365,86 @@ static u8 vdp_read8(u32 off)
     return vdpreg[off];
 }
 static int bus_penalty;
+/* ---- the frame buffer's 4-word write FIFO (32X manual 1.12: "a 4 word component of FIFO is held for frame buffer
+   writing ... 5 clock if FIFO is FULL"). SH2 writes wait in it; a read waits until it is empty. When the SH2 gives
+   the frame buffer to the 68000 (FM 1 -> 0) with words still in it, the manual guarantees nothing ("access from SH2
+   is interrupted by force and the operation that follows is not guaranteed"): they are dropped here and logged. */
+static int opt_fb_word = 5;     /* SH2 cycles per frame-buffer word leaving the FIFO */
+static int opt_fifo = 1;        /* model the FIFO */
+static struct {
+    int bank, ov, n;
+    u32 off;
+    u8 b[2];
+    u64 t;
+} fbq[8];
+static int fbq_n;
+static u64 fbq_last_t, fifo_lost_words, fifo_lost_events;
+static void fbq_commit_one(void)
+{
+    for (int i = 0; i < fbq[0].n; ++i) {
+        u32 o = (fbq[0].off + i) & (FB_SIZE - 1);
+        if (fbq[0].ov && !fbq[0].b[i])
+            continue; /* the overwrite image ignores 0 bytes */
+        fb[fbq[0].bank][o]     = fbq[0].b[i];
+        fb_def[fbq[0].bank][o] = 1;
+    }
+    for (int i = 1; i < fbq_n; ++i) fbq[i - 1] = fbq[i];
+    fbq_n--;
+}
+static u64 now_cycles(void) { return cycles + (u64)bus_penalty; }
+static void fbq_drain(u64 now)
+{
+    while (fbq_n && fbq[0].t <= now) fbq_commit_one();
+}
+static void fbq_flush_wait(void) /* an SH2 read of the frame buffer waits until the FIFO is empty */
+{
+    if (!fbq_n)
+        return;
+    u64 now = now_cycles();
+    if (fbq[fbq_n - 1].t > now)
+        bus_penalty += (int)(fbq[fbq_n - 1].t - now);
+    while (fbq_n) fbq_commit_one();
+}
+static void fb_queue_word(int bank, u32 off, const u8 *b, int n, int ov)
+{
+    u64 now = now_cycles();
+    fbq_drain(now);
+    if (fbq_n >= 4) { /* full: the SH2 waits for the oldest word */
+        bus_penalty += (int)(fbq[0].t - now);
+        fbq_commit_one();
+        now = now_cycles();
+    }
+    u64 t = (fbq_last_t > now ? fbq_last_t : now) + (u64)opt_fb_word;
+    fbq_last_t      = t;
+    fbq[fbq_n].bank = bank;
+    fbq[fbq_n].ov   = ov;
+    fbq[fbq_n].n    = n;
+    fbq[fbq_n].off  = off;
+    fbq[fbq_n].b[0] = b[0];
+    fbq[fbq_n].b[1] = n > 1 ? b[1] : 0;
+    fbq[fbq_n].t    = t;
+    fbq_n++;
+}
+static void fm_to_68000(void) /* FM 1 -> 0: what is still in the FIFO is not guaranteed - dropped */
+{
+    if (!opt_fifo)
+        return;
+    fbq_drain(now_cycles());
+    if (fbq_n) {
+        fifo_lost_words += (u64)fbq_n;
+        fifo_lost_events++;
+        evlog("FB-FIFO-LOST", "%d frame-buffer word(s) still in the write FIFO when the SH2 gave the frame buffer to "
+                              "the 68000 (FM 0) - first at FB+%05X: dropped (not guaranteed by the 32X)", fbq_n, fbq[0].off);
+        fbq_n = 0;
+    }
+}
 static u32 bus_read(u32 p, int size, int ifetch)
 {
     u32 off;
     int rg = region(p, &off);
     u32 v = 0;
+    if (opt_fifo && (rg == RG_FB || rg == RG_FBOV))
+        fbq_flush_wait();
     for (int i = 0; i < size; ++i) {
         u32 o = off + i;
         u8 b  = 0;
@@ -421,6 +498,15 @@ static void bus_write(u32 p, u32 v, int size)
 {
     u32 off;
     int rg = region(p, &off);
+    if (opt_fifo && (rg == RG_FB || rg == RG_FBOV)) { /* into the FIFO, a word at a time */
+        u8 bytes[4];
+        for (int i = 0; i < size; ++i) bytes[i] = (u8)(v >> (8 * (size - 1 - i)));
+        if (size == 1)
+            fb_queue_word(fs_bit, off & (FB_SIZE - 1), bytes, 1, rg == RG_FBOV);
+        else
+            for (int i = 0; i < size; i += 2) fb_queue_word(fs_bit, (off + i) & (FB_SIZE - 1), bytes + i, 2, rg == RG_FBOV);
+        return;
+    }
     for (int i = 0; i < size; ++i) {
         u32 o = off + i;
         u8 b  = (u8)(v >> (8 * (size - 1 - i)));
@@ -429,8 +515,12 @@ static void bus_write(u32 p, u32 v, int size)
                 break;
             case RG_SYS:
                 o &= 0xFF;
-                if (o == 0x00)
-                    fm = (b & 0x80) != 0;
+                if (o == 0x00) {
+                    int nf = (b & 0x80) != 0;
+                    if (fm && !nf)
+                        fm_to_68000();
+                    fm = nf;
+                }
                 else if (o == 0x01)
                     intmsk_lo = b;
                 else {
@@ -539,6 +629,8 @@ static void check_data_access(u32 a, int size, int write, u32 v)
             }
         }
         else if (o >= 0x20 && o < 0x30) {
+            if (o == 0x24 && sgb_on && (u16)v)
+                rec_sent++;
             if (opt_verbose || (o != 0x28 && o != 0x2A && o != 0x20 && o != 0x22))
                 evlog("W-COMM", "COMM%d (addr %08X) size=%d val=%08X", (int)(o - 0x20), a, size, v);
         }
@@ -879,6 +971,165 @@ static u64 sub_done_at;
 static u16 sub_cmd;
 static int cur_file = -1, cur_img = 0;
 static int planes_on;
+/* ---- the 68000's plane records and the VDP (cd32x/kobo/hw_md.s sgb_poll / sgb_vblank, md/sgb.h) ---- */
+static u16 vram[0x8000];      /* 64 KB, words */
+static u16 vsram[2], vcram[64];
+static int sgb_on, sgb_ready, sgb_bad;
+static u16 sgb_last;
+static u16 sgb_rec[6002];
+static u64 rec_sent, rec_taken, rec_applied, rec_junk;
+static int opt_records = 3;   /* print the first N records */
+static int shot_frame[8];
+static const char *shot_file[8];
+static int nshots;
+static u32 rd_be32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
+static void vdp_planes_on(u32 mdg_off)
+{
+    const u8 *m = &cart[mdg_off & (CART_SIZE - 1)];
+    u32 cells = rd_be16(m + 6), oCell = rd_be32(m + 12), oCram = rd_be32(m + 32);
+    memset(vram, 0, sizeof vram); /* the planes are cleared by command 68; the rest is the font - not shown */
+    for (u32 i = 0; i < cells * 16 && i < 0x6000; ++i) vram[i] = rd_be16(m + oCell + 2 * i);
+    for (int i = 0; i < 64; ++i) vcram[i] = rd_be16(m + oCram + 2 * i);
+    vsram[0] = vsram[1] = 0;
+    sgb_on = 1;
+    sgb_ready = sgb_bad = 0;
+    sgb_last = 0;
+}
+static void vram_w(u32 byteaddr, u16 v) { vram[(byteaddr >> 1) & 0x7FFF] = v; }
+static void sgb_poll_model(void) /* the 68000 command loop: a new id in COMM4 -> copy the record, answer COMM6 */
+{
+    if (!sgb_on || sgb_ready)
+        return;
+    u16 id = COMM(4);
+    if (!id || id == sgb_last)
+        return;
+    if (!fm) { /* the SH2 gave the frame buffer: the record at its start (68000 0x840000) */
+        const u8 *f = fb[fs_bit];
+        u16 len = rd_be16(f);
+        if (len > 6000)
+            sgb_bad = 1;
+        else {
+            for (u32 i = 0; i <= len; ++i) sgb_rec[i] = rd_be16(f + 2 * i);
+            sgb_ready = 1;
+        }
+    }
+    else { /* the SH2 still holds the frame buffer: what the 68000 copied on the console (R1H rows 12-13) */
+        static const u16 junk[5] = { 4, 4, 6, 4, 4 };
+        for (int i = 0; i < 5; ++i) sgb_rec[i] = junk[i];
+        sgb_ready = 1;
+        rec_junk++;
+        printf("[f%5d] 68000: took id %04X while the SH2 held the frame buffer - a junk record (console R1H: REC 0004 "
+               "0004 0006 ...): a dot into VRAM cell 0\n", frame_no(), id);
+    }
+    sgb_last = id;
+    SET_COMM(6, id);
+    rec_taken++;
+}
+static void sgb_apply_model(void) /* sgb_vblank: the waiting record into the VDP */
+{
+    const u16 *p = sgb_rec + 1, *end = sgb_rec + 6002;
+#define NEXTW (p < end ? *p++ : 0)
+    int G = NEXTW, wordsA = 0, wordsB = 0, wordsX = 0;
+    for (int g = 0; g < G; ++g) {
+        u16 addr = NEXTW;
+        int n    = NEXTW;
+        for (int i = 0; i < n; ++i) {
+            u16 a = (u16)(addr + 2 * i);
+            vram_w(a, NEXTW);
+            if (a >= 0xC000 && a < 0xE000)
+                wordsA++;
+            else if (a >= 0xE000)
+                wordsB++;
+            else
+                wordsX++;
+        }
+    }
+    vsram[0] = NEXTW;
+    vsram[1] = NEXTW;
+    for (int pl = 0; pl < 2; ++pl) { /* h-scroll runs: plane A at 0xFC00, plane B at 0xFC02, 4 bytes a line */
+        int R = NEXTW, line = 0;
+        for (int r = 0; r < R; ++r) {
+            int lines = NEXTW;
+            u16 v     = NEXTW;
+            for (int l = 0; l < lines; ++l, ++line) vram_w((u32)(0xFC00 + pl * 2 + line * 4), v);
+        }
+    }
+    int P = NEXTW;
+    for (int i = 0; i < P; ++i) {
+        int idx = NEXTW & 63;
+        vcram[idx] = NEXTW;
+    }
+#undef NEXTW
+    rec_applied++;
+    if (rec_applied <= (u64)opt_records)
+        printf("[f%5d] 68000: record %llu into the VDP: %u words, name words plane A %d / B %d / other %d, vscroll %04X "
+               "%04X, h-scroll line 0 %04X %04X, %d colours\n",
+               frame_no(), (unsigned long long)rec_applied, sgb_rec[0], wordsA, wordsB, wordsX, vsram[0], vsram[1],
+               vram[0xFC00 / 2], vram[0xFC02 / 2], P);
+}
+static void sgb_vblank_model(void)
+{
+    if (!sgb_on)
+        return;
+    if (sgb_bad)
+        vcram[0] = 0x000E; /* R1G: the backdrop red */
+    if (sgb_ready) {
+        sgb_apply_model();
+        sgb_ready = 0;
+    }
+}
+static int plane_pixel(u32 base, int hs, int vs, int x, int y, int *pri)
+{
+    int px = (x - hs) & 511, py = (y + vs) & 255;
+    u16 e = vram[((base + (((py >> 3) * 64 + (px >> 3)) << 1)) >> 1) & 0x7FFF];
+    int cx = px & 7, cy = py & 7;
+    if (e & 0x0800)
+        cx = 7 - cx;
+    if (e & 0x1000)
+        cy = 7 - cy;
+    u32 ba = (u32)(e & 0x7FF) * 32 + (u32)cy * 4 + (u32)(cx >> 1);
+    u16 w  = vram[(ba >> 1) & 0x7FFF];
+    int b  = (ba & 1) ? (w & 0xFF) : (w >> 8);
+    int nib = (cx & 1) ? (b & 15) : (b >> 4);
+    *pri = e >> 15;
+    return nib ? (((e >> 13) & 3) * 16 + nib) : -1;
+}
+static void write_shot(const char *path)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        printf("cannot write %s\n", path);
+        return;
+    }
+    const int W = 320, H = 224, row = W * 3;
+    u8 hdr[54] = { 'B', 'M' };
+    u32 size = 54 + (u32)row * H;
+    hdr[2] = (u8)size, hdr[3] = (u8)(size >> 8), hdr[4] = (u8)(size >> 16), hdr[5] = (u8)(size >> 24);
+    hdr[10] = 54, hdr[14] = 40, hdr[18] = (u8)W, hdr[19] = (u8)(W >> 8), hdr[22] = (u8)H, hdr[23] = (u8)(H >> 8);
+    hdr[26] = 1, hdr[28] = 24;
+    fwrite(hdr, 1, 54, f);
+    static u8 line[320 * 3];
+    for (int y = H - 1; y >= 0; --y) {
+        int hA = (s16)vram[(0xFC00 + y * 4) >> 1], hB = (s16)vram[(0xFC02 + y * 4) >> 1];
+        for (int x = 0; x < W; ++x) {
+            int pa, pb;
+            int ca = plane_pixel(0xC000, hA, (s16)vsram[0], x, y, &pa);
+            int cb = plane_pixel(0xE000, hB, (s16)vsram[1], x, y, &pb);
+            int c  = 0; /* backdrop: CRAM 0 */
+            if (cb >= 0 && !pb) c = cb;
+            if (ca >= 0 && !pa) c = ca;
+            if (cb >= 0 && pb) c = cb;
+            if (ca >= 0 && pa) c = ca;
+            u16 g = vcram[c & 63];
+            line[x * 3 + 0] = (u8)(((g >> 9) & 7) * 36);
+            line[x * 3 + 1] = (u8)(((g >> 5) & 7) * 36);
+            line[x * 3 + 2] = (u8)(((g >> 1) & 7) * 36);
+        }
+        fwrite(line, 1, row, f);
+    }
+    fclose(f);
+    printf("[f%5d] the Genesis picture (planes model) -> %s\n", frame_no(), path);
+}
 static int sub_boot_stage;
 static u32 comm32(int n) { return ((u32)COMM(n) << 16) | COMM(n + 2); }
 static void set_comm32(int n, u32 v)
@@ -960,11 +1211,13 @@ static void sub_finish(void)
                 planes_on = 1;
                 if (ms_planes < 0)
                     ms_planes = frame_no();
+                vdp_planes_on(o);
                 SET_COMM(6, 0);
             }
         }
         else if (op == 2) {
             planes_on = 0;
+            sgb_on    = 0;
             ok        = 1;
         }
         printf("[f%5d] SUB: CMD 68 op %d off %06X -> %d\n", frame_no(), op, off, ok);
@@ -979,6 +1232,7 @@ static void sub_finish(void)
 }
 static void sub_poll(void)
 {
+    sgb_poll_model();
     /* boot-time handshake (Kobo): the 68000 clears M_OK, the Sub-CPU writes 0x1234 to COMM4, answers 0x0AAA */
     if (sub_boot_stage == 0 && cycles > 200000) {
         SET_COMM(0, 0x1000);
@@ -1021,10 +1275,12 @@ static void sub_poll(void)
 static void frame_tick(void)
 {
     /* the 68000's vertical-blank heartbeat in COMM6 (Kobo HW7), off while the planes run */
-    if (!planes_on)
+    if (!sgb_on)
         SET_COMM(6, (u16)(COMM(6) + 1));
-    else if (COMM(4) != 0x1234 && COMM(4) != 0)
-        SET_COMM(6, COMM(4)); /* the record id taken */
+    sgb_vblank_model();
+    for (int i = 0; i < nshots; ++i)
+        if (shot_frame[i] == frame_no())
+            write_shot(shot_file[i]);
     /* the Sub-CPU heartbeat in COMM14 */
     if ((frame_no() & 7) == 0)
         SET_COMM(14, (u16)(0x4000 | ((frame_no() >> 3) & 0xFFF)));
@@ -1710,6 +1966,14 @@ static void summary(void)
     if (ms_planes >= 0)
         printf(" (frame %d)\n", ms_planes);
     printf("line 10 now       STATE:%X CKPT:%04X COMM4:%04X\n", COMM(12), COMM(8), COMM(4));
+    if (fifo_lost_events)
+        printf("frame-buffer FIFO %llu word(s) dropped in %llu hand-over(s) to the 68000\n", (unsigned long long)fifo_lost_words,
+               (unsigned long long)fifo_lost_events);
+    if (ms_planes >= 0)
+        printf("plane records     %llu sent by the SH2, %llu taken by the 68000, %llu into the VDP%s\n",
+               (unsigned long long)rec_sent, (unsigned long long)rec_taken, (unsigned long long)rec_applied,
+               rec_junk ? " - INCLUDING A JUNK RECORD (COMM4 held a value when the planes came on: dots in every "
+                          "blank cell)" : "");
     int problems = 0;
     for (int sev = 2; sev >= 0; --sev) {
         int any = 0;
@@ -1757,6 +2021,9 @@ int main(int argc, char **argv)
                    "  -hook ADDR     print registers whenever the SH2 reaches ADDR (up to -hookmax, default 50)\n"
                    "  -trace N COUNT print COUNT instructions from instruction N\n"
                    "  -dumpsdram FRAME FILE   write the 256 KB SDRAM at FRAME\n"
+                   "  -shot FRAME FILE.bmp   the Genesis picture at FRAME (planes model: records into a VDP model)\n"
+                   "  -records N     print the first N plane records (default 3)\n"
+                   "  -nofifo        no frame-buffer write FIFO model; -fbword N cycles per FIFO word (default 5)\n"
                    "  -novbistop     keep running when line 10 freezes\n");
             return 0;
         }
@@ -1796,6 +2063,17 @@ int main(int argc, char **argv)
             opt_dump_frame = atoi(argv[++i]);
             opt_dump_file  = argv[++i];
         }
+        else if (!strcmp(argv[i], "-shot") && i + 2 < argc && nshots < 8) {
+            shot_frame[nshots] = atoi(argv[++i]);
+            shot_file[nshots]  = argv[++i];
+            nshots++;
+        }
+        else if (!strcmp(argv[i], "-nofifo"))
+            opt_fifo = 0;
+        else if (!strcmp(argv[i], "-fbword") && i + 1 < argc)
+            opt_fb_word = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-records") && i + 1 < argc)
+            opt_records = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-novbistop"))
             opt_stop_on_vbi_loss = 0;
     }
@@ -1881,6 +2159,8 @@ int main(int argc, char **argv)
         u32 pc = PC;
         cur_pc = pc;
         last_pcs[last_pos++ & (LOGH - 1)] = pc;
+        if (fbq_n)
+            fbq_drain(cycles);
         if (pc == 0x02000000 && !engine_started) {
             engine_started = 1;
             ms_engine      = frame_no();

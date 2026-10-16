@@ -234,6 +234,10 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
         return;
     }
     STATE(0x5C65); /* R1C: the MDG is in the cart; command 68 next */
+    SC_COMM4 = 0; /* R1S (R1P's line): COMM4 still held the Sub-CPU's start-up check 0x1234 - the 68000 took it as a
+                     record id the moment command 68 switched the records on and copied junk from the frame buffer
+                     (R1H: ID 1234, REC 0004 0004 0006 ...): R1G's and R1R's dot in every blank cell. Cleared here by
+                     the SH2, before command 68. */
     if (sgb_cmd(1, SGB_CART_OFFSET) != 1) {
         STATE(0x5C63);
         return;
