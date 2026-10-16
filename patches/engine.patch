@@ -2693,7 +2693,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.cpp	2026-10-15 21:43:01.367864224 -0700
++++ engine/Script.cpp	2026-10-16 13:16:50.895684036 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -2796,12 +2796,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
                      ++jumpTablePtr;
                      ++jumpTablePos;
-@@ -2132,8 +2140,10 @@
+@@ -2132,8 +2140,16 @@
  
  void ClearScriptData()
  {
 -    memset(scriptCode, 0, SCRIPTDATA_COUNT * sizeof(int));
 -    memset(jumpTable, 0, JUMPTABLE_COUNT * sizeof(int));
++#if SCD32X_SH2 && !defined(SCD_AOT_EXTRACT) && defined(__has_include)
++#if __has_include("ScriptNative.inc")
++    extern void scd_native_unbind();
++    scd_native_unbind(); // PORT32X R1U: new bytecode - the native scripts are bound again before they run
++#endif
++#endif
 +    if (!SCD32X_CARTDATA) { // PORT32X S5c: the cart image is read-only
 +        memset(scriptCode, 0, SCRIPTDATA_COUNT * sizeof(int));
 +        memset(jumpTable, 0, JUMPTABLE_COUNT * sizeof(int));
@@ -2809,7 +2815,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
      scriptFrameCount = 0;
  
-@@ -2176,7 +2186,8 @@
+@@ -2176,7 +2192,8 @@
          scriptInfo->spriteSheetID                      = 0;
          scriptInfo->animFile                           = GetDefaultAnimationRef();
          scriptInfo->mobile                             = true;
@@ -2819,7 +2825,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      }
  
      for (int f = 0; f < FUNCTION_COUNT; ++f) {
-@@ -2197,6 +2208,33 @@
+@@ -2197,8 +2214,52 @@
  
  }
  
@@ -2850,10 +2856,29 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +}
 +#endif
 +
++#if SCD32X_SH2 && !defined(SCD_AOT_EXTRACT) && defined(__has_include)
++#if __has_include("ScriptNative.inc")
++#define SCD_NATIVE_SCRIPTS (1)
++#endif
++#endif
++#if SCD_NATIVE_SCRIPTS
++// PORT32X R1U: native scripts (tools/scd_aot.py writes engine/ScriptNative.inc from the game's bytecode). An
++// object's script sub runs as compiled C++ - the interpreter's own statements for each instruction, without
++// the dispatch - when the loaded bytecode is exactly the bytecode it was made from (checked once per stage
++// load); otherwise, and for anything not translated, the interpreter below runs as before.
++static int scdNativeGen = 1; // + 1 at every ClearScriptData: the binding is made again
++static bool scd_native_run(int scriptCodeStart, int jumpTableStart, byte scriptSub);
++#endif
  void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
  {
++#if SCD_NATIVE_SCRIPTS
++    if (scd_native_run(scriptCodeStart, jumpTableStart, scriptSub))
++        return;
++#endif
      bool running      = true;
-@@ -2815,6 +2853,41 @@
+     int scriptCodePtr = scriptCodeStart;
+ 
+@@ -2815,6 +2876,41 @@
                      case VAR_VPARALLAXSCROLLPOS: scriptEng.operands[i] = vParallax.scrollPos[arrayVal]; break;
                      case VAR_3DSCENENOVERTICES: scriptEng.operands[i] = vertexCount; break;
                      case VAR_3DSCENENOFACES: scriptEng.operands[i] = faceCount; break;
@@ -2895,7 +2920,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[arrayVal].x; break;
                      case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[arrayVal].y; break;
                      case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[arrayVal].z; break;
-@@ -2826,12 +2899,36 @@
+@@ -2826,12 +2922,36 @@
                      case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[arrayVal].d; break;
                      case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[arrayVal].flags; break;
                      case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[arrayVal].colour; break;
@@ -2933,7 +2958,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_ENGINELANGUAGE: scriptEng.operands[i] = Engine.language; break;
                      case VAR_OBJECTSPRITESHEET: {
                          scriptEng.operands[i] = objectScriptList[objectEntityList[arrayVal].type].spriteSheetID;
-@@ -3084,6 +3181,9 @@
+@@ -3084,6 +3204,9 @@
              case FUNC_DRAWSPRITESCREENXY:
                  opcodeSize  = 0;
                  spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
@@ -2943,7 +2968,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  DrawSprite(scriptEng.operands[1] + spriteFrame->pivotX, scriptEng.operands[2] + spriteFrame->pivotY, spriteFrame->width,
                             spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY, scriptInfo->spriteSheetID);
                  break;
-@@ -3094,6 +3194,9 @@
+@@ -3094,6 +3217,9 @@
              case FUNC_DRAWNUMBERS: {
                  opcodeSize = 0;
                  int i      = 10;
@@ -2953,7 +2978,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  if (scriptEng.operands[6]) {
                      while (scriptEng.operands[4] > 0) {
                          int frameID = scriptEng.operands[3] % i / (i / 10) + scriptEng.operands[0];
-@@ -3285,12 +3388,18 @@
+@@ -3285,12 +3411,18 @@
              case FUNC_SPRITEFRAME:
                  opcodeSize = 0;
                  if (scriptSub == SUB_SETUP && scriptFrameCount < SPRITEFRAME_COUNT) {
@@ -2978,7 +3003,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      ++scriptFrameCount;
                  }
                  break;
-@@ -3440,6 +3549,9 @@
+@@ -3440,6 +3572,9 @@
              case FUNC_DRAWSPRITESCREENFX:
                  opcodeSize  = 0;
                  spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
@@ -2988,7 +3013,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  switch (scriptEng.operands[1]) {
                      default: break;
                      case FX_SCALE:
-@@ -3771,8 +3883,10 @@
+@@ -3771,8 +3906,10 @@
              case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
              case FUNC_DRAW3DSCENE:
                  opcodeSize = 0;
@@ -3001,7 +3026,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  Draw3DScene(scriptInfo->spriteSheetID);
                  break;
              case FUNC_SETIDENTITYMATRIX:
-@@ -3897,9 +4011,19 @@
+@@ -3897,9 +4034,19 @@
                  }
                  break;
              case FUNC_GETTILELAYERENTRY:
@@ -3021,7 +3046,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
                  break;
              case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
-@@ -3923,18 +4047,39 @@
+@@ -3923,18 +4070,39 @@
                  break;
              case FUNC_ADDDRAWLISTENTITYREF: {
                  opcodeSize                                                                                           = 0;
@@ -3063,7 +3088,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  int index = tiles128x128.tileIndex[scriptEng.operands[6]];
                  switch (scriptEng.operands[3]) {
-@@ -3956,9 +4101,18 @@
+@@ -3956,9 +4124,18 @@
                  Copy16x16Tile(scriptEng.operands[0], scriptEng.operands[1]);
                  break;
              case FUNC_SET16X16TILEINFO: {
@@ -3083,7 +3108,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  switch (scriptEng.operands[3]) {
                      case TILEINFO_INDEX:
-@@ -4021,7 +4175,14 @@
+@@ -4021,7 +4198,14 @@
                  TextMenu *menu = &gameMenu[scriptEng.operands[1]];
                  switch (scriptEng.operands[2]) {
                      case TEXTINFO_TEXTDATA:
@@ -3098,7 +3123,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                          break;
                      case TEXTINFO_TEXTSIZE: scriptEng.operands[0] = menu->entrySize[scriptEng.operands[3]]; break;
                      case TEXTINFO_ROWCOUNT: scriptEng.operands[0] = menu->rowCount; break;
-@@ -4608,7 +4769,16 @@
+@@ -4608,7 +4792,16 @@
                      case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
                      case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
                      case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
@@ -3116,7 +3141,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_TILELAYERTYPE: stageLayouts[arrayVal].type = scriptEng.operands[i]; break;
                      case VAR_TILELAYERANGLE:
                          stageLayouts[arrayVal].angle = scriptEng.operands[i];
-@@ -4636,6 +4806,54 @@
+@@ -4636,6 +4829,54 @@
                      case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
@@ -3171,7 +3196,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
                      case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
                      case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-@@ -4649,12 +4867,34 @@
+@@ -4649,12 +4890,34 @@
                      case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
@@ -3207,6 +3232,75 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
                      case VAR_OBJECTSPRITESHEET: {
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
+@@ -4704,3 +4967,68 @@
+         }
+     }
+ }
++
++#if SCD_NATIVE_SCRIPTS
++// ---------------------------------------------------------------- PORT32X R1U: native scripts
++#include "ScriptNative.inc"
++static int scdNativeBoundGen = 0;
++static bool scdNativeOk      = false;
++static unsigned char scdNativeIdx[OBJECT_COUNT][4]; // 1 + index into scdNativeSubs, per type and sub; 0 = interpreted
++void scd_native_unbind() { ++scdNativeGen; }
++static void scd_native_bind()
++{
++    scdNativeBoundGen = scdNativeGen;
++    scdNativeOk       = false;
++    memset(scdNativeIdx, 0, sizeof(scdNativeIdx));
++    // the bytecode the native code was made from, and nothing else: the same counts, the same hash (tools/scd_aot.py)
++    if (scriptCodePos != scdNativeCodeCount || jumpTablePos != scdNativeJumpCount || scdNativeFuncCount > FUNCTION_COUNT)
++        return;
++    unsigned int h = 0x811C9DC5u;
++    for (int i = 0; i < scdNativeCodeCount; ++i) h = (h ^ (unsigned int)scriptCode[i]) * 0x01000193u;
++    for (int i = 0; i < scdNativeJumpCount; ++i) h = (h ^ (unsigned int)jumpTable[i]) * 0x01000193u;
++    for (int f = 0; f < scdNativeFuncCount; ++f) {
++        h = (h ^ (unsigned int)scriptFunctionList[f].ptr.scriptCodePtr) * 0x01000193u;
++        h = (h ^ (unsigned int)scriptFunctionList[f].ptr.jumpTablePtr) * 0x01000193u;
++    }
++    if (h != scdNativeHash) {
++        plat_log("PORT32X: native scripts off - the loaded bytecode is not the one they were made from");
++        return;
++    }
++    scdNativeOk = true;
++    for (int t = 0; t < OBJECT_COUNT; ++t) {
++        const ScriptPtr *sub[4] = { &objectScriptList[t].subMain, &objectScriptList[t].subPlayerInteraction, &objectScriptList[t].subDraw,
++                                    &objectScriptList[t].subStartup };
++        for (int s = 0; s < 4; ++s) {
++            int lo = 0, hi = scdNativeSubCount - 1;
++            while (lo <= hi) {
++                int mid = (lo + hi) >> 1;
++                if (scdNativeSubs[mid].codeStart < sub[s]->scriptCodePtr)
++                    lo = mid + 1;
++                else
++                    hi = mid - 1;
++            }
++            if (lo < scdNativeSubCount && lo < 255 && scdNativeSubs[lo].codeStart == sub[s]->scriptCodePtr
++                && scdNativeSubs[lo].jumpTableStart == sub[s]->jumpTablePtr)
++                scdNativeIdx[t][s] = (unsigned char)(lo + 1);
++        }
++    }
++    plat_log("PORT32X: native scripts on");
++}
++static bool scd_native_run(int scriptCodeStart, int jumpTableStart, byte scriptSub)
++{
++    if (scdNativeBoundGen != scdNativeGen)
++        scd_native_bind();
++    if (!scdNativeOk)
++        return false;
++    int k = scdNativeIdx[objectEntityList[objectLoop].type][scriptSub & 3];
++    if (!k)
++        return false;
++    const ScdNativeSub *n = &scdNativeSubs[k - 1];
++    if (n->codeStart != scriptCodeStart || n->jumpTableStart != jumpTableStart)
++        return false; // not the sub the type's table names (another caller): the interpreter
++    jumpTableStackPos = 0; // as ProcessScript starts
++    functionStackPos  = 0;
++    n->fn(scriptSub);
++    return true;
++}
++#endif
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.hpp engine/Script.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.hpp	2026-08-15 23:48:31.000000000 -0700
 +++ engine/Script.hpp	2026-10-16 10:42:44.505729846 -0700

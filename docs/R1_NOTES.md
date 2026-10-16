@@ -57,9 +57,15 @@ python3 tools/build_game_data.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicC
     /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/game_data --scenes 0:0,1:0
 sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk \
     /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/game_data 1:0
+sh tools/build_native.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk 1:0   # R1U: native scripts
 rm -rf /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine
 make -C /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x ENGINE=1
 ```
+
+`setup_engine.sh` needs `engine/` gone first (`rm -rf engine`), and it rebuilds `engine/` without the native
+scripts: run `build_native.sh` after it. Without `engine/ScriptNative.inc` every script is interpreted, as before R1U.
+From R1Q on, the disc's `L0S000.IMG` is Palmtree Panic 1 and `L1S000.IMG` the title: `build_game_data.py`
+writes them the other way round, so swap the two files after it.
 
 The disc: `cd32x/build_engine/SCDENG.cue`. The game data folder needs the title scene (0:0) too: the
 boot loader loads it first and the engine binds the scene image's layout from it.
@@ -141,6 +147,14 @@ instruction fetches and models the 68000's record copy), calibrated against the 
   instruction: its 31 KB in the cart, every operand through two jump tables whose targets miss the cache.
 - 60 frames a second needs every frame under one vertical blank.
 
+**Native scripts (R1U).** `tools/scd_aot.py` translates the scene's script bytecode into C++ at build time
+(`engine/ScriptNative.inc`, made from the game's data - not in the repository): each instruction becomes the
+interpreter's own statements for it (operand reads, the instruction's `case` body, the write-back), taken from
+`ProcessScript` after the preprocessor, so only the dispatch disappears; if / while / switch become gotos resolved
+from the jump table. The engine runs a sub natively only when the loaded bytecode is exactly the one translated (a
+hash over the script code, the jump table and the function table, once per stage load); otherwise it interprets.
+R11A: all 231 object subs and 49 functions native (10,049 instructions, 198 KB of SH2 code in the cart).
+
 Speed rounds, one change per disc, every one checked before burning: the PC check (`tools/test_sh2cfg.sh` with
 `REF=`: camera, layer scroll, palettes and every object's state the same as the previous round, frame by frame) and
 sh2emu's `record contents` CRC (the 68000 gets the same records = the same pictures).
@@ -185,3 +199,4 @@ sh2emu's `record contents` CRC (the 68000 gets the same records = the same pictu
 | R1S | **R1R + one line** (engine, R1P's): the SH2 clears COMM4 before command 68, so the 68000 never takes the start-up value as a record. sh2emu with this line simulated on R1R: no junk, the full picture, no dots. If the console still shows no level, the fault is in the 68000's record handling (`sgb_poll` / `sgb_vblank` in `hw_md.s`, the frozen stack) - stop and ask before touching it. |
 | R1S | **Palmtree Panic 1 on the Genesis planes, scrolling with the engine** (MicroNut99's videos, 16 Oct): palm trees, mountains, checkerboard, the loop with the water behind it, the climb into the clouds - no dots, no junk. Slow: 27-29 engine frames a second (see *Speed*). **Last good disc.** |
 | R1T | **R1S + three engine speed changes, nothing visible changes** (one disc for the three: each alone stays under the console's 30-frame step). (1) `CheckKeyPress` looked up `input.pressButton` by name every frame - a mobile variable Sonic CD does not have: 109 name compares from the cart a frame, for nothing; now searched once per variable list. (2) `ProcessObjects` skips an empty slot at once (~860 of 1,184; the only write it could do, `type = 0`, stores the 0 it holds). (3) `DrawHLineScrollLayer`, no-draw build: only each line's position, written straight into the plane record's table (`plat_layer_lines`), the scroll byte read once, no special-stage name compare per line (it needs `RENDER_HW`); the parallax `%` only for values outside the width. PC check: 3,001 frames the same as R1S. sh2emu: records 1-1000 CRC `CCFAE2B9` = R1S's; busy per engine frame 1.55 → 1.31 vertical blanks; 26.5 → 29.1 frames a second over 44 s of play. Boot stack untouched. |
+| R1U | **R1T + native scripts** (above) **+ the scene image keeps the scripts' last instruction**: `host/cart_build` trimmed every part after its last non-zero element, and the last script's last instruction, `End`, is a 0 - so on the SH2 the end of Attract Mode's setup (run at every stage load) read the jump table's first word (76) as an instruction and went on with garbage (harmless so far: R1R/R1S ran). The host now records how much code the stage uses (`SPOS`) and the image keeps all of it (the native scripts need it too: their hash). PC check: 12,001 frames identical to the interpreter (camera, scroll, palettes, every object's state). sh2emu: records 1-2000 CRC `3235C173` = R1S's; 94 s of play: **43.7 frames a second** (R1S 23.4); a frame 0.97 vertical blanks on average (R1S 1.55), 63% of frames already under one; the stage loads in 1.0 s. Needs the game data rebuilt (the fixed images). Boot stack untouched. |

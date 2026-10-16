@@ -168,8 +168,17 @@ int main(int argc, char **argv)
         pos += len;
     }
     std::string stage = "?";
-    if (pos + 4 <= in.size() && !memcmp(&in[pos], "STAG", 4))
+    size_t keep[SCD_CART_COUNT] = { 0 }; // R1U: elements a part keeps even when they are zeros
+    if (pos + 4 <= in.size() && !memcmp(&in[pos], "STAG", 4)) {
         stage.assign((const char *)&in[pos + 4], strnlen((const char *)&in[pos + 4], in.size() - pos - 4));
+        size_t q = pos + 4 + stage.size() + 1;
+        if (q + 12 <= in.size() && !memcmp(&in[q], "SPOS", 4)) { // the script code and jump table the stage uses
+            int32_t sp[2];
+            memcpy(sp, &in[q + 4], sizeof(sp));
+            keep[SCD_CART_SCRIPTCODE] = sp[0] > 0 ? (size_t)sp[0] : 0;
+            keep[SCD_CART_JUMPTABLE]  = sp[1] > 0 ? (size_t)sp[1] : 0;
+        }
+    }
 
     std::vector<unsigned char> out(12 + 20 * SCD_CART_COUNT, 0);
     memcpy(out.data(), "SCCB", 4);
@@ -188,6 +197,10 @@ int main(int argc, char **argv)
                         used = e + 1;
                         break;
                     }
+            // R1U: but never below what the stage uses - the last script's End is a 0 (R11A: trimmed, so the SH2
+            // read the jump table's first word as an instruction after Attract Mode's setup)
+            if (used < keep[k] && keep[k] <= n)
+                used = keep[k];
         }
         std::vector<unsigned char> p(parts[k].begin(), parts[k].begin() + used * es);
         swap_part(k, p.data(), p.size());

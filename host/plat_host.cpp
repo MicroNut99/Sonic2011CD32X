@@ -535,6 +535,12 @@ void plat_stage_loaded()
         fwrite("STAG", 1, 4, f);
         fwrite(key, 1, strlen(key) + 1, f);
     }
+    { // R1U: how much script code and jump table the stage really uses - the console image keeps all of it
+      // (host/cart_build trims trailing zeros, and a script's last instruction, End, is a 0)
+        int32_t pos[2] = { scriptCodePos, jumpTablePos };
+        fwrite("SPOS", 1, 4, f);
+        fwrite(pos, sizeof(pos), 1, f);
+    }
     fclose(f);
     ev("CARTIMG written: %s (scripts %d + %d words)", path, scriptCodePos, jumpTablePos);
 #endif
