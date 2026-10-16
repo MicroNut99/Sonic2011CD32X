@@ -675,26 +675,6 @@ int main(void)
                 l_st = sh2_state;
                 sprintf(tbuf, "32X:%X 32XReg:%X STATE:%X CKPT:%04X     ", cmd, comm4, sh2_state, (unsigned int)(ckpt >> 16));
                 print_diag(temp, tbuf, 2, 10);
-                {   /* R1L (from R1K): the last 8 line-10 STATE values with the time each appeared (68000 vertical blanks
-                       / 16, hex: 3.75 per second), rows 17 and 27, newest last - what came just before a
-                       stall (R1B-R1D, R1I, R1J: STATE 101, 32XReg 101, CKPT 0000 after the scene load) */
-                    static uint16_t hs[8], ht[8];
-                    static int hn = 0;
-                    int k, j;
-                    if (hn == 8) {
-                        for (k = 0; k < 7; k++) { hs[k] = hs[k + 1]; ht[k] = ht[k + 1]; }
-                        hn = 7;
-                    }
-                    hs[hn] = sh2_state;
-                    ht[hn] = (uint16_t)((GET_TICKS >> 4) & 0xFFF);
-                    hn++;
-                    for (j = 0; j < 2; j++) {
-                        char *q = tbuf; /* 4 x 9 characters: fits the 40-column screen from column 2 */
-                        for (k = 4 * j; k < 4 * j + 4; k++)
-                            q += k < hn ? sprintf(q, "%04X.%03X ", hs[k], ht[k]) : sprintf(q, "         ");
-                        print_diag(temp, tbuf, 2, j ? 27 : 17);
-                    }
-                }
                 if (sh2_state == 0x4B10) { running = 1; sub_quiet = KOBO_HW_QUIET; }   /* HW9 */
             }
         }
@@ -1023,7 +1003,7 @@ int main(void)
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_LAST_ADDR, 0);
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_READY_ADDR, 0);
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_BAD_ADDR, 0);
-                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15124, 0);            /* R1L (from R1I): COMM4 still held the start-up
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15124, 0);            /* R1M (from R1I): COMM4 still held the start-up
                                                                                   check 0x1234 - the 68000 took it as a
                                                                                   record id and copied frame-buffer junk
                                                                                   (R1H: ID 1234, REC 0004 0004 0006 ...;
