@@ -33,6 +33,7 @@
         .equ    SGB_FLAG,  0xFF8000         /* w: 1 = the planes are on (records expected) */
         .equ    SGB_LAST,  0xFF8002         /* w: id of the last record taken (COMM4 / COMM6) */
         .equ    SGB_READY, 0xFF8004         /* w: 1 = a record waits in SGB_REC for vertical blank */
+        .equ    SGB_BAD,   0xFF8006         /* w: R1G - 1 = a record id came with no valid record behind it */
         .equ    SGB_REC,   0xFF8010         /* the record: length word + up to SGB_RECMAX words */
         .equ    SGB_RECMAX,6000
 
@@ -201,6 +202,7 @@ md_start:
         clr.w   SGB_FLAG                /* SONIC REV R1: work RAM is not cleared at power-on - */
         clr.w   SGB_READY               /* the planes stay off until the Sub-CPU loads an act  */
         clr.w   SGB_LAST
+        clr.w   SGB_BAD
         move.l  #0,0xA12010
         move.l  #0,0xA12014
         move.l  #0,0xA12018
@@ -1481,9 +1483,13 @@ exc_buf:
 | SH2 switches FM) and put a new record id into COMM4. Copy the record (frame buffer, Genesis side
 | 0x840000) into work RAM and answer with the same id in COMM6 - the SH2 then takes the frame
 | buffer back. Only when the last record has gone to the VDP (SGB_READY 0).
-| Uses d0 (the command loop reloads it); keeps everything else.
+| Keeps every register (R1G).
 | =============================================================================
 sgb_poll:
+        movem.l d0-d1/a0-a1,-(sp)       /* R1G: d0 kept too - md_check_cmd loads only its low byte
+                                           (move.b), so a record id left in bits 8-15 (ids from 256 on)
+                                           sent the dispatch to cmd_table itself: R1F's 68K EXC V0B at
+                                           PC 00FF10EA (= cmd_table), return address 00FF10DC */
         tst.w   SGB_READY
         bne.b   9f
         move.w  0xA15124,d0             /* COMM4: record id (never 0) */
@@ -1492,29 +1498,34 @@ sgb_poll:
         beq.b   9f
         cmp.w   0xA15124,d0             /* HW10: the same twice - not a torn read */
         bne.b   9f
-        movem.l d1/a0-a1,-(sp)
         lea     0x840000,a0             /* the record area at the start of the frame buffer */
         move.w  (a0)+,d1                /* length: words after this one */
         cmpi.w  #SGB_RECMAX,d1
-        bhi.b   8f                      /* not a record: answer, show nothing */
+        bhi.b   6f                      /* not a record: answer, show nothing */
         lea     SGB_REC,a1
         move.w  d1,(a1)+
         subq.w  #1,d1
-        bmi.b   8f
+        bmi.b   6f
 7:      move.w  (a0)+,(a1)+
         dbra    d1,7b
         move.w  #1,SGB_READY
+        bra.b   8f
+6:      move.w  #1,SGB_BAD              /* R1G: the backdrop turns red in vertical blank (sgb_vblank) */
 8:      move.w  d0,SGB_LAST
         move.w  d0,0xA15126             /* COMM6: record taken */
-        movem.l (sp)+,d1/a0-a1
-9:      rts
+9:      movem.l (sp)+,d0-d1/a0-a1
+        rts
 
 | sgb_vblank (vertical blank, interrupt level 6): the waiting record into the VDP - name-table
 | groups, vertical scroll, per-line horizontal scroll (table at 0xFC00, plane A then plane B with
 | auto-increment 4), palette changes. Reads only work RAM. Saves what it uses (the handler saves
 | d0-d1 / a0-a1 itself).
 sgb_vblank:
-        tst.w   SGB_READY
+        tst.w   SGB_BAD                 /* R1G: a record that was not one - backdrop (CRAM 0) red */
+        beq.b   98f
+        move.l  #0xC0000000,0xC00004
+        move.w  #0x000E,0xC00000
+98:     tst.w   SGB_READY
         beq.w   99f
         movem.l d2-d4/a2-a3,-(sp)
         lea     SGB_REC+2,a0            /* after the length word */
