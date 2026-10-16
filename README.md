@@ -27,9 +27,10 @@ drawing everything with the SH2s was far too slow.
 - **The Genesis VDP draws the level for free**, line by line, and scrolls it at 60 Hz – the way the
   1993 Sega CD original did. The 2011 stage art *is* the original Mega-CD art (S2 inventory:
   21–42 colours per act's tiles, nothing lost in 9-bit Genesis colour).
-- **The 68000 keeps the planes up to date** in vertical blank from the camera position the SH2
-  writes into the COMM registers (Jazz REV's model, `genbg`): new columns and rows, h-scroll,
-  colour changes. It never decodes anything – the conversion is done on the PC.
+- **The SH2 works out what changes, the 68000 only copies it.** S3b showed the 68000 too slow
+  for the plane maths (17 fps); so the engine's own scroll goes through `md_planes.c` on the SH2,
+  and the 68000 copies the frame's record (new cells, scroll table, colours) into the VDP in
+  vertical blank. The conversion of the art is done on the PC.
 - **The 32X draws only what moves** and the few tiles that must be in front of the sprites
   (loops, tunnels: 20–320 such 16 × 16 tiles per act).
 
@@ -41,15 +42,16 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | What | Status |
 |---|---|
 | Every act converted and checked against the engine on the PC (R0) | **done** – [docs/R0_SURVEY.md](docs/R0_SURVEY.md): 68 of 70 acts; 332–801 patterns per act (room for 1,535); 2–4 palette lines; 0 layers the VDP cannot show; 46 acts identical frame by frame, 22 with small local differences to explain |
-| Genesis planes streamed by the 68000 on the console | proven in round S4 (60 fps plane demo on real hardware, its own 68000 program) |
-| The 2011 engine on the SH2 from the cart | proven in rounds S5–S7 (title scene starts; 30 fps with drawing off) |
+| Genesis planes streamed by the 68000 from SH2-made records | S3c / S4b: 60 fps in **Fusion** (a standalone 68000 program). Not yet run on the console. |
+| The 2011 engine on the SH2 from the cart | proven on the console in rounds S5–S7 (title scene starts; 30 fps with drawing off) |
+| R1: the engine drives the planes (records through the frame buffer, the listener copies them in vblank) | **PC-proven**: R11A 1,799 frames, 0 pixels different through record + 68000 model ([docs/R1_NOTES.md](docs/R1_NOTES.md)). Console: first disc. |
 
 ## Rounds
 
 | Round | Content |
 |---|---|
 | R0 | PC survey: every act through the Mega Drive plane model (`tools/survey_md.sh`). |
-| R1 | The Genesis plane on the console: per-act Genesis file built on the PC (patterns, palettes, 16 × 16 tile table, layout, parallax segments) in the cart; 68000 vblank code in the listener (Jazz REV's `genbg` pattern) fed with the camera through COMM registers; 32X picture off. Goal: the level scrolling with Sonic's camera at 60 Hz. |
+| R1 | The level on the Genesis planes, driven by the engine: the act's Genesis file (`G<list>S<pos>.MDG`) in the cart; each frame the SH2 streams both planes from the engine's own layer scroll (`md_planes.c`, proven in S3a) into a record; the listener copies it into the VDP in vertical blank. 32X layer off, scripted pad. [docs/R1_NOTES.md](docs/R1_NOTES.md) |
 | R2 | Animated tiles as pattern rewrites (R5xD, R6x, R8x need it – see R0); layout changes (broken walls, moved blocks). |
 | R3 | The 32X layer: sprites, HUD and front tiles, with the through bit for the sky; priority set-up as SuperTux REV7. |
 | R4 | Water (palette per line), palette effects, the 22 acts that differ in R0. |
@@ -71,10 +73,11 @@ sh tools/check_patch.sh             # must say OK
 make -C host                        # host/soniccd_host (no SDL; frames as PNG)
 sh tools/run_md_check.sh Data.rsdk 0 1800    # one act through the plane model (0 = R11A)
 sh tools/survey_md.sh Data.rsdk 1800 > survey.txt   # all 70 acts (R0)
+SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 68000 model (SGB lines in runs/scene0/events.txt)
 ```
 
-The console build (`cd32x/`, `build.sh`) needs the sh-elf / m68k-elf toolchain at
-`/opt/toolchains/sega`. `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
+The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
+the R1 disc's steps are in [docs/R1_NOTES.md](docs/R1_NOTES.md). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
 
 ## Credits
 

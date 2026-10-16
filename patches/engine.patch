@@ -1,6 +1,6 @@
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Animation.cpp engine/Animation.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Animation.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Animation.cpp	2026-10-05 20:33:20.930807830 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Animation.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Animation.cpp	2026-10-15 21:43:01.361667987 -0700
 @@ -1,14 +1,30 @@
  #include "RetroEngine.hpp"
  
@@ -130,8 +130,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  void ProcessObjectAnimation(void *objScr, void *ent)
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Animation.hpp engine/Animation.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Animation.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Animation.hpp	2026-10-05 20:19:32.264105964 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Animation.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Animation.hpp	2026-10-15 21:43:01.361844346 -0700
 @@ -44,15 +44,31 @@
      sbyte bottom[HITBOX_DIR_COUNT];
  };
@@ -165,8 +165,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern Hitbox hitboxList[HITBOX_COUNT];
  extern int hitboxCount;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Audio.cpp engine/Audio.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Audio.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Audio.cpp	2026-10-06 01:43:40.486886226 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Audio.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Audio.cpp	2026-10-15 21:43:01.361999039 -0700
 @@ -1,7 +1,9 @@
  #include "RetroEngine.hpp"
  #include <cmath>
@@ -332,8 +332,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      int sfxChannel = -1;
      for (int i = 0; i < CHANNEL_COUNT; ++i) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Audio.hpp engine/Audio.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Audio.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Audio.hpp	2026-10-06 01:43:36.091222765 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Audio.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Audio.hpp	2026-10-15 21:43:01.362215209 -0700
 @@ -3,9 +3,11 @@
  
  #include <stdlib.h>
@@ -395,8 +395,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          if (sfxList[i].loaded) {
              StrCopy(sfxList[i].name, "");
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Collision.cpp engine/Collision.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Collision.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Collision.cpp	2026-10-05 18:36:24.620830093 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Collision.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Collision.cpp	2026-10-15 21:43:01.362510973 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +
@@ -548,8 +548,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              if (tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
                  switch (tiles128x128.direction[chunk]) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Collision.hpp engine/Collision.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Collision.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Collision.hpp	2026-10-05 18:57:59.400743314 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Collision.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Collision.hpp	2026-10-15 21:43:01.362930766 -0700
 @@ -59,7 +59,7 @@
  };
  
@@ -560,8 +560,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  struct DebugHitboxInfo {
      byte type;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Debug.cpp engine/Debug.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Debug.cpp	2026-10-05 08:41:02.616183066 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Debug.cpp	2026-10-15 21:43:01.363024653 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +#include <stdarg.h> // PORT32X: was pulled in by SDL.h
@@ -569,8 +569,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  int touchFlags = 0;
  
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Drawing.cpp	2026-10-06 22:13:24.403829688 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Drawing.cpp	2026-10-15 21:43:01.363597777 -0700
 @@ -15,9 +15,15 @@
  // it rather than remove it outright.
  #define DONT_USE_VIEW_ANGLE (1)
@@ -1053,8 +1053,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      int cnt         = 0;
      if (tMenu->visibleRowCount > 0) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp engine/Drawing.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Drawing.hpp	2026-10-06 22:13:24.404747143 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Drawing.hpp	2026-10-15 21:43:01.364910970 -0700
 @@ -12,8 +12,14 @@
  enum InkFlags { INK_NONE, INK_BLEND, INK_ALPHA, INK_ADD, INK_SUB };
  enum DrawFXFlags { FX_SCALE, FX_ROTATE, FX_ROTOZOOM, FX_INK, FX_TINT, FX_FLIP };
@@ -1142,8 +1142,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  #if !RETRO_USE_ORIGINAL_CODE
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Ini.cpp engine/Ini.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Ini.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Ini.cpp	2026-10-06 19:17:45.499982442 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Ini.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Ini.cpp	2026-10-15 21:43:01.365060595 -0700
 @@ -154,6 +154,13 @@
  
  int IniParser::SetString(const char *section, const char *key, char *value)
@@ -1229,8 +1229,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
      if (addPath) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Input.cpp engine/Input.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Input.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Input.cpp	2026-10-05 08:41:02.616771453 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Input.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Input.cpp	2026-10-15 21:43:01.365221800 -0700
 @@ -329,6 +329,11 @@
  }
  #endif //! RETRO_USING_SDL2
@@ -1276,8 +1276,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (SDL_NumJoysticks() > 0) {
          controller = SDL_JoystickOpen(0);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Math.cpp engine/Math.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Math.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Math.cpp	2026-10-05 21:36:04.234399362 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Math.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Math.cpp	2026-10-15 21:43:01.365373424 -0700
 @@ -6,20 +6,53 @@
  #define M_PI 3.14159265358979323846264338327950288
  #endif
@@ -1343,8 +1343,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          for (int X = 0; X < 0x100; ++X) {
              float angle = atan2f(Y, X);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Math.hpp engine/Math.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Math.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Math.hpp	2026-10-05 21:36:04.234665589 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Math.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Math.hpp	2026-10-15 21:43:01.365474334 -0700
 @@ -10,16 +10,44 @@
  #define MEM_ZERO(x)  memset(&(x), 0, sizeof((x)))
  #define MEM_ZEROP(x) memset((x), 0, sizeof(*(x)))
@@ -1391,8 +1391,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  // Setup Angles
  void CalculateTrigAngles();
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.cpp engine/Object.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Object.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Object.cpp	2026-10-05 20:19:32.264793369 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Object.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Object.cpp	2026-10-15 21:43:01.365581528 -0700
 @@ -4,7 +4,11 @@
  int curObjectType = 0;
  Entity objectEntityList[ENTITY_COUNT];
@@ -1462,8 +1462,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  }
 \ No newline at end of file
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.hpp engine/Object.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Object.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Object.hpp	2026-10-05 20:19:32.263381644 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Object.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Object.hpp	2026-10-15 21:43:01.365733736 -0700
 @@ -49,7 +49,11 @@
  extern int curObjectType;
  extern Entity objectEntityList[ENTITY_COUNT];
@@ -1477,8 +1477,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern int OBJECT_BORDER_X1;
  extern int OBJECT_BORDER_X2;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Palette.cpp engine/Palette.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Palette.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Palette.cpp	2026-10-05 18:18:58.057544061 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Palette.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Palette.cpp	2026-10-15 21:43:01.365835826 -0700
 @@ -25,7 +25,7 @@
  
  int texPaletteNum = 0;
@@ -1489,8 +1489,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void LoadPalette(const char *filePath, int paletteID, int startPaletteIndex, int startIndex, int endIndex)
  {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Palette.hpp engine/Palette.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Palette.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Palette.hpp	2026-10-05 18:18:58.057149814 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Palette.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Palette.hpp	2026-10-15 21:43:01.365931771 -0700
 @@ -40,7 +40,7 @@
  
  extern int texPaletteNum;
@@ -1501,8 +1501,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #define RGB888_TO_RGB5551(r, g, b) ((((b) >> 3) << 1) | (((g) >> 3) << 6) | (((r) >> 3) << 11) | 0) // used in mobile vers
  #define RGB888_TO_RGB565(r, g, b)  ((b) >> 3) | (((g) >> 2) << 5) | (((r) >> 3) << 11) // used in pc vers
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Reader.cpp engine/Reader.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Reader.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Reader.cpp	2026-10-06 01:30:10.460058159 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Reader.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Reader.cpp	2026-10-15 21:43:01.366058606 -0700
 @@ -4,7 +4,39 @@
  char rsdkName[0x400];
  
@@ -1576,8 +1576,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  size_t GetFilePosition()
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Reader.hpp engine/Reader.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Reader.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Reader.hpp	2026-10-06 01:44:51.500094645 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Reader.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Reader.hpp	2026-10-15 21:43:01.366208117 -0700
 @@ -1,6 +1,26 @@
  #ifndef READER_H
  #define READER_H
@@ -1665,8 +1665,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      fileInfo->bufferPosition    = bufferPosition;
      fileInfo->readPos           = readPos - readSize;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/RetroEngine.cpp engine/RetroEngine.cpp
---- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/RetroEngine.cpp	2026-10-05 20:19:32.267005559 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/RetroEngine.cpp	2026-10-15 21:43:01.366384304 -0700
 @@ -32,6 +32,9 @@
  
  bool ProcessEvents()
@@ -1770,8 +1770,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              SceneInfo *scene = &stageList[STAGELIST_BONUS][0xFE]; // slot 0xFF is used for "none" startStage
              strcpy(scene->name, "_RSDK_SCENE");
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp engine/RetroEngine.hpp
---- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/RetroEngine.hpp	2026-10-06 22:13:24.399235858 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/RetroEngine.hpp	2026-10-15 21:43:01.366620463 -0700
 @@ -4,6 +4,80 @@
  // Disables POSIX use c++ name blah blah stuff
  #pragma warning(disable : 4996)
@@ -1918,8 +1918,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #include <SDL.h>
  #elif RETRO_USING_SDL1
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene.cpp engine/Scene.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Scene.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Scene.cpp	2026-10-06 22:13:24.405102265 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Scene.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Scene.cpp	2026-10-15 21:43:01.366865156 -0700
 @@ -8,7 +8,11 @@
      "Bonus Stages",
      "Special Stages",
@@ -2210,8 +2210,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          CloseFile();
      }
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene.hpp engine/Scene.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Scene.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Scene.hpp	2026-10-06 22:13:24.405350099 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Scene.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Scene.hpp	2026-10-15 21:43:01.367169044 -0700
 @@ -88,8 +88,16 @@
  };
  
@@ -2424,8 +2424,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          byte *destPtr = &tilesetGFXData[TILELAYER_CHUNK_W * dest];
          byte *srcPtr  = &tilesetGFXData[TILELAYER_CHUNK_W * src];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene3D.cpp engine/Scene3D.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Scene3D.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Scene3D.cpp	2026-10-06 22:05:11.173725275 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Scene3D.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Scene3D.cpp	2026-10-15 21:43:01.367319861 -0700
 @@ -10,9 +10,9 @@
  
  Face faceBuffer[FACEBUFFER_SIZE];
@@ -2483,8 +2483,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      for (int i = 0; i < faceCount; ++i) {
          Face *face = &faceBuffer[drawList3D[i].faceID];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene3D.hpp engine/Scene3D.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Scene3D.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Scene3D.hpp	2026-10-06 22:31:41.604576037 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Scene3D.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Scene3D.hpp	2026-10-15 21:43:01.367456294 -0700
 @@ -1,8 +1,15 @@
  #ifndef DRAWING3D_H
  #define DRAWING3D_H
@@ -2526,8 +2526,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void Sort3DDrawList();
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Script.cpp	2026-10-05 22:00:26.703187939 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Script.cpp	2026-10-15 21:43:01.367864224 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -3042,8 +3042,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_OBJECTSPRITESHEET: {
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.hpp engine/Script.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Script.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Script.hpp	2026-10-05 18:31:15.747707544 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Script.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Script.hpp	2026-10-15 21:43:01.368449350 -0700
 @@ -8,7 +8,11 @@
  #define JUMPSTACK_COUNT (0x400)
  #define FUNCSTACK_COUNT (0x400)
@@ -3069,8 +3069,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  extern int jumpTableStack[JUMPSTACK_COUNT];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Sprite.cpp engine/Sprite.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Sprite.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Sprite.cpp	2026-10-05 18:19:59.098536027 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Sprite.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Sprite.cpp	2026-10-15 21:43:01.368588441 -0700
 @@ -246,7 +246,8 @@
          StrCopy(gfxSurface[sheetID].fileName, "");
          int dataPosStart = gfxSurface[sheetID].dataPosition;
@@ -3116,8 +3116,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (LoadFile(filePath, &info)) {
          GFXSurface *surface = &gfxSurface[sheetID];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Text.cpp engine/Text.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Text.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Text.cpp	2026-10-05 21:52:05.999475305 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Text.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Text.cpp	2026-10-15 21:43:01.368812339 -0700
 @@ -1,77 +1,106 @@
  #include "RetroEngine.hpp"
  
@@ -3320,8 +3320,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              ++i;
          }
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Text.hpp engine/Text.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Text.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Text.hpp	2026-10-06 22:31:41.604963112 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Text.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Text.hpp	2026-10-15 21:43:01.368962712 -0700
 @@ -1,8 +1,24 @@
  #ifndef TEXTSYSTEM_H
  #define TEXTSYSTEM_H
@@ -3369,8 +3369,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void LoadFontFile(const char *filePath);
  void LoadTextFile(TextMenu *menu, const char *filePath, byte mapCode);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp engine/Userdata.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Userdata.cpp	2026-10-06 21:39:41.147396747 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Userdata.cpp	2026-10-15 22:40:49.696185476 -0700
 @@ -53,10 +53,30 @@
  
  int globalVariablesCount;
@@ -3446,7 +3446,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      fClose(saveFile);
      return true;
  }
-@@ -627,6 +675,20 @@
+@@ -627,6 +675,25 @@
  #endif
      }
  
@@ -3462,14 +3462,19 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +    Engine.dimLimit     = -1;
 +    Engine.refreshRate  = 60;
 +    Engine.startFullScreen = false;
++#if defined(SCD32X_START_LIST)
++    // PORT32X REV R1: a test disc can start straight in a scene (e.g. 1:0 = Palmtree Panic 1 Present)
++    Engine.startList  = Engine.startList_Game  = SCD32X_START_LIST;
++    Engine.startStage = Engine.startStage_Game = SCD32X_START_STAGE;
++#endif
 +#endif
 +
      // Loaded here so it can be disabled
  #if RETRO_PLATFORM == RETRO_WIN && _MSC_VER
      if (Engine.useSteamDir) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp engine/Userdata.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Userdata.hpp	2026-10-05 21:23:09.274632934 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Userdata.hpp	2026-10-15 21:43:01.369295145 -0700
 @@ -8,7 +8,30 @@
  
  #define MOD_COUNT (0x100)
@@ -3515,8 +3520,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern char gamePath[0x100];
  extern int saveRAM[SAVEDATA_SIZE];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Video.cpp engine/Video.cpp
---- RSDKv3-Decompilation-master/RSDKv3/Video.cpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Video.cpp	2026-10-05 08:41:02.618110595 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Video.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Video.cpp	2026-10-15 21:43:01.369436480 -0700
 @@ -1,4 +1,25 @@
  #include "RetroEngine.hpp"
 +#if !RETRO_USING_THEORA
@@ -3549,8 +3554,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  }
 +#endif // RETRO_USING_THEORA
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Video.hpp engine/Video.hpp
---- RSDKv3-Decompilation-master/RSDKv3/Video.hpp	2026-08-16 06:48:31.000000000 +0000
-+++ engine/Video.hpp	2026-10-05 08:41:02.618150468 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/Video.hpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Video.hpp	2026-10-15 21:43:01.369604064 -0700
 @@ -1,7 +1,9 @@
  #ifndef VIDEO_H
  #define VIDEO_H
@@ -3575,8 +3580,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern byte videoSurface;
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
---- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1970-01-01 00:00:00.000000000 +0000
-+++ engine/plat.hpp	2026-10-06 22:13:24.399662245 +0000
+--- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
++++ engine/plat.hpp	2026-10-15 21:43:01.369748787 -0700
 @@ -0,0 +1,67 @@
 +#ifndef PLAT_H
 +#define PLAT_H

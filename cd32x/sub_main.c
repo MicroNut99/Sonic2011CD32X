@@ -97,6 +97,22 @@ extern int do_md_cmd3(int cmd, int arg1, int arg2, int arg3);
 #define KOBO_HW_QUIET         0          /* HW9: 1 = once the game reports 4B10, the Sub-CPU stops polling
                                                    the 68K; it only writes its heartbeat twice a second. */
 static int sub_quiet = 0;
+/* SONIC 2011 REV R1 - the Genesis planes (md/sgb.h, cd32x/kobo/hw_md.s sgb_*). SH2 command 68:
+ *   COMM2 = 1 load: COMM8 (32-bit) = cart offset of the act's "SCMG" file (G<list>S<pos>.MDG, loaded
+ *             by the SH2 with CMD 38/46 into slot 28 = cart 0x380000). VDP set up for the planes,
+ *             the act's cells and colours from the cart (68000: 32X bank window 0x900000), planes
+ *             cleared, then the listener's record handling on (SGB_FLAG). Reply COMM12 1 ok, 0 bad.
+ *   COMM2 = 2 off:  records off, the listener's own VDP set-up, font and text back (md_init_hw).
+ * While the planes are on nothing may print into the planes: no Kobo text (print_diag). */
+#define SGB_CMD          68
+#define SGB_SLOT         28              /* CMD 46 slot: 28 * CART_SLOT = cart 0x380000 */
+#define SGB_FLAG_ADDR    0xFF8000        /* 68000 work RAM - the listener's SGB_ equates */
+#define SGB_LAST_ADDR    0xFF8002
+#define SGB_READY_ADDR   0xFF8004
+#define MD_CMD_INIT_HW_  1               /* hw_md.s command numbers (md_init_hw, copy_vram, set_palette) */
+#define MD_CMD_COPY_VRAM_ 7
+#define MD_CMD_SET_PALETTE_ 12
+static int planes_on = 0;
 #define KOBO_BOOT_TEXT        1          /* K31: on - Chilly's white 32X start-up messages show
                                                    (green text stays off: KOBO_DIAG_TEXT 0) */
 
@@ -120,6 +136,7 @@ static const char *find_sh2_marker(const char *p, int len)
 
 void print_diag(char *temp, const char *msg, int x, int y) {
     if (quiet) return;
+    if (planes_on) return;                    /* SONIC REV R1: the planes use that video RAM */
 #if !KOBO_DIAG_TEXT
     return;                                   /* K19: green text switched off (see top) */
 #endif
@@ -652,7 +669,9 @@ int main(void)
             }
         }
 
-        if (comm4 == 0x0EEE) {
+        if (planes_on) {
+            /* SONIC REV R1: COMM4 carries the plane record ids now - no start-up checks on it */
+        } else if (comm4 == 0x0EEE) {
             print_diag(temp, "SH2 REACHED THE LDC LINE              ", 2, 18); 
         } else if (comm4 != 0x1234 && comm4 != 0x0000) {
             print_diag(temp, "SH2 NEVER EVEN REACHED THIS FILE      ", 2, 18); 
@@ -669,6 +688,8 @@ int main(void)
             else if (img_idx == 22) { strcpy(img_name, "SCDDATA.PAK"); cur_img = 24; } /* S7e: the game's data pack at cart 0x300000 */
             else if (img_idx >= 0x100 && img_idx < 0x500) {                              /* S7d: a scene's cart image at cart 0x080000 */
                 sprintf(img_name, "L%dS%03d.IMG", (img_idx >> 8) - 1, img_idx & 0xFF); cur_img = 4; }
+            else if (img_idx >= 0x1100 && img_idx < 0x1500) {                            /* SONIC REV R1: the act's Genesis data at cart 0x380000 */
+                sprintf(img_name, "G%dS%03d.MDG", ((img_idx >> 8) & 0xF) - 1, img_idx & 0xFF); cur_img = SGB_SLOT; }
             else if (img_idx <= 0) strcpy(img_name, "IMAGE.RAW");
             else sprintf(img_name, "IMAGE%d.RAW", img_idx);
 
@@ -909,6 +930,65 @@ int main(void)
                number of effects (0 = failed). */
             int nfx = pcm_load();
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, nfx);
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
+        }
+        else if (cmd == SGB_CMD) {
+            int op = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 0xFF;
+            uint32_t off = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
+            int ok = 0;
+            if (op == 1) {
+                /* the file through the 32X bank window: 1 MB bank of the offset, 0x900000 + the rest.
+                   The whole file must lie in that bank (the slot at 0x380000 does: 0x380000-0x3EFFFF). */
+                uint32_t base = 0x900000 + (off & 0xFFFFF);
+                do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_FLAG_ADDR, 0);           /* records off while loading */
+                do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15104, (int)(off >> 20) & 3);
+                uint32_t magic = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, (int)base);
+                uint32_t size  = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, (int)(base + 8));
+                int ver        = do_md_cmd1(MD_CMD_READ_32X_16, (int)(base + 4));
+                int cells      = do_md_cmd1(MD_CMD_READ_32X_16, (int)(base + 6));
+                uint32_t oCell = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, (int)(base + 12));
+                uint32_t oZero = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, (int)(base + 28));
+                uint32_t oCram = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, (int)(base + 32));
+                if (!(off & 1) && magic == 0x53434D47u && ver == 1 && cells > 0 && cells <= 1536 &&
+                    (off & 0xFFFFF) + size <= 0x100000 && oCell < size && oZero < size && oCram < size) {
+                    static const uint16_t regs[] = {
+                        0x8134,                   /* display off, vertical blank interrupt stays on */
+                        0x8004, 0x8230,           /* plane A 0xC000 */
+                        0x8334, 0x8407,           /* window 0xD000 (unused), plane B 0xE000 */
+                        0x857C, 0x8D3F,           /* sprites 0xF800, h-scroll 0xFC00 */
+                        0x8700, 0x8AFF, 0x8B03,   /* backdrop colour 0, line h-scroll, full v-scroll */
+                        0x8C81, 0x8E00, 0x8F02,   /* H40, no shadow / highlight, auto-increment 2 */
+                        0x9001, 0x9100, 0x9200    /* planes 64 x 32, no window */
+                    };
+                    int i;
+                    for (i = 0; i < (int)(sizeof(regs) / sizeof(regs[0])); i++)
+                        do_md_cmd1(MD_CMD_SET_VDP_REG, regs[i]);
+                    /* planes, sprite table and h-scroll table cleared (0xC000-0xFFFF from the zero block) */
+                    do_md_cmd3(MD_CMD_COPY_VRAM_, 0xC000, (int)(base + oZero), 0x1000);
+                    do_md_cmd3(MD_CMD_COPY_VRAM_, 0xE000, (int)(base + oZero), 0x1000);
+                    do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0x40000010);   /* VSRAM 0 */
+                    do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00000, 0);            /* plane A, plane B: 0 */
+                    do_md_cmd3(MD_CMD_COPY_VRAM_, 0x0000, (int)(base + oCell), cells * 16);
+                    do_md_cmd3(MD_CMD_SET_PALETTE_, (int)(base + oCram), 0, 64);
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_LAST_ADDR, 0);
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_READY_ADDR, 0);
+                    planes_on = 1;                                            /* no more Kobo text */
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_FLAG_ADDR, 1);       /* heartbeat off ... */
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15126, 0);            /* ... COMM6 = 0: no id yet */
+                    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8174);                  /* display on */
+                    ok = 1;
+                }
+                do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15104, 0);                 /* bank 0 again */
+            }
+            else if (op == 2) {
+                do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_FLAG_ADDR, 0);
+                do_md_cmd0(MD_CMD_INIT_HW_);              /* the listener's VDP set-up, font, colours */
+                do_md_cmd0(MD_CMD_CLEAR_B);
+                do_md_cmd0(MD_CMD_CLEAR_A);
+                planes_on = 0;
+                ok = 1;
+            }
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, ok);
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
         }
         else if (cmd == 52) {

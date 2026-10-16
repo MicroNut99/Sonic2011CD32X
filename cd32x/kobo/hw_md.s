@@ -26,6 +26,16 @@
         .equ    MD_CMD_SAFE_CART_XFER, 26
         .equ    MD_CMD_END, 35              /* KOBO K19: + set_vdp_reg (34) */
 
+| SONIC 2011 REV R1 - the Genesis planes (md/sgb.h): work RAM above the listener. The Sub-CPU
+| sets them up with the listener's own commands (write_32x_16 / copy_vram / set_palette /
+| set_vdp_reg: SH2 command 68, cd32x/sub_main.c); sgb_poll (command loop) and sgb_vblank
+| (vertical blank) do the rest. Nothing here runs while SGB_FLAG is 0 - Kobo's listener as before.
+        .equ    SGB_FLAG,  0xFF8000         /* w: 1 = the planes are on (records expected) */
+        .equ    SGB_LAST,  0xFF8002         /* w: id of the last record taken (COMM4 / COMM6) */
+        .equ    SGB_READY, 0xFF8004         /* w: 1 = a record waits in SGB_REC for vertical blank */
+        .equ    SGB_REC,   0xFF8010         /* the record: length word + up to SGB_RECMAX words */
+        .equ    SGB_RECMAX,6000
+
 
         .text
 
@@ -188,6 +198,9 @@ md_init_start:
 
         .align  4
 md_start:
+        clr.w   SGB_FLAG                /* SONIC REV R1: work RAM is not cleared at power-on - */
+        clr.w   SGB_READY               /* the planes stay off until the Sub-CPU loads an act  */
+        clr.w   SGB_LAST
         move.l  #0,0xA12010
         move.l  #0,0xA12014
         move.l  #0,0xA12018
@@ -213,6 +226,10 @@ mars_done:
         moveq   #0,d0
         move.w  d0,0xA15120
 md_check:
+        tst.w   SGB_FLAG                /* SONIC REV R1: a plane record from the SH2? */
+        beq.b   md_check_cmd
+        bsr.w   sgb_poll
+md_check_cmd:
         move.b  0xA1200F,d0
         beq.b   cmd_loop
         cmp.b   0xA1200F,d0             /* HW10: the command byte must read the same twice.  */
@@ -1275,6 +1292,10 @@ message6:
 
 vblank_int:
         movem.l d0-d1/a0-a1,-(sp)
+        tst.w   SGB_FLAG                /* SONIC REV R1: the planes first, early in vertical blank */
+        beq.b   vbl_pads
+        bsr.w   sgb_vblank
+vbl_pads:
 
         pea     0.w
         bsr.w   get_pad
@@ -1291,6 +1312,8 @@ vblank_int:
         move.l  d0,0xA1201C
         btst    #0,0xA15101             /* HW7: only once the 32X is on (ADEN bit) */
         beq.b   1f
+        tst.w   SGB_FLAG                /* SONIC REV R1: COMM6 answers the plane records instead */
+        bne.b   1f
         move.w  d0,0xA15126             /* HW7: 68K heartbeat -> 32X COMM6 (SH2 reads it 1x/s) */
 1:
 
@@ -1447,6 +1470,106 @@ exc_txt2:
         .align  2
 exc_buf:
         .space  48
+
+| =============================================================================
+| SONIC 2011 REV R1 - the Genesis planes (md/sgb.h)
+| sgb_poll (command loop): the SH2 has handed the 32X frame buffer over (Kobo give_fb: only the
+| SH2 switches FM) and put a new record id into COMM4. Copy the record (frame buffer, Genesis side
+| 0x840000) into work RAM and answer with the same id in COMM6 - the SH2 then takes the frame
+| buffer back. Only when the last record has gone to the VDP (SGB_READY 0).
+| Uses d0 (the command loop reloads it); keeps everything else.
+| =============================================================================
+sgb_poll:
+        tst.w   SGB_READY
+        bne.b   9f
+        move.w  0xA15124,d0             /* COMM4: record id (never 0) */
+        beq.b   9f
+        cmp.w   SGB_LAST,d0
+        beq.b   9f
+        cmp.w   0xA15124,d0             /* HW10: the same twice - not a torn read */
+        bne.b   9f
+        movem.l d1/a0-a1,-(sp)
+        lea     0x840000,a0             /* the record area at the start of the frame buffer */
+        move.w  (a0)+,d1                /* length: words after this one */
+        cmpi.w  #SGB_RECMAX,d1
+        bhi.b   8f                      /* not a record: answer, show nothing */
+        lea     SGB_REC,a1
+        move.w  d1,(a1)+
+        subq.w  #1,d1
+        bmi.b   8f
+7:      move.w  (a0)+,(a1)+
+        dbra    d1,7b
+        move.w  #1,SGB_READY
+8:      move.w  d0,SGB_LAST
+        move.w  d0,0xA15126             /* COMM6: record taken */
+        movem.l (sp)+,d1/a0-a1
+9:      rts
+
+| sgb_vblank (vertical blank, interrupt level 6): the waiting record into the VDP - name-table
+| groups, vertical scroll, per-line horizontal scroll (table at 0xFC00, plane A then plane B with
+| auto-increment 4), palette changes. Reads only work RAM. Saves what it uses (the handler saves
+| d0-d1 / a0-a1 itself).
+sgb_vblank:
+        tst.w   SGB_READY
+        beq.w   99f
+        movem.l d2-d4/a2-a3,-(sp)
+        lea     SGB_REC+2,a0            /* after the length word */
+        lea     0xC00004,a2             /* VDP control */
+        lea     0xC00000,a3             /* VDP data */
+        move.w  #0x8F02,(a2)            /* auto-increment 2 */
+        move.w  (a0)+,d4                /* name-table groups */
+        bra.b   3f
+1:      move.w  (a0)+,d0                /* VRAM address -> write command */
+        moveq   #0,d1
+        move.w  d0,d1
+        andi.w  #0x3FFF,d1
+        ori.w   #0x4000,d1
+        swap    d1
+        rol.w   #2,d0
+        andi.w  #3,d0
+        move.w  d0,d1
+        move.l  d1,(a2)
+        move.w  (a0)+,d1                /* words in the group */
+        subq.w  #1,d1
+        bmi.b   3f
+2:      move.w  (a0)+,(a3)
+        dbra    d1,2b
+3:      dbra    d4,1b
+        move.l  #0x40000010,(a2)        /* VSRAM 0: plane A, plane B */
+        move.w  (a0)+,(a3)
+        move.w  (a0)+,(a3)
+        move.w  #0x8F04,(a2)            /* h-scroll table: every 4 bytes */
+        move.l  #0x7C000003,(a2)        /* VRAM 0xFC00: plane A of each line */
+        bsr.w   sgb_runs
+        move.l  #0x7C020003,(a2)        /* VRAM 0xFC02: plane B of each line */
+        bsr.w   sgb_runs
+        move.w  #0x8F02,(a2)
+        move.w  (a0)+,d4                /* palette changes */
+        bra.b   5f
+4:      move.w  (a0)+,d0                /* CRAM index 0-63 */
+        add.w   d0,d0
+        swap    d0
+        clr.w   d0
+        ori.l   #0xC0000000,d0
+        move.l  d0,(a2)
+        move.w  (a0)+,(a3)
+5:      dbra    d4,4b
+        clr.w   SGB_READY
+        movem.l (sp)+,d2-d4/a2-a3
+99:     rts
+
+| a0 -> runs (count, count x {lines, value}): each value lines times into the VDP data port (a3)
+sgb_runs:
+        move.w  (a0)+,d4
+        bra.b   2f
+1:      move.w  (a0)+,d1                /* lines */
+        move.w  (a0)+,d0                /* value */
+        subq.w  #1,d1
+        bmi.b   2f
+3:      move.w  d0,(a3)
+        dbra    d1,3b
+2:      dbra    d4,1b
+        rts
 
         .align  4
 md_init_end:

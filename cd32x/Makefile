@@ -94,7 +94,7 @@ $(B)/scd_fs.o: kobo/scd_fs.c | $(B)
 $(B)/sub_stubs.o: kobo/sub_stubs.c | $(B)
 	$(M68K)gcc $(CCFLAGS) $(INCPATH) $< -o $@
 # S7b2: the first green line names the round and the disc type
-ROUND ?= S7E7
+ROUND ?= R1
 DISCTYPE = $(if $(ENGINE),GAME START,$(if $(CART_TEST),CART TEST,PLANE DEMO))
 $(B)/sub_main.o: sub_main.c Makefile | $(B)
 	$(M68K)gcc $(HWFLAGS) $(INCPATH) $(if $(CART_TEST)$(ENGINE),-DSCD_CART_TEST=1,) '-DSCD_BUILD_TEXT="BUILD: SONIC CD $(ROUND) $(DISCTYPE)"' $< -o $@
@@ -161,17 +161,35 @@ STAGE_IMAGE ?= ../cart_images/R11A_1.bin
 STAGE_PACK  ?= ../stage_packs/R11A_1.rsdk
 $(B)/sh2_engboot.o: sh2_engboot.c ../md/cart_verify.h | $(B)
 	$(SH)gcc $(SH2FLAGS) -I../md $< -o $@
-ENGFLAGS = -std=c++17 -DSONICCD32X -DSCD32X_DRAW -m2 -mb -O2 -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables \
+# REV R1: PLANES=1 (default) - the Genesis draws the level (md/sgb.h): the engine without its renderer
+# (SCD32X_SH2, 224 lines), the act's G<list>S<pos>.MDG files from GAME_DATA on the disc.
+# START=1 0: start straight in list 1 scene 0 (Palmtree Panic 1 Present); DEMO_PAD=1: the PC check's
+# pad (spin dash, run right) instead of the controller - the camera moves without anyone playing.
+# PLANES=0: the S7e drawing build (the 32X draws everything).
+PLANES   ?= 1
+START    ?= 1 0
+DEMO_PAD ?= 1
+ifeq ($(PLANES),1)
+ENGCFG   = -DSCD32X_SH2 -DSCD_PLANES=1 -DSCD_DEMO_PAD=$(DEMO_PAD) $(if $(START),-DSCD32X_START_LIST=$(word 1,$(START)) -DSCD32X_START_STAGE=$(word 2,$(START)),)
+else
+ENGCFG   = -DSCD32X_DRAW
+endif
+ENGFLAGS = -std=c++17 -DSONICCD32X $(ENGCFG) -m2 -mb -O2 -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables \
            -fno-unwind-tables -ffunction-sections -fdata-sections -w -Ikobo/sh2
 ENGSRC   = $(wildcard ../engine/*.cpp)
-ENGOBJS  = $(patsubst ../engine/%.cpp,$(B)/eng/%.o,$(ENGSRC)) $(B)/eng/plat_mars.o $(B)/eng/engine_start.o $(B)/eng/cart_verify.o
+ENGOBJS  = $(patsubst ../engine/%.cpp,$(B)/eng/%.o,$(ENGSRC)) $(B)/eng/plat_mars.o $(B)/eng/engine_start.o $(B)/eng/cart_verify.o \
+           $(if $(filter 1,$(PLANES)),$(B)/eng/md_planes.o $(B)/eng/sgb.o,)
+$(B)/eng/md_planes.o: ../md/md_planes.c ../md/md_planes.h | $(B)/eng
+	$(SH)gcc -std=c99 -m2 -mb -O2 -ffunction-sections -fdata-sections -c $< -o $@
+$(B)/eng/sgb.o: ../md/sgb.c ../md/sgb.h ../md/md_planes.h | $(B)/eng
+	$(SH)gcc -std=c99 -m2 -mb -O2 -ffunction-sections -fdata-sections -c $< -o $@
 $(B)/eng/cart_verify.o: ../md/cart_verify.c ../md/cart_verify.h | $(B)/eng
 	$(SH)gcc -std=c99 -m2 -mb -O2 -ffunction-sections -fdata-sections -c $< -o $@
 $(B)/eng:
 	mkdir -p $@
 $(B)/eng/%.o: ../engine/%.cpp | $(B)/eng
 	$(SH)g++ $(ENGFLAGS) -c $< -o $@
-$(B)/eng/plat_mars.o: engine/plat_mars.cpp | $(B)/eng
+$(B)/eng/plat_mars.o: engine/plat_mars.cpp ../md/sgb.h ../md/md_planes.h | $(B)/eng
 	$(SH)g++ $(ENGFLAGS) -c $< -o $@
 $(B)/eng/engine_start.o: engine/engine_start.cpp | $(B)/eng
 	$(SH)g++ $(ENGFLAGS) -c $< -o $@
@@ -197,6 +215,8 @@ $(B)/disc/SCDDATA.PAK: $(GAME_DATA)/SCDDATA.PAK | $(B)
 	mkdir -p $(B)/disc
 	cp $(GAME_DATA)/SCDDATA.PAK $(GAME_DATA)/L*.IMG $(B)/disc/
 	@echo "game data: $$(ls $(GAME_DATA)/L*.IMG | wc -l) scene images + SCDDATA.PAK from $(GAME_DATA)"
+	@if [ "$(PLANES)" = 1 ]; then cp $(GAME_DATA)/G*.MDG $(B)/disc/ 2>/dev/null; \
+	  echo "REV R1 planes: $$(ls $(B)/disc/G*.MDG 2>/dev/null | wc -l) act files G*.MDG from $(GAME_DATA) (tools/build_mdg.sh)"; fi
 $(B)/SCDENG.iso: $(B)/disc/APP.BIN $(B)/disc/SONICCD.PAK $(B)/disc/SCDDATA.PAK
 	genisoimage -sysid "SEGA SEGACD" -volid "SCDENG" -generic-boot $(BOOTBLOCK) -full-iso9660-filenames -o $@ $(B)/disc
 $(B)/SCDENG.cue: $(B)/SCDENG.iso

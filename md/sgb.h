@@ -1,0 +1,59 @@
+/* REV R1: the Genesis planes driven by the engine on the SH2 ("SGB" = Sonic Genesis background).
+ *
+ * Each frame the SH2 streams both planes with md_planes.c (the code S3a proved against the engine,
+ * frame for frame) and writes the frame's VDP work as a RECORD straight into the 32X frame buffer's
+ * record area; the 68000 copies it into its work RAM (listener command loop) and into the VDP in
+ * vertical blank (cd32x/kobo/hw_md.s, sgb_poll / sgb_vblank).
+ *
+ * Record (16-bit words, the SH2's and the 68000's own order - big-endian):
+ *   [0]  length: words after this one
+ *   [1]  G = name-table write groups; G x { VRAM address, count n, n name words } (consecutive addresses)
+ *        vertical scroll plane A, plane B
+ *        h-scroll plane A: runs R, R x { lines, VDP value }; plane B the same
+ *        palette changes P, P x { CRAM index 0-63, Genesis colour 0000BBB0GGG0RRR0 }
+ *
+ * The act's Genesis data ("SCMG", built on the PC by host/md_check.cpp, SCD32X_MDGEXPORT), big-endian:
+ *   0 'SCMG'   4 u16 version (1)   6 u16 cells (cell 0 blank)   8 u32 total size
+ *  12 u32 cells offset (32 bytes a cell)
+ *  16 u32 palette slots offset: 64 x u16 engine palette index shown in CRAM slot k (0xFFFF = none)
+ *  20 u32 quads offset: 1024 tiles x 4 flips x 4 quadrants name words (engine tile numbers)
+ *  24 u32 chunks offset: 512 chunks x 64 entries (MD_CE_* format, md_planes.h; engine chunk numbers)
+ *  28 u32 zero block offset (4096 zero words: the 68000 clears the planes from it)
+ *  32 u32 CRAM offset (64 Genesis colours at conversion time)
+ *  36 char[28] the stage ("folder/id")
+ * Plain C, no host dependencies. */
+#ifndef SGB_H
+#define SGB_H
+#include <stdint.h>
+#include "md_planes.h"
+
+#define SGB_MAGIC 0x53434D47u /* 'SCMG' */
+#define SGB_VERSION 1
+#define SGB_HEADER 64
+#define SGB_REC_MAX 6000      /* words: the frame buffer's 12 KB record area (a full reload is ~4,300) */
+#define SGB_NAME_A 0xC000
+#define SGB_NAME_B 0xE000
+
+typedef struct {
+    uint16_t *out;            /* record words */
+    int pos, max;
+    int groups, cntAt, cnt;
+    uint16_t last;
+    int overflow;
+} SgbOut;
+
+void sgb_out_begin(SgbOut *o, uint16_t *out, int max);
+void sgb_write(void *ctx, uint16_t addr, uint16_t word); /* MdWriteFn, ctx = SgbOut* */
+/* closes the record; returns its size in words (the length word included), -1 if it did not fit */
+int sgb_out_end(SgbOut *o, uint16_t vA, uint16_t vB, const int16_t *hsA, const int16_t *hsB, int lines,
+                const uint16_t *cramIdx, const uint16_t *cramCol, int ncram);
+
+/* engine colour (RGB565) -> Genesis CRAM word, as host/md_check.cpp's md_color */
+uint16_t sgb_md_color(uint16_t rgb565);
+
+/* PC model of the 68000 side (the test): applies one record. vram_w(ctx, addr, word) for name words,
+   hsA/hsB[lines] and vA/vB get the scroll, cram[64] the colour changes. Returns words consumed. */
+typedef void (*SgbVramFn)(void *ctx, uint16_t addr, uint16_t word);
+int sgb_apply(const uint16_t *rec, int lines, SgbVramFn vram_w, void *ctx, int16_t *hsA, int16_t *hsB, uint16_t *vA,
+              uint16_t *vB, uint16_t *cram);
+#endif

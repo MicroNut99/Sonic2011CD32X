@@ -4,7 +4,7 @@
 ENGINE  := ../engine
 SRCS    := $(wildcard $(ENGINE)/*.cpp) plat_host.cpp md_check.cpp
 OBJDIR  := obj$(if $(SH2CFG),_sh2cfg,)$(if $(DRAW),_sh2draw,)$(if $(SCREEN198),_ys198,)$(if $(ASAN),_asan,)$(if $(ALIGN),_align,)
-OBJS    := $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(SRCS))) $(OBJDIR)/md_planes.o $(OBJDIR)/md_record.o
+OBJS    := $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(SRCS))) $(OBJDIR)/md_planes.o $(OBJDIR)/md_record.o $(OBJDIR)/sgb.o
 CXXFLAGS := -std=c++17 -DSONICCD32X -O1 -g -Wall -Wno-unused -Wno-sign-compare -Wno-format-overflow -Wno-class-memaccess \
             -Wno-restrict -Wno-stringop-truncation -Wno-format-truncation -Wno-misleading-indentation -Wno-parentheses \
             -Wno-maybe-uninitialized -Wno-char-subscripts -Wno-array-bounds -Wno-stringop-overflow -Wno-unknown-pragmas -Wno-format-zero-length -Wno-unused-result
@@ -41,12 +41,15 @@ $(OBJDIR)/%.o: $(ENGINE)/%.cpp $(wildcard $(ENGINE)/*.hpp) | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 $(OBJDIR)/plat_host.o: plat_host.cpp $(ENGINE)/plat.hpp | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-$(OBJDIR)/md_check.o: md_check.cpp ../md/md_planes.h $(wildcard $(ENGINE)/*.hpp) | $(OBJDIR)
+$(OBJDIR)/md_check.o: md_check.cpp ../md/md_planes.h ../md/sgb.h $(wildcard $(ENGINE)/*.hpp) | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 # the plane streaming code is C (the 68000 compiles the same file)
 $(OBJDIR)/md_planes.o: ../md/md_planes.c ../md/md_planes.h | $(OBJDIR)
 	$(CC) -std=c99 -O1 -g -Wall $(if $(ASAN),-fsanitize=address,) -c $< -o $@
 $(OBJDIR)/md_record.o: ../md/md_record.c ../md/md_record.h ../md/md_planes.h | $(OBJDIR)
+	$(CC) -std=c99 -O1 -g -Wall $(if $(ASAN),-fsanitize=address,) -c $< -o $@
+# REV R1: the SH2 -> 68000 plane record (C, the SH2 compiles the same file)
+$(OBJDIR)/sgb.o: ../md/sgb.c ../md/sgb.h ../md/md_planes.h | $(OBJDIR)
 	$(CC) -std=c99 -O1 -g -Wall $(if $(ASAN),-fsanitize=address,) -c $< -o $@
 $(OBJDIR):
 	mkdir -p $@
@@ -62,7 +65,7 @@ $(OBJDIR)/test_reader.o: test_reader.cpp $(ENGINE)/plat.hpp | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # The config / bytecode parser check: tools/test_scd_report.sh
-CFG_OBJS := $(filter-out $(OBJDIR)/main.o $(OBJDIR)/plat_host.o $(OBJDIR)/md_check.o $(OBJDIR)/md_planes.o $(OBJDIR)/md_record.o,$(OBJS)) $(OBJDIR)/test_config.o
+CFG_OBJS := $(filter-out $(OBJDIR)/main.o $(OBJDIR)/plat_host.o $(OBJDIR)/md_check.o $(OBJDIR)/md_planes.o $(OBJDIR)/md_record.o $(OBJDIR)/sgb.o,$(OBJS)) $(OBJDIR)/test_config.o
 test_config: $(CFG_OBJS)
 	$(CXX) $(LDFLAGS) $(CFG_OBJS) -o $@
 $(OBJDIR)/test_config.o: test_config.cpp $(ENGINE)/plat.hpp | $(OBJDIR)

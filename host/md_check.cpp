@@ -12,6 +12,7 @@
 extern "C" {
 #include "../md/md_planes.h"
 #include "../md/md_record.h"
+#include "../md/sgb.h"
 }
 #include <algorithm>
 #include <functional>
@@ -648,6 +649,217 @@ int plane_pixel(uint16_t nameBase, int16_t hs, uint16_t vs, int x, int y)
     return (n >> 15) << 8 | ((n >> 13) & 3) << 4 | v;
 }
 
+// ---------------------------------------------------------------- REV R1: the act's Genesis data
+// and the SH2 -> 68000 record (md/sgb.h), proved here frame by frame:
+//   SCD32X_MDGEXPORT=dir  write dir/<folder>_<id>.MDG (the act's "SCMG" file) when the act is converted
+//   SCD32X_SGBTEST=1      every frame: stream both planes with md_planes.c from the MDG FILE's tables (as
+//                         the SH2 does), build the record (sgb_out_*), apply it to a second VRAM model
+//                         with sgb_apply (what the 68000 does) and compare that picture with the engine's
+std::vector<uint8_t> mdg_build()
+{
+    std::vector<uint8_t> h(SGB_HEADER, 0);
+    h[0] = 'S', h[1] = 'C', h[2] = 'M', h[3] = 'G';
+    set16(h, 4, SGB_VERSION);
+    set16(h, 6, (unsigned)(st.cells.size() / 32));
+    set32(h, 12, (uint32_t)h.size());
+    h.insert(h.end(), st.cells.begin(), st.cells.end());
+    set32(h, 16, (uint32_t)h.size());
+    for (int l = 0; l < 4; ++l)
+        for (int k = 0; k < 16; ++k) {
+            int idx = st.slotIndex[l][k];
+            put16(h, k && idx >= 0 ? (unsigned)idx : 0xFFFF);
+        }
+    set32(h, 20, (uint32_t)h.size());
+    for (int i = 0; i < 1024 * 16; ++i) put16(h, st.quads[i]);
+    set32(h, 24, (uint32_t)h.size());
+    for (int i = 0; i < 512 * 64; ++i) put16(h, st.chunks[i]);
+    set32(h, 28, (uint32_t)h.size());
+    for (int i = 0; i < 4096; ++i) put16(h, 0);
+    set32(h, 32, (uint32_t)h.size());
+    uint16_t c[64];
+    cram_now(c);
+    for (int i = 0; i < 64; ++i) put16(h, c[i]);
+    set32(h, 8, (uint32_t)h.size());
+    std::string k = st.key;
+    for (size_t i = 0; i < k.size() && i < 27; ++i) h[36 + i] = (uint8_t)k[i];
+    return h;
+}
+
+struct Sgb {
+    bool test = false, testInit = false;
+    std::string exportDir, key;
+    std::vector<uint16_t> quads, chunks, slots, cram0;
+    std::vector<uint8_t> vram;
+    MdPlane pA, pB;
+    int bLayer = -1;
+    uint16_t sent[64], shown[64];
+    long frames = 0, different = 0, pixels = 0, overflow = 0, words = 0, maxWords = 0, waterFrames = 0, bankPixels = 0;
+    long exported = 0;
+} sgb;
+
+void sgb_vram_w(void *, uint16_t addr, uint16_t word)
+{
+    sgb.vram[addr]     = (uint8_t)(word >> 8);
+    sgb.vram[addr + 1] = (uint8_t)word;
+}
+uint16_t be16(const std::vector<uint8_t> &b, size_t at) { return (uint16_t)(b[at] << 8 | b[at + 1]); }
+uint32_t be32(const std::vector<uint8_t> &b, size_t at) { return (uint32_t)be16(b, at) << 16 | be16(b, at + 2); }
+
+void sgb_stage()
+{
+    std::vector<uint8_t> f = mdg_build();
+    if (!sgb.exportDir.empty()) {
+        std::string name = st.key;
+        std::replace(name.begin(), name.end(), '/', '_');
+        std::string path = sgb.exportDir + "/" + name + ".MDG";
+        FILE *o          = fopen(path.c_str(), "wb");
+        if (o) {
+            fwrite(f.data(), 1, f.size(), o);
+            fclose(o);
+            sgb.exported++;
+        }
+        md_log("SGB exported %s: %d bytes, %d cells", path.c_str(), (int)f.size(), (int)be16(f, 6));
+    }
+    if (!sgb.test)
+        return;
+    // the tables FROM THE FILE (big-endian), as the SH2 and the 68000 read them
+    sgb.key = st.key;
+    sgb.quads.resize(1024 * 16);
+    sgb.chunks.resize(512 * 64);
+    sgb.slots.resize(64);
+    sgb.cram0.resize(64);
+    for (int i = 0; i < 1024 * 16; ++i) sgb.quads[i] = be16(f, be32(f, 20) + 2 * i);
+    for (int i = 0; i < 512 * 64; ++i) sgb.chunks[i] = be16(f, be32(f, 24) + 2 * i);
+    for (int i = 0; i < 64; ++i) sgb.slots[i] = be16(f, be32(f, 16) + 2 * i), sgb.cram0[i] = be16(f, be32(f, 32) + 2 * i);
+    sgb.vram.assign(0x10000, 0);
+    int ncells = be16(f, 6);
+    for (int i = 0; i < ncells * 32; ++i) sgb.vram[i] = f[be32(f, 12) + i]; // the 68000's copy_vram of the cells
+    for (int i = 0; i < 64; ++i) sgb.sent[i] = sgb.shown[i] = sgb.cram0[i];
+    md_plane_reset(&sgb.pA);
+    md_plane_reset(&sgb.pB);
+    sgb.bLayer = -1;
+}
+
+int sgb_pixel(uint16_t nameBase, int16_t hs, uint16_t vs, int x, int y)
+{
+    const std::vector<uint8_t> &v = sgb.vram;
+    int py = (y + vs) & 255, px = (x - hs) & 511;
+    int at     = nameBase + ((py >> 3) * 64 + (px >> 3)) * 2;
+    uint16_t n = (uint16_t)(v[at] << 8 | v[at + 1]);
+    int cx = px & 7, cy = py & 7;
+    if (n & 0x0800)
+        cx = 7 - cx;
+    if (n & 0x1000)
+        cy = 7 - cy;
+    uint8_t b = v[(n & 0x7FF) * 32 + cy * 4 + (cx >> 1)];
+    int c     = cx & 1 ? b & 15 : b >> 4;
+    if (!c)
+        return 0;
+    return (n >> 15) << 8 | ((n >> 13) & 3) << 4 | c;
+}
+
+// one frame the way the console does it: SH2 (record) -> 68000 (apply) -> VDP model
+void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, std::function<bool(int, bool)> shows)
+{
+    if (!sgb.test || sgb.key != st.key)
+        return;
+    static uint16_t recw[SGB_REC_MAX];
+    int16_t hsA[MAXLINES], hsB[MAXLINES];
+    uint16_t vA = 0, vB = 0;
+    auto layer = [&](int l, int slots) {
+        MdLayer L;
+        L.chunks       = sgb.chunks.data();
+        L.quads        = sgb.quads.data();
+        L.layout       = stageLayouts[l].tiles;
+        L.layoutStride = 0x100;
+        L.wChunks      = stageLayouts[l].xsize;
+        L.hChunks      = stageLayouts[l].ysize;
+        L.showBack     = shows(slots, false);
+        L.showFront    = shows(slots, true);
+        return L;
+    };
+    SgbOut o;
+    sgb_out_begin(&o, recw, SGB_REC_MAX);
+    MdLayer LA = layer(0, fgSlots);
+    md_plane_update(&sgb.pA, &LA, SGB_NAME_A, rec[fgSlot].tileYPos, rec[fgSlot].x, SCREEN_YSIZE, SCREEN_XSIZE, hsA, &vA, sgb_write, &o);
+    if (bgLayer >= 0) {
+        if (bgLayer != sgb.bLayer) {
+            md_plane_reset(&sgb.pB);
+            sgb.bLayer = bgLayer;
+        }
+        MdLayer LB = layer(bgLayer, bgSlots);
+        md_plane_update(&sgb.pB, &LB, SGB_NAME_B, rec[bgSlot].tileYPos, rec[bgSlot].x, SCREEN_YSIZE, SCREEN_XSIZE, hsB, &vB, sgb_write, &o);
+    }
+    else
+        for (int i = 0; i < SCREEN_YSIZE; ++i) hsB[i] = 0;
+    // palette: the engine's colours behind each CRAM slot, sent when they change (fades, cycles)
+    uint16_t cIdx[64], cCol[64];
+    int nc = 0;
+    for (int i = 0; i < 64; ++i) {
+        if (sgb.slots[i] == 0xFFFF)
+            continue;
+        uint16_t c = sgb_md_color(fullPalette[0][sgb.slots[i]]);
+        if (c != sgb.sent[i]) {
+            cIdx[nc]   = (uint16_t)i;
+            cCol[nc++] = c;
+            sgb.sent[i] = c;
+        }
+    }
+    int n = sgb_out_end(&o, vA, vB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc);
+    if (n < 0) { // as the SH2: too big - both planes from scratch next frame
+        sgb.overflow++;
+        md_plane_reset(&sgb.pA);
+        md_plane_reset(&sgb.pB);
+        return;
+    }
+    sgb.words += n;
+    sgb.maxWords = std::max(sgb.maxWords, (long)n);
+    // the 68000
+    int16_t gA[MAXLINES], gB[MAXLINES];
+    uint16_t gvA, gvB;
+    int used = sgb_apply(recw, SCREEN_YSIZE, sgb_vram_w, NULL, gA, gB, &gvA, &gvB, sgb.shown);
+    if (used != n)
+        md_log("SGB frame %u: record %d words, the 68000 model read %d", md_frame_number(), n, used);
+    // the picture, compared with the engine's (in 9-bit colour, bank 0: water banks are R4)
+    long diff = 0;
+    bool water = false;
+    for (int y = 0; y < SCREEN_YSIZE; ++y) {
+        if (gfxLineBuffer[y])
+            water = true;
+        for (int x = 0; x < SCREEN_XSIZE; ++x) {
+            int a = sgb_pixel(SGB_NAME_A, gA[y], gvA, x, y);
+            int b = bgLayer >= 0 ? sgb_pixel(SGB_NAME_B, gB[y], gvB, x, y) : 0;
+            int pix = (a && (a >> 8 || !(b >> 8))) ? a : b ? b : a;
+            int model = -1;
+            if (pix) {
+                int k = ((pix >> 4) & 3) * 16 + (pix & 15);
+                if (gfxLineBuffer[y] == 0) { // bank 0: the colour the 68000 put into CRAM
+                    uint16_t w = sgb.shown[k];
+                    model      = ((w >> 1) & 7) << 6 | ((w >> 5) & 7) << 3 | ((w >> 9) & 7);
+                }
+                else { // another palette bank on this line (water, R4): the engine's colour for the same slot
+                    model = sgb.slots[k] == 0xFFFF ? -2 : rgb9_of565(fullPalette[gfxLineBuffer[y]][sgb.slots[k]]);
+                    if (sgb.slots[k] != 0xFFFF && rgb9_of565(fullPalette[gfxLineBuffer[y]][sgb.slots[k]]) != rgb9_of565(fullPalette[0][sgb.slots[k]]))
+                        sgb.bankPixels++; // what one CRAM would show wrong here
+                }
+            }
+            ushort r = refBuf[y * GFX_LINESIZE + x];
+            int ref  = r == sentinel ? -1 : rgb9_of565(r);
+            if (ref != model)
+                diff++;
+        }
+    }
+    sgb.frames++;
+    if (water)
+        sgb.waterFrames++;
+    if (diff) {
+        sgb.different++;
+        sgb.pixels += diff;
+        if (sgb.different <= 5)
+            md_log("SGB frame %u: %ld pixels different%s", md_frame_number(), diff, water ? " (water lines)" : "");
+    }
+}
+
 void compare_frame()
 {
     // which layers are drawn, and in which slots (only per-line H scroll layers are supported)
@@ -701,6 +913,7 @@ void compare_frame()
         maxWordsB = std::max(maxWordsB, (long)planeB.written);
         overflowRows += planeB.overflow;
     }
+    sgb_frame(fgSlot, fgSlots, bgLayer, bgLayer >= 0 ? __builtin_ctz(bgSlots) : 0, bgSlots, shows); // REV R1
     // render the model and compare (backdrop = nothing drawn)
     long diff = 0;
     static std::vector<unsigned char> img;
@@ -834,6 +1047,10 @@ void md_check_init()
         if ((v = getenv("SCD32X_MDEXPORT_FORMAT")))
             ex.format = atoi(v) == 2 ? 2 : 3;
     }
+    if (enabled && (v = getenv("SCD32X_MDGEXPORT")) && *v) // REV R1
+        sgb.exportDir = v;
+    if (enabled && (v = getenv("SCD32X_SGBTEST")) && *v == '1')
+        sgb.test = true;
     if (enabled) {
         layerBuf = new ushort[GFX_LINESIZE * SCREEN_YSIZE];
         refBuf   = new ushort[GFX_LINESIZE * SCREEN_YSIZE];
@@ -1058,6 +1275,8 @@ void md_check_frame()
         if (ex.active)
             export_stop("the stage changed");
         convert_stage();
+        if (st.ok && (sgb.test || !sgb.exportDir.empty()))
+            sgb_stage(); // REV R1
     }
     if (!st.ok)
         return;
@@ -1084,4 +1303,9 @@ void md_check_summary()
                wordsA / framesCompared, maxWordsA, wordsB / framesCompared, maxWordsB, overflowRows);
     md_log("MDCHECK stage %s: %d palette lines, %d cells, animated-tile updates %d (%d new cells), layout changes %d", st.key.c_str(), st.lines,
            (int)st.cells.size() / 32, st.animUpdates, st.animCells, st.layoutChanges);
+    if (sgb.test) // REV R1
+        md_log("SGB summary: %ld frames through record + 68000 model, %ld with differences (%ld pixels), %ld with water lines, "
+               "%ld records too big; record words avg %ld max %ld (limit %d); pixels whose colour needs a second palette bank: %ld",
+               sgb.frames, sgb.different, sgb.pixels, sgb.waterFrames, sgb.overflow, sgb.frames ? sgb.words / sgb.frames : 0, sgb.maxWords,
+               SGB_REC_MAX, sgb.bankPixels);
 }
