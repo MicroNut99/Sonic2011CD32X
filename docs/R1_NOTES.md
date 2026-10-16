@@ -136,3 +136,5 @@ build). The loader's whole-image check still runs at boot.
 | R1N | stopped at `STATE:101` after the L1S000 load. R1H rebuilt unchanged (same disc label R1H): **got through** (rows 12-13 as before). So R1N's two changes - which do not run before that point - made the difference: the stall depends on how the code is laid out, a latent fault on the game side. From here: one change per disc against R1H. |
 | R1O | (not burned - dropped) |
 | R1P | **R1G exactly** (the last disc with level graphics; R1H/R1O were text-only diagnosis discs) + one engine change: the SH2 clears COMM4 before switching the planes on. |
+| R1P | R1G + the SH2 clearing COMM4 (one statement, reached only after the stop): stopped at `STATE:101` after the L1S000 load, twice, 10 minutes each. |
+| R1Q | **R1G + no double load**, nothing else. Boot stack R1G exactly. Game data: the disc's `L0S000.IMG` is Palmtree Panic 1's image (copied from `L1S000.IMG`); the engine treats its start scene as file 0x100, so it finds it already in the cart. One 1.9 MB scene load instead of two. |

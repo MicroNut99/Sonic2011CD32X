@@ -234,9 +234,6 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
         return;
     }
     STATE(0x5C65); /* R1C: the MDG is in the cart; command 68 next */
-    SC_COMM4 = 0; /* R1P: COMM4 still held the Sub-CPU's start-up check 0x1234 - the 68000 took it as a
-                     record id and copied frame-buffer junk (R1H: ID 1234, REC 0004 0004 0006 ...; R1G's dot
-                     in every blank tile). Cleared here by the SH2, before the planes go on. */
     if (sgb_cmd(1, SGB_CART_OFFSET) != 1) {
         STATE(0x5C63);
         return;
@@ -566,6 +563,19 @@ void plat_stage_loading()
     planes_off(); /* REV R1: the loading lines need the Genesis text again */
 #endif
     unsigned int file = 0x100 + ((unsigned int)activeStageList << 8) + (unsigned int)stageListPosition;
+#if defined(SCD32X_START_LIST)
+    /* R1Q: no double load. The boot stack loads disc file 0x100 ("L0S000.IMG") as the first scene image. On a
+       disc that starts in another scene, that file holds the START scene's image instead (game data, see
+       docs/R1_NOTES.md), so the start scene IS file 0x100 and the engine finds it already in the cart; the
+       title, if it is ever asked for, takes the start scene's number. Boot stack unchanged. */
+    {
+        unsigned int startFile = 0x100 + ((unsigned int)SCD32X_START_LIST << 8) + (unsigned int)SCD32X_START_STAGE;
+        if (file == startFile)
+            file = 0x100;
+        else if (file == 0x100)
+            file = startFile;
+    }
+#endif
     const unsigned int *h = (const unsigned int *)CART_STAGE;
     if (!haveOffsets) { /* the layout the engine bound at start-up (the first scene, loaded by the loader) */
         for (int k = 0; k < (int)h[2] && k < 32; ++k) firstOffsets[k] = h[3 + 5 * k];
