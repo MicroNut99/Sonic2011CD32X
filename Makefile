@@ -1,0 +1,104 @@
+# PORT32X: round S3b - the plane demo disc (Sega CD + 32X, boots from CD).
+#   make -C cd32x DATA=../runs/scene0/MDPLANE.dat
+# -> cd32x/build/SCDPLANE.iso (and .bin/.cue for emulators). Kobo's rules for Kobo's files
+# (kobo/, unchanged copies); our files: sub_main.c, sh2_splash.c, splash.s, files.s, ../md/*.
+# STATUS=1: the Genesis demo shows its status row (frame, overruns, peak words, peak line).
+ifdef GENDEV
+ROOTDIR = $(GENDEV)
+else
+ROOTDIR = /opt/toolchains/sega
+endif
+M68K     = $(ROOTDIR)/m68k-elf/bin/m68k-elf-
+SH       = $(ROOTDIR)/sh-elf/bin/sh-elf-
+LDSCRIPTSDIR = $(ROOTDIR)/ldscripts
+BOOTBLOCK    = $(ROOTDIR)/bootblocks/US_BOOT.BIN
+LIBPATH  = -L$(ROOTDIR)/m68k-elf/lib -L$(ROOTDIR)/m68k-elf/lib/gcc/m68k-elf/4.6.2 -L$(ROOTDIR)/m68k-elf/m68k-elf/lib
+INCPATH  = -I. -Ikobo -I$(ROOTDIR)/m68k-elf/include -I$(ROOTDIR)/m68k-elf/m68k-elf/include
+CCFLAGS  = -m68000 -Wall -Ofast -c -fomit-frame-pointer
+HWFLAGS  = -m68000 -Wall -O1 -c -fomit-frame-pointer
+ASFLAGS  = -m68000 --register-prefix-optional
+LIBS     = $(LIBPATH) -lc -lgcc -lnosys
+SH2FLAGS = -c -std=c11 -m2 -mb -O2 -Wall -ffunction-sections -fdata-sections -D__32X__ -DMARS -Ikobo/sh2
+STATUS  ?= 0
+MDFLAGS  = -m68000 -std=c99 -Wall -O2 -c -fomit-frame-pointer -I../md -DMDP_STATUS=$(STATUS)
+DATA    ?= ../runs/scene0/MDPLANE.dat
+B        = build
+
+SUBOBJS = $(B)/crt0.o $(B)/sub_main.o $(B)/hw_md.o $(B)/scd.o $(B)/scd_fs.o $(B)/cd.o $(B)/kos.o $(B)/cdfs.o $(B)/sub_stubs.o $(B)/files.o
+
+all: $(B)/SCDPLANE.cue
+
+$(B):
+	mkdir -p $(B) $(B)/disc
+
+# ---- SH2: Kobo's start-up + sh2_splash.c + the splash (splash/SPLASH.SPL; a new image:
+#      make SPLASH_IMAGE=path/to/image.jpg - needs Pillow)
+$(B)/sh2_crt0.o: kobo/sh2/crt0.s | $(B)
+	$(SH)gcc $(SH2FLAGS) $< -o $@
+$(B)/sh2_splash.o: sh2_splash.c | $(B)
+	$(SH)gcc $(SH2FLAGS) $< -o $@
+$(B)/SPLASH.SPL: ../splash/SPLASH.SPL $(SPLASH_IMAGE) | $(B)
+	if [ -n "$(SPLASH_IMAGE)" ]; then python3 ../tools/make_splash.py "$(SPLASH_IMAGE)" $@; else cp ../splash/SPLASH.SPL $@; fi
+$(B)/splash.o: splash.s $(B)/SPLASH.SPL
+	$(SH)gcc $(SH2FLAGS) $< -o $@
+$(B)/SCDSH2.BIN: $(B)/sh2_crt0.o $(B)/sh2_splash.o $(B)/splash.o
+	$(SH)ld -EB -T kobo/sh2/sh2_sdram.ld -nostdlib -Map=$(B)/sh2.map $^ -o $(B)/sh2.elf
+	$(SH)objcopy -O binary $(B)/sh2.elf $@
+
+# ---- Sub-CPU: Kobo's files + sub_main.c
+$(B)/crt0.o: kobo/crt0.s | $(B)
+	$(M68K)as $(ASFLAGS) $(INCPATH) $< -o $@
+$(B)/hw_md.o: kobo/hw_md.s kobo/font.s | $(B)
+	$(M68K)as $(ASFLAGS) $(INCPATH) $< -o $@
+$(B)/kos.o: kobo/kos.s | $(B)
+	$(M68K)as $(ASFLAGS) $(INCPATH) $< -o $@
+$(B)/cdfs.o: kobo/cdfs.s | $(B)
+	$(M68K)as $(ASFLAGS) $(INCPATH) $< -o $@
+$(B)/scd.o: kobo/scd.c | $(B)
+	$(M68K)gcc $(CCFLAGS) $(INCPATH) $< -o $@
+$(B)/scd_fs.o: kobo/scd_fs.c | $(B)
+	$(M68K)gcc $(CCFLAGS) $(INCPATH) $< -o $@
+$(B)/sub_stubs.o: kobo/sub_stubs.c | $(B)
+	$(M68K)gcc $(CCFLAGS) $(INCPATH) $< -o $@
+$(B)/sub_main.o: sub_main.c | $(B)
+	$(M68K)gcc $(HWFLAGS) $(INCPATH) $< -o $@
+$(B)/crt.o: kobo/crt.s | $(B)
+	$(M68K)as $(ASFLAGS) $(INCPATH) $< -o $@
+$(B)/crt.bin: $(B)/crt.o $(B)/sub_stubs.o
+	$(M68K)ld -Ttext 0x6000 $^ -o $(B)/crt.elf
+	$(M68K)objcopy -O binary $(B)/crt.elf $@
+$(B)/cd.o: kobo/cd.s $(B)/crt.bin
+	$(M68K)as $(ASFLAGS) $(INCPATH) -I$(B) $< -o $@
+$(B)/files.o: files.s $(B)/SCDSH2.BIN
+	$(M68K)as $(ASFLAGS) $(INCPATH) $< -o $@
+$(B)/disc/APP.BIN: $(SUBOBJS)
+	$(M68K)gcc -T $(LDSCRIPTSDIR)/cd.ld -Wl,-Map=$(B)/sub.map -nostdlib $(SUBOBJS) $(LIBS) -o $(B)/sub.elf
+	$(M68K)objcopy -O binary $(B)/sub.elf $(B)/sub.bin
+	dd if=$(B)/sub.bin of=$@ bs=2048 conv=sync
+
+# ---- Genesis demo program: md/mdplane_* + md/md_planes.c, data appended
+$(B)/mdplane_crt.o: ../md/mdplane_crt.s | $(B)
+	$(M68K)as $(ASFLAGS) $< -o $@
+$(B)/mdplane_main.o: ../md/mdplane_main.c ../md/md_planes.h ../md/mdplane_data.h | $(B)
+	$(M68K)gcc $(MDFLAGS) $< -o $@
+$(B)/md_planes.o: ../md/md_planes.c ../md/md_planes.h | $(B)
+	$(M68K)gcc $(MDFLAGS) $< -o $@
+$(B)/mdplane.bin: $(B)/mdplane_crt.o $(B)/mdplane_main.o $(B)/md_planes.o ../md/mdplane.ld
+	@# link through gcc (as Kobo's Sub-CPU link): it knows its own libgcc (68000 version with
+	@# -m68000) - the 4.6.2 path in LIBPATH is from an older toolchain (S3b2 fix)
+	$(M68K)gcc -m68000 -nostdlib -T ../md/mdplane.ld -Wl,-Map=$(B)/mdplane.map $(B)/mdplane_crt.o $(B)/mdplane_main.o $(B)/md_planes.o -lgcc -o $(B)/mdplane.elf
+	$(M68K)objcopy -O binary $(B)/mdplane.elf $@
+$(B)/disc/MDPLANE.BIN: $(B)/mdplane.bin $(DATA)
+	python3 ../tools/make_mdplane.py $< $$($(M68K)nm $(B)/mdplane.elf | sed -n 's/^\([0-9a-fA-F]*\) . __blob_start$$/\1/p') $(DATA) $@
+
+# ---- the disc
+$(B)/SCDPLANE.iso: $(B)/disc/APP.BIN $(B)/disc/MDPLANE.BIN
+	genisoimage -sysid "SEGA SEGACD" -volid "SCDPLANE" -generic-boot $(BOOTBLOCK) -full-iso9660-filenames -o $@ $(B)/disc
+$(B)/SCDPLANE.cue: $(B)/SCDPLANE.iso
+	python3 kobo/iso2bin.py $< $(B)/SCDPLANE.bin
+	printf 'FILE "SCDPLANE.bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n' > $@
+	@echo "disc: $(B)/SCDPLANE.iso and $(B)/SCDPLANE.bin + .cue"
+
+clean:
+	rm -rf $(B)
+.PHONY: all clean

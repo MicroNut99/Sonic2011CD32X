@@ -1,0 +1,24 @@
+# generated / not ours to publish
+engine/
+RSDKv3-Decompilation-master
+gamedata/
+Sonic_CD/
+runs/
+host/obj*/
+host/soniccd_host*
+host/test_*
+!host/test_*.c
+host/cart_build
+host/cart_verify_host
+cd32x/build*/
+*.o
+*.elf
+*.32x
+*.iso
+*.bin
+*.cue
+*.rsdk
+*.ogg
+*.wav
+__pycache__/
+_transfer/

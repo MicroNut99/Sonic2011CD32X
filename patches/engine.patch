@@ -1,0 +1,3647 @@
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Animation.cpp engine/Animation.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Animation.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Animation.cpp	2026-10-05 20:33:20.930807830 +0000
+@@ -1,14 +1,30 @@
+ #include "RetroEngine.hpp"
+ 
++#if SCD32X_CARTDATA
++AnimationFile (&animationFileList)[ANIFILE_COUNT] = *(AnimationFile(*)[ANIFILE_COUNT])plat_cart_data(SCD_CART_ANIMFILES); // PORT32X S5j: cart image (filled while loading)
++#else
+ AnimationFile animationFileList[ANIFILE_COUNT];
++#endif
+ int animationFileCount = 0;
+ 
++#if SCD32X_CARTDATA
++SpriteFrame (&scriptFrames)[SPRITEFRAME_COUNT] = *(SpriteFrame(*)[SPRITEFRAME_COUNT])plat_cart_data(SCD_CART_SCRIPTFRAMES); // PORT32X S5d: cart image
++#else
+ SpriteFrame scriptFrames[SPRITEFRAME_COUNT];
++#endif
+ int scriptFrameCount = 0;
+ 
++#if SCD32X_CARTDATA
++SpriteFrame (&animFrames)[SPRITEFRAME_COUNT] = *(SpriteFrame(*)[SPRITEFRAME_COUNT])plat_cart_data(SCD_CART_ANIMFRAMES); // PORT32X S5d: cart image
++#else
+ SpriteFrame animFrames[SPRITEFRAME_COUNT];
++#endif
+ int animFrameCount = 0;
++#if SCD32X_CARTDATA
++SpriteAnimation (&animationList)[ANIMATION_COUNT] = *(SpriteAnimation(*)[ANIMATION_COUNT])plat_cart_data(SCD_CART_ANIMLIST); // PORT32X S5d: cart image
++#else
+ SpriteAnimation animationList[ANIMATION_COUNT];
++#endif
+ int animationCount = 0;
+ Hitbox hitboxList[HITBOX_COUNT];
+ int hitboxCount = 0;
+@@ -40,14 +56,28 @@
+         }
+ 
+         byte animCount = 0;
++#if SCD32X_CARTDATA
++        if (scdStageLoaded) // PORT32X S5d: frames loaded during play would be missing from the cart image
++            plat_log("PORT32X: an animation file was loaded after the stage load (not in the cart image)");
++#endif
+         FileRead(&animCount, 1);
++#if SCD32X_CARTDATA
++        static AnimationFile scdAnimFileSink; // PORT32X S5j: the list is in the cart image
++        AnimationFile *animFile = &scdAnimFileSink;
++#else
+         AnimationFile *animFile = &animationFileList[animationFileCount];
++#endif
+         animFile->animCount     = animCount;
+         animFile->aniListOffset = animationCount;
+ 
+         // Read animations
+         for (int a = 0; a < animCount; ++a) {
++#if SCD32X_CARTDATA
++            static SpriteAnimation scdAnimSink; // PORT32X S5d: already in the cart image - parse, store nothing
++            SpriteAnimation *anim = (animationCount++, &scdAnimSink);
++#else
+             SpriteAnimation *anim = &animationList[animationCount++];
++#endif
+             anim->frameListOffset = animFrameCount;
+             FileRead(&fileBuffer, 1);
+             FileRead(anim->name, fileBuffer);
+@@ -58,7 +88,12 @@
+             FileRead(&anim->rotationStyle, 1);
+ 
+             for (int j = 0; j < anim->frameCount; ++j) {
++#if SCD32X_CARTDATA
++                static SpriteFrame scdFrameSink; // PORT32X S5d
++                SpriteFrame *frame = (animFrameCount++, &scdFrameSink);
++#else
+                 SpriteFrame *frame = &animFrames[animFrameCount++];
++#endif
+                 FileRead(&frame->sheetID, 1);
+                 frame->sheetID = sheetIDs[frame->sheetID];
+                 FileRead(&frame->hitboxID, 1);
+@@ -101,11 +136,15 @@
+ }
+ void ClearAnimationData()
+ {
+-    for (int f = 0; f < SPRITEFRAME_COUNT; ++f) MEM_ZERO(scriptFrames[f]);
+-    for (int f = 0; f < SPRITEFRAME_COUNT; ++f) MEM_ZERO(animFrames[f]);
++    if (!SCD32X_CARTDATA) { // PORT32X S5d: cart image
++        for (int f = 0; f < SPRITEFRAME_COUNT; ++f) MEM_ZERO(scriptFrames[f]);
++        for (int f = 0; f < SPRITEFRAME_COUNT; ++f) MEM_ZERO(animFrames[f]);
++    }
+     for (int h = 0; h < HITBOX_COUNT; ++h) MEM_ZERO(hitboxList[h]);
+-    for (int a = 0; a < ANIMATION_COUNT; ++a) MEM_ZERO(animationList[a]);
+-    for (int a = 0; a < ANIFILE_COUNT; ++a) MEM_ZERO(animationFileList[a]);
++    if (!SCD32X_CARTDATA) // PORT32X S5d: cart image
++        for (int a = 0; a < ANIMATION_COUNT; ++a) MEM_ZERO(animationList[a]);
++    if (!SCD32X_CARTDATA) // PORT32X S5j: cart image
++        for (int a = 0; a < ANIFILE_COUNT; ++a) MEM_ZERO(animationFileList[a]);
+ 
+     scriptFrameCount   = 0;
+     animFrameCount     = 0;
+@@ -120,6 +159,26 @@
+     StrCopy(path, "Data/Animations/");
+     StrAdd(path, filePath);
+ 
++#if SCD32X_CARTDATA
++    // PORT32X S5j/S5k: the list itself is in the cart image (it already holds this load's files).
++    // Which of them this load has seen so far is animationFileCount (RAM, reset by
++    // ClearAnimationData) - so the original's order is kept exactly. A new file still goes through
++    // LoadAnimationFile: it loads the HITBOXES and SPRITE SHEETS (RAM); the cart tables are parsed
++    // into sinks. (S5j skipped that call - every object lost its hitboxes.)
++    for (int a = 0; a < animationFileCount; ++a)
++        if (StrComp(animationFileList[a].fileName, filePath))
++            return &animationFileList[a];
++    if (animationFileCount >= 0x100)
++        return NULL;
++    {
++        int a = animationFileCount;
++        if (!StrComp(animationFileList[a].fileName, filePath))
++            plat_log("PORT32X: an animation file is not in the cart image (or not in its order)");
++        LoadAnimationFile(path);
++        ++animationFileCount;
++        return &animationFileList[a];
++    }
++#else
+     // If matching anim is found return that, otherwise load a new anim
+     for (int a = 0; a < 0x100; ++a) {
+         if (StrLength(animationFileList[a].fileName) <= 0) {
+@@ -132,6 +191,7 @@
+             return &animationFileList[a];
+     }
+     return NULL;
++#endif
+ }
+ 
+ void ProcessObjectAnimation(void *objScr, void *ent)
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Animation.hpp engine/Animation.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Animation.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Animation.hpp	2026-10-05 20:19:32.264105964 +0000
+@@ -44,15 +44,31 @@
+     sbyte bottom[HITBOX_DIR_COUNT];
+ };
+ 
++#if SCD32X_CARTDATA
++extern AnimationFile (&animationFileList)[ANIFILE_COUNT]; // PORT32X S5j
++#else
+ extern AnimationFile animationFileList[ANIFILE_COUNT];
++#endif
+ extern int animationFileCount;
+ 
++#if SCD32X_CARTDATA
++extern SpriteFrame (&scriptFrames)[SPRITEFRAME_COUNT]; // PORT32X S5d
++#else
+ extern SpriteFrame scriptFrames[SPRITEFRAME_COUNT];
++#endif
+ extern int scriptFrameCount;
+ 
++#if SCD32X_CARTDATA
++extern SpriteFrame (&animFrames)[SPRITEFRAME_COUNT]; // PORT32X S5d
++#else
+ extern SpriteFrame animFrames[SPRITEFRAME_COUNT];
++#endif
+ extern int animFrameCount;
++#if SCD32X_CARTDATA
++extern SpriteAnimation (&animationList)[ANIMATION_COUNT]; // PORT32X S5d
++#else
+ extern SpriteAnimation animationList[ANIMATION_COUNT];
++#endif
+ extern int animationCount;
+ extern Hitbox hitboxList[HITBOX_COUNT];
+ extern int hitboxCount;
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Audio.cpp engine/Audio.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Audio.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Audio.cpp	2026-10-06 01:43:40.486886226 +0000
+@@ -1,7 +1,9 @@
+ #include "RetroEngine.hpp"
+ #include <cmath>
++#if RETRO_PLATFORM != RETRO_SCD32X // PORT32X: unused; iostream adds the C++ stream library, thread needs an OS
+ #include <iostream>
+ #include <thread>
++#endif
+ 
+ int globalSFXCount = 0;
+ int stageSFXCount  = 0;
+@@ -16,7 +18,7 @@
+ bool musicEnabled;
+ int musicStatus;
+ TrackInfo musicTracks[TRACK_COUNT];
+-SFXInfo sfxList[SFX_COUNT];
++SFXInfo sfxList[SCD32X_SMALL ? 1 : SFX_COUNT]; // PORT32X S7b: no sample data on the SH2 (PWM later)
+ 
+ ChannelInfo sfxChannels[CHANNEL_COUNT];
+ 
+@@ -47,6 +49,9 @@
+ int InitAudioPlayback()
+ {
+     StopAllSfx(); //"init"
++#if RETRO_PLATFORM == RETRO_SCD32X
++    audioEnabled = true; // PORT32X: the platform layer always has sound (CD tracks + mixer)
++#endif
+ #if RETRO_USING_SDL1 || RETRO_USING_SDL2
+     SDL_AudioSpec want;
+     want.freq     = AUDIO_FREQUENCY;
+@@ -180,6 +185,7 @@
+     for (int i = 0; i < CHANNEL_COUNT; ++i) sfxChannels[i].sfxID = -1;
+ }
+ 
++#if RETRO_USING_VORBIS // PORT32X: no Ogg streams on the 32X
+ size_t readVorbis(void *mem, size_t size, size_t nmemb, void *ptr)
+ {
+     StreamFile *file = (StreamFile *)ptr;
+@@ -213,6 +219,7 @@
+     return file->filePos;
+ }
+ int closeVorbis(void *ptr) { return 1; }
++#endif
+ 
+ void ProcessMusicStream(Sint32 *stream, size_t bytes_wanted)
+ {
+@@ -322,6 +329,8 @@
+ 
+ void ProcessAudioPlayback(void *userdata, Uint8 *stream, int len)
+ {
++    if (SCD32X_SMALL) // PORT32X S7b: no sound on the SH2 yet (PWM later)
++        return;
+     (void)userdata; // Unused
+ 
+     if (!audioEnabled)
+@@ -551,6 +560,19 @@
+ }
+ #endif
+ 
++#if RETRO_PLATFORM == RETRO_SCD32X
++// PORT32X: music is a CD audio track. The platform layer maps the file name
++// (Data/Music/xxx.ogg) to a track number and starts it.
++void LoadMusic()
++{
++    TrackInfo *track = &musicTracks[currentMusicTrack];
++    plat_music_play(track->fileName, track->trackLoop, track->loopPoint);
++    musicStatus       = MUSIC_PLAYING;
++    masterVolume      = MAX_VOLUME;
++    trackID           = currentMusicTrack;
++    currentMusicTrack = -1;
++}
++#else
+ void LoadMusic()
+ {
+     currentStreamIndex++;
+@@ -627,6 +649,7 @@
+     }
+     UnlockAudioDevice();
+ }
++#endif
+ 
+ void SetMusicTrack(char *filePath, byte trackID, bool loop, uint loopPoint)
+ {
+@@ -678,13 +701,56 @@
+     StrCopy(fullPath, "Data/SoundFX/");
+     StrAdd(fullPath, filePath);
+ 
++#if SCD32X_SMALL
++    // PORT32X S7a2/S7b: no sample data on the SH2 - its sound effects come from the cart for the
++    // PWM later. The WAV is not even opened (so it is not in the stage's cart pack)
++    return;
++#endif
+     if (LoadFile(fullPath, &info)) {
+         byte *sfx = new byte[info.vFileSize];
+         FileRead(sfx, info.vFileSize);
+         CloseFile();
+ 
+         LockAudioDevice();
+-#if RETRO_USING_SDL1 || RETRO_USING_SDL2
++#if RETRO_PLATFORM == RETRO_SCD32X
++        // PORT32X: read the WAV's PCM data as it is (no resampling); the platform
++        // layer decides the 32X format. 8-bit data becomes 16-bit here.
++        int fmtChannels = 0, fmtBits = 0, fmtRate = 0;
++        byte *pcm = NULL;
++        int pcmLen = 0;
++        int pos    = 12;
++        while (pos + 8 <= info.vFileSize) {
++            int len = sfx[pos + 4] | (sfx[pos + 5] << 8) | (sfx[pos + 6] << 16) | (sfx[pos + 7] << 24);
++            if (!memcmp(sfx + pos, "fmt ", 4) && len >= 16) {
++                fmtChannels = sfx[pos + 10] | (sfx[pos + 11] << 8);
++                fmtRate     = sfx[pos + 12] | (sfx[pos + 13] << 8) | (sfx[pos + 14] << 16) | (sfx[pos + 15] << 24);
++                fmtBits     = sfx[pos + 22] | (sfx[pos + 23] << 8);
++            }
++            else if (!memcmp(sfx + pos, "data", 4)) {
++                pcm    = sfx + pos + 8;
++                pcmLen = len;
++                if (pcmLen > info.vFileSize - pos - 8)
++                    pcmLen = info.vFileSize - pos - 8;
++                break;
++            }
++            pos += 8 + len + (len & 1);
++        }
++        if (memcmp(sfx, "RIFF", 4) || !pcm || (fmtBits != 8 && fmtBits != 16)) {
++            PrintLog("Unable to read sfx: %s", info.fileName);
++        }
++        else {
++            int samples    = fmtBits == 8 ? pcmLen : pcmLen / 2;
++            Sint16 *buffer = (Sint16 *)malloc(samples * sizeof(Sint16));
++            for (int i = 0; i < samples; ++i)
++                buffer[i] = fmtBits == 8 ? (Sint16)((pcm[i] - 0x80) << 8) : (Sint16)(pcm[i * 2] | (pcm[i * 2 + 1] << 8));
++            StrCopy(sfxList[sfxID].name, filePath);
++            sfxList[sfxID].buffer = buffer;
++            sfxList[sfxID].length = samples;
++            sfxList[sfxID].loaded = true;
++            plat_sfx_loaded(sfxID, filePath, fmtRate, fmtChannels, fmtBits, samples);
++        }
++        delete[] sfx;
++#elif RETRO_USING_SDL1 || RETRO_USING_SDL2
+         SDL_RWops *src = SDL_RWFromMem(sfx, info.vFileSize);
+         if (src == NULL) {
+             PrintLog("Unable to open sfx: %s", info.fileName);
+@@ -730,6 +796,8 @@
+ }
+ void PlaySfx(int sfx, bool loop)
+ {
++    if (SCD32X_SMALL) // PORT32X S7b: no sound on the SH2 yet (PWM later)
++        return;
+     LockAudioDevice();
+     int sfxChannelID = nextChannelPos++;
+     for (int c = 0; c < CHANNEL_COUNT; ++c) {
+@@ -748,9 +816,14 @@
+     if (nextChannelPos == CHANNEL_COUNT)
+         nextChannelPos = 0;
+     UnlockAudioDevice();
++#if RETRO_PLATFORM == RETRO_SCD32X
++    plat_sfx_play(sfx, loop); // PORT32X
++#endif
+ }
+ void SetSfxAttributes(int sfx, int loopCount, sbyte pan)
+ {
++    if (SCD32X_SMALL) // PORT32X S7b: no sound on the SH2 yet (PWM later)
++        return;
+     LockAudioDevice();
+     int sfxChannel = -1;
+     for (int i = 0; i < CHANNEL_COUNT; ++i) {
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Audio.hpp engine/Audio.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Audio.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Audio.hpp	2026-10-06 01:43:36.091222765 +0000
+@@ -3,9 +3,11 @@
+ 
+ #include <stdlib.h>
+ 
++#if RETRO_USING_VORBIS // PORT32X: no Ogg on the 32X; music is CD audio
+ #include <vorbis/vorbisfile.h>
++#endif
+ 
+-#if RETRO_PLATFORM != RETRO_VITA && RETRO_PLATFORM != RETRO_OSX
++#if RETRO_PLATFORM != RETRO_VITA && RETRO_PLATFORM != RETRO_OSX && RETRO_PLATFORM != RETRO_SCD32X
+ #include "SDL.h"
+ #endif
+ 
+@@ -37,7 +39,9 @@
+ };
+ 
+ struct StreamInfo {
++#if RETRO_USING_VORBIS
+     OggVorbis_File vorbisFile;
++#endif
+     int vorbBitstream;
+ #if RETRO_USING_SDL1
+     SDL_AudioSpec spec;
+@@ -93,7 +97,7 @@
+ extern bool musicEnabled;
+ extern int musicStatus;
+ extern TrackInfo musicTracks[TRACK_COUNT];
+-extern SFXInfo sfxList[SFX_COUNT];
++extern SFXInfo sfxList[SCD32X_SMALL ? 1 : SFX_COUNT];
+ 
+ extern ChannelInfo sfxChannels[CHANNEL_COUNT];
+ 
+@@ -133,6 +137,9 @@
+ 
+     UnlockAudioDevice();
+ }
++#elif RETRO_PLATFORM == RETRO_SCD32X
++// PORT32X: music is a CD audio track, started and stopped through the platform layer
++inline void FreeMusInfo() { plat_music_stop(); }
+ #else
+ void ProcessMusicStream() {}
+ void ProcessAudioPlayback() {}
+@@ -199,6 +206,8 @@
+ }
+ inline void ReleaseGlobalSfx()
+ {
++    if (SCD32X_SMALL) // PORT32X S7b: nothing loaded on the SH2
++        return;
+     StopAllSfx();
+     for (int i = globalSFXCount - 1; i >= 0; --i) {
+         if (sfxList[i].loaded) {
+@@ -212,6 +221,8 @@
+ }
+ inline void ReleaseStageSfx()
+ {
++    if (SCD32X_SMALL) // PORT32X S7b: nothing loaded on the SH2
++        return;
+     for (int i = stageSFXCount + globalSFXCount; i >= globalSFXCount; --i) {
+         if (sfxList[i].loaded) {
+             StrCopy(sfxList[i].name, "");
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Collision.cpp engine/Collision.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Collision.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Collision.cpp	2026-10-05 18:36:24.620830093 +0000
+@@ -1,4 +1,5 @@
+ #include "RetroEngine.hpp"
++
+ #include <stdlib.h>
+ 
+ int collisionLeft   = 0;
+@@ -108,7 +109,7 @@
+             int chunkY = YPos >> 7;
+             int tileY  = (YPos & 0x7F) >> 4;
+             if (XPos > -1 && YPos > -1) {
+-                int tile = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++                int tile = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+                 tile += tileX + (tileY << 3);
+                 int tileIndex = tiles128x128.tileIndex[tile];
+                 if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_LRB
+@@ -200,7 +201,7 @@
+             int chunkY = YPos >> 7;
+             int tileY  = (YPos & 0x7F) >> 4;
+             if (XPos > -1 && YPos > -1) {
+-                int tile      = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++                int tile      = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+                 tile          = tile + tileX + (tileY << 3);
+                 int tileIndex = tiles128x128.tileIndex[tile];
+                 if (tiles128x128.collisionFlags[player->collisionPlane][tile] < SOLID_NONE) {
+@@ -289,7 +290,7 @@
+             int chunkY = YPos >> 7;
+             int tileY  = (YPos & 0x7F) >> 4;
+             if (XPos > -1 && YPos > -1) {
+-                int tile      = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++                int tile      = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+                 tile          = tile + tileX + (tileY << 3);
+                 int tileIndex = tiles128x128.tileIndex[tile];
+                 if (tiles128x128.collisionFlags[player->collisionPlane][tile] < SOLID_NONE) {
+@@ -381,7 +382,7 @@
+             int chunkY = YPos >> 7;
+             int tileY  = (YPos & 0x7F) >> 4;
+             if (XPos > -1 && YPos > -1) {
+-                int tile      = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++                int tile      = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+                 tile          = tile + tileX + (tileY << 3);
+                 int tileIndex = tiles128x128.tileIndex[tile];
+                 if (tiles128x128.collisionFlags[player->collisionPlane][tile] < SOLID_NONE) {
+@@ -470,7 +471,7 @@
+             int chunkY = YPos >> 7;
+             int tileY  = (YPos & 0x7F) >> 4;
+             if (XPos > -1 && YPos > -1) {
+-                int tile = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++                int tile = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+                 tile += tileX + (tileY << 3);
+                 int tileIndex = tiles128x128.tileIndex[tile];
+                 if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_LRB
+@@ -557,7 +558,7 @@
+             int chunkY = YPos >> 7;
+             int tileY  = (YPos & 0x7F) >> 4;
+             if (XPos > -1 && YPos > -1) {
+-                int tile = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++                int tile = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+                 tile += tileX + (tileY << 3);
+                 int tileIndex = tiles128x128.tileIndex[tile];
+                 if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_TOP
+@@ -630,7 +631,7 @@
+             int chunkY = YPos >> 7;
+             int tileY  = (YPos & 0x7F) >> 4;
+             if (XPos > -1 && YPos > -1) {
+-                int tile = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++                int tile = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+                 tile += tileX + (tileY << 3);
+                 int tileIndex = tiles128x128.tileIndex[tile];
+                 if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_TOP
+@@ -713,7 +714,7 @@
+             int chunkY = YPos >> 7;
+             int tileY  = (YPos & 0x7F) >> 4;
+             if (XPos > -1 && YPos > -1) {
+-                int tile = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++                int tile = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+                 tile += tileX + (tileY << 3);
+                 int tileIndex = tiles128x128.tileIndex[tile];
+                 if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_TOP
+@@ -1634,7 +1635,7 @@
+         int tileX     = (XPos & 0x7F) >> 4;
+         int chunkY    = YPos >> 7;
+         int tileY     = (YPos & 0x7F) >> 4;
+-        int chunk     = (stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6) + tileX + (tileY << 3);
++        int chunk     = (SCD_FG_TILE(chunkX + (chunkY << 8)) << 6) + tileX + (tileY << 3);
+         int tileIndex = tiles128x128.tileIndex[chunk];
+         if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_LRB && tiles128x128.collisionFlags[cPath][chunk] != SOLID_NONE) {
+             switch (tiles128x128.direction[chunk]) {
+@@ -1693,7 +1694,7 @@
+         int tileX     = (XPos & 0x7F) >> 4;
+         int chunkY    = YPos >> 7;
+         int tileY     = (YPos & 0x7F) >> 4;
+-        int chunk     = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++        int chunk     = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+         chunk         = chunk + tileX + (tileY << 3);
+         int tileIndex = tiles128x128.tileIndex[chunk];
+         if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_TOP && tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
+@@ -1753,7 +1754,7 @@
+         int tileX     = (XPos & 0x7F) >> 4;
+         int chunkY    = YPos >> 7;
+         int tileY     = (YPos & 0x7F) >> 4;
+-        int chunk     = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++        int chunk     = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+         chunk         = chunk + tileX + (tileY << 3);
+         int tileIndex = tiles128x128.tileIndex[chunk];
+         if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_TOP && tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
+@@ -1813,7 +1814,7 @@
+         int tileX     = (XPos & 0x7F) >> 4;
+         int chunkY    = YPos >> 7;
+         int tileY     = (YPos & 0x7F) >> 4;
+-        int chunk     = stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6;
++        int chunk     = SCD_FG_TILE(chunkX + (chunkY << 8)) << 6;
+         chunk         = chunk + tileX + (tileY << 3);
+         int tileIndex = tiles128x128.tileIndex[chunk];
+         if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_TOP && tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
+@@ -1876,7 +1877,7 @@
+             int tileX     = (XPos & 0x7F) >> 4;
+             int chunkY    = YPos >> 7;
+             int tileY     = (YPos & 0x7F) >> 4;
+-            int chunk     = (stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6) + tileX + (tileY << 3);
++            int chunk     = (SCD_FG_TILE(chunkX + (chunkY << 8)) << 6) + tileX + (tileY << 3);
+             int tileIndex = tiles128x128.tileIndex[chunk];
+             if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_LRB && tiles128x128.collisionFlags[cPath][chunk] != SOLID_NONE) {
+                 switch (tiles128x128.direction[chunk]) {
+@@ -1946,7 +1947,7 @@
+             int tileX     = (XPos & 0x7F) >> 4;
+             int chunkY    = YPos >> 7;
+             int tileY     = (YPos & 0x7F) >> 4;
+-            chunk         = (stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6) + tileX + (tileY << 3);
++            chunk         = (SCD_FG_TILE(chunkX + (chunkY << 8)) << 6) + tileX + (tileY << 3);
+             int tileIndex = tiles128x128.tileIndex[chunk];
+             if (tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
+                 switch (tiles128x128.direction[chunk]) {
+@@ -2015,7 +2016,7 @@
+             int tileX     = (XPos & 0x7F) >> 4;
+             int chunkY    = YPos >> 7;
+             int tileY     = (YPos & 0x7F) >> 4;
+-            int chunk     = (stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6) + tileX + (tileY << 3);
++            int chunk     = (SCD_FG_TILE(chunkX + (chunkY << 8)) << 6) + tileX + (tileY << 3);
+             int tileIndex = tiles128x128.tileIndex[chunk];
+             if (tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
+                 switch (tiles128x128.direction[chunk]) {
+@@ -2085,7 +2086,7 @@
+             int tileX     = (XPos & 0x7F) >> 4;
+             int chunkY    = YPos >> 7;
+             int tileY     = (YPos & 0x7F) >> 4;
+-            chunk         = (stageLayouts[0].tiles[chunkX + (chunkY << 8)] << 6) + tileX + (tileY << 3);
++            chunk         = (SCD_FG_TILE(chunkX + (chunkY << 8)) << 6) + tileX + (tileY << 3);
+             int tileIndex = tiles128x128.tileIndex[chunk];
+             if (tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
+                 switch (tiles128x128.direction[chunk]) {
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Collision.hpp engine/Collision.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Collision.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Collision.hpp	2026-10-05 18:57:59.400743314 +0000
+@@ -59,7 +59,7 @@
+ };
+ 
+ #if !RETRO_USE_ORIGINAL_CODE
+-#define DEBUG_HITBOX_COUNT (0x400)
++#define DEBUG_HITBOX_COUNT (SCD32X_SMALL ? 1 : 0x400) // PORT32X S5e: debug overlay only
+ 
+ struct DebugHitboxInfo {
+     byte type;
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Debug.cpp engine/Debug.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Debug.cpp	2026-10-05 08:41:02.616183066 +0000
+@@ -1,4 +1,5 @@
+ #include "RetroEngine.hpp"
++#include <stdarg.h> // PORT32X: was pulled in by SDL.h
+ 
+ int touchFlags = 0;
+ 
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Drawing.cpp	2026-10-06 22:13:24.403829688 +0000
+@@ -15,9 +15,15 @@
+ // it rather than remove it outright.
+ #define DONT_USE_VIEW_ANGLE (1)
+ 
+-ushort blendLookupTable[0x100 * 0x20];
+-ushort subtractLookupTable[0x100 * 0x20];
+-ushort tintLookupTable[0x10000];
++#if SCD32X_DRAWCART // PORT32X S7e: the tables come from the cart image (part BLEND: tint, blend, subtract)
++ushort (&tintLookupTable)[0x10000] = *(ushort(*)[0x10000])plat_cart_data(SCD_CART_BLEND);
++ushort (&blendLookupTable)[0x100 * 0x20] = *(ushort(*)[0x100 * 0x20])((ushort *)plat_cart_data(SCD_CART_BLEND) + 0x10000);
++ushort (&subtractLookupTable)[0x100 * 0x20] = *(ushort(*)[0x100 * 0x20])((ushort *)plat_cart_data(SCD_CART_BLEND) + 0x10000 + 0x2000);
++#else
++ushort blendLookupTable[SCD32X_SMALL ? 1 : 0x100 * 0x20]; // PORT32X S5b
++ushort subtractLookupTable[SCD32X_SMALL ? 1 : 0x100 * 0x20]; // PORT32X S5b
++ushort tintLookupTable[SCD32X_SMALL ? 1 : 0x10000]; // PORT32X S5b
++#endif
+ 
+ // Extras used in blending
+ #define maxVal(a, b) (a >= b ? a : b)
+@@ -34,20 +40,34 @@
+ 
+ int gfxDataPosition;
+ GFXSurface gfxSurface[SURFACE_COUNT];
+-byte graphicData[GFXDATA_SIZE];
++#if SCD32X_DRAWCART // PORT32X S7e: the sprite sheets' pixels from the cart image
++byte (&graphicData)[GFXDATA_SIZE] = *(byte(*)[GFXDATA_SIZE])plat_cart_data(SCD_CART_GFXDATA);
++#else
++byte graphicData[SCD32X_SMALL ? 4 : GFXDATA_SIZE]; // PORT32X S5b: sprite pixels not kept on the SH2
++#endif
+ 
+-DrawVertex gfxPolyList[VERTEX_COUNT];
+-short gfxPolyListIndex[INDEX_COUNT];
++DrawVertex gfxPolyList[SCD32X_SMALL ? 1 : VERTEX_COUNT]; // PORT32X S5b
++short gfxPolyListIndex[SCD32X_SMALL ? 1 : INDEX_COUNT]; // PORT32X S5b
+ ushort gfxVertexSize       = 0;
+ ushort gfxVertexSizeOpaque = 0;
+ ushort gfxIndexSize        = 0;
+ ushort gfxIndexSizeOpaque  = 0;
+ 
+-DrawVertex3D polyList3D[VERTEX3D_COUNT];
++DrawVertex3D polyList3D[SCD32X_SMALL ? 1 : VERTEX3D_COUNT]; // PORT32X S5b
+ 
+ ushort vertexSize3D = 0;
+ ushort indexSize3D  = 0;
+-ushort tileUVArray[TILEUV_SIZE];
++ushort tileUVArray[SCD32X_SMALL ? 1 : TILEUV_SIZE]; // PORT32X S5i: hardware renderer only
++#if SCD32X_SMALL
++void scd_drawlist_full() // PORT32X S5i
++{
++    static bool told = false;
++    if (!told) {
++        told = true;
++        plat_log("PORT32X: a draw list is full (256) - an entry was dropped");
++    }
++}
++#endif
+ float floor3DXPos     = 0.0f;
+ float floor3DYPos     = 0.0f;
+ float floor3DZPos     = 0.0f;
+@@ -55,7 +75,7 @@
+ bool render3DEnabled  = false;
+ bool hq3DFloorEnabled = false;
+ 
+-ushort texBuffer[HW_TEXBUFFER_SIZE];
++ushort texBuffer[SCD32X_SMALL ? 1 : HW_TEXBUFFER_SIZE]; // PORT32X S5b
+ byte texBufferMode = 0;
+ 
+ #if !RETRO_USE_ORIGINAL_CODE
+@@ -369,11 +389,31 @@
+     SetScreenDimensions(SCREEN_XSIZE, SCREEN_YSIZE, drawableWidth, drawableHeight);
+ #elif RETRO_USING_SDL2
+     SetScreenDimensions(SCREEN_XSIZE, SCREEN_YSIZE, SCREEN_XSIZE * Engine.windowScale, SCREEN_YSIZE * Engine.windowScale);
++#elif RETRO_PLATFORM == RETRO_SCD32X
++    SCREEN_CENTERX = SCREEN_XSIZE / 2; // PORT32X: one fixed screen, no window
++    viewOffsetX    = 0;
++    viewOffsetY    = 0;
++    SetScreenDimensions(SCREEN_XSIZE, SCREEN_YSIZE, SCREEN_XSIZE, SCREEN_YSIZE);
+ #endif
+ 
+     if (renderType == RENDER_SW) {
++#if SCD32X_SMALL && defined(__sh__)
++        // PORT32X S5b: nothing draws on the SH2 - one line is enough for the pointers handed around
++        // S7b5: a fixed array - no heap on the SH2 (Kobo rule 8)
++#if SCD32X_DRAWCART
++        // S7e: the renderer draws straight into the 32X frame buffer (plat_mars.cpp)
++        Engine.frameBuffer = plat_frame_target();
++#else
++        static ushort scdOneLine[512]; // the screen is 320 wide on the console
++        if (GFX_LINESIZE > 512)
++            plat_fatal("LINE TOO WIDE");
++        Engine.frameBuffer = scdOneLine;
++        memset(Engine.frameBuffer, 0, GFX_LINESIZE * sizeof(ushort));
++#endif
++#else
+         Engine.frameBuffer = new ushort[GFX_LINESIZE * SCREEN_YSIZE];
+         memset(Engine.frameBuffer, 0, (GFX_LINESIZE * SCREEN_YSIZE) * sizeof(ushort));
++#endif
+         if (Engine.useHQModes) {
+             Engine.frameBuffer2x = new ushort[GFX_LINESIZE_DOUBLE * (SCREEN_YSIZE * 2)];
+             memset(Engine.frameBuffer2x, 0, GFX_LINESIZE_DOUBLE * (SCREEN_YSIZE * 2) * sizeof(ushort));
+@@ -434,6 +474,9 @@
+             TransferRetroBuffer();
+             RenderFromRetroBuffer();
+         }
++#elif RETRO_PLATFORM == RETRO_SCD32X
++        // PORT32X: hand the finished frame to the platform layer
++        plat_present(Engine.frameBuffer, SCREEN_XSIZE, SCREEN_YSIZE, GFX_LINESIZE);
+ #elif RETRO_USING_SDL2
+         SDL_Rect *destScreenPos = NULL;
+         SDL_Rect destScreenPos_scaled, destScreenPosRect;
+@@ -1038,7 +1081,9 @@
+ void ReleaseRenderDevice()
+ {
+     if (Engine.frameBuffer)
++#if !(SCD32X_SMALL && defined(__sh__)) // S7b5: the SH2's line is a fixed array
+         delete[] Engine.frameBuffer;
++#endif
+     if (Engine.frameBuffer2x)
+         delete[] Engine.frameBuffer2x;
+ 
+@@ -1077,6 +1122,9 @@
+ #endif
+ }
+ 
++#if RETRO_PLATFORM == RETRO_SCD32X
++void SetFullScreen(bool fs) {} // PORT32X: a console has one screen
++#else
+ void SetFullScreen(bool fs)
+ {
+ 
+@@ -1161,9 +1209,15 @@
+ #endif
+     }
+ }
++#endif
+ 
+ void GenerateBlendLookupTable()
+ {
++    if (SCD32X_DRAWCART) // PORT32X S7e: the tables are in the cart image (made on the PC)
++        return;
++#if SCD32X_SMALL
++    return; // PORT32X S5b: hardware renderer / pixel tables - not on the SH2
++#endif
+     for (int y = 0; y < 0x100; y++) {
+         for (int x = 0; x < 0x20; x++) {
+             blendLookupTable[x + (0x20 * y)]    = y * x >> 8;
+@@ -1179,6 +1233,7 @@
+ 
+ void ClearScreen(byte index)
+ {
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         ushort colour       = activePalette[index];
+         ushort *framebuffer = Engine.frameBuffer;
+@@ -1306,6 +1361,9 @@
+ 
+ void UpdateHardwareTextures()
+ {
++#if SCD32X_SMALL
++    return; // PORT32X S5b: hardware renderer / pixel tables - not on the SH2
++#endif
+     SetActivePalette(0, 0, SCREEN_YSIZE);
+     UpdateTextureBufferWithTiles();
+     UpdateTextureBufferWithSortedSprites();
+@@ -1517,6 +1575,9 @@
+ 
+ void SetupPolygonLists()
+ {
++#if SCD32X_SMALL
++    return; // PORT32X S5b: hardware renderer / pixel tables - not on the SH2
++#endif
+     int vID = 0;
+     for (int i = 0; i < VERTEX_COUNT; i++) {
+         gfxPolyListIndex[vID++] = (i << 2) + 0;
+@@ -1542,6 +1603,9 @@
+ 
+ void UpdateTextureBufferWithTiles()
+ {
++#if SCD32X_SMALL
++    return; // PORT32X S5b: hardware renderer / pixel tables - not on the SH2
++#endif
+     int tileIndex = 0;
+     if (texBufferMode == 0) {
+         // regular 1024 set of tiles
+@@ -1676,6 +1740,9 @@
+ }
+ void UpdateTextureBufferWithSortedSprites()
+ {
++#if SCD32X_SMALL
++    return; // PORT32X S5b: hardware renderer / pixel tables - not on the SH2
++#endif
+     byte sortedSurfaceCount = 0;
+     byte sortedSurfaceList[SURFACE_COUNT];
+ 
+@@ -1854,6 +1921,9 @@
+ }
+ void UpdateTextureBufferWithSprites()
+ {
++#if SCD32X_SMALL
++    return; // PORT32X S5b: hardware renderer / pixel tables - not on the SH2
++#endif
+     for (int i = 0; i < SURFACE_COUNT; ++i) {
+         if (gfxSurface[i].texStartY + gfxSurface[i].height <= HW_TEXTURE_SIZE && gfxSurface[i].texStartX > -1) {
+             int gfxPos = gfxSurface[i].dataPosition;
+@@ -2037,6 +2107,7 @@
+ #if !RETRO_USE_ORIGINAL_CODE
+ void DrawDebugOverlays()
+ {
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (showHitboxes) {
+         for (int i = 0; i < debugHitboxCount; ++i) {
+             DebugHitboxInfo *info = &debugHitboxList[i];
+@@ -2129,6 +2200,7 @@
+ 
+ void DrawHLineScrollLayer(int layerID)
+ {
++    SCD_DRAWLOG("DrawHLineScrollLayer", -1, 0);
+     if (renderType == RENDER_SW) {
+         TileLayer *layer   = &stageLayouts[activeTileLayers[layerID]];
+         int screenwidth16  = (GFX_LINESIZE >> 4) - 1;
+@@ -2184,6 +2256,13 @@
+         int tileYPos           = yscrollOffset % (layerheight << 7);
+         if (tileYPos < 0)
+             tileYPos += layerheight << 7;
++#if RETRO_PLATFORM == RETRO_SCD32X
++        // PORT32X: the platform records each layer's scroll (the 68000 needs exactly this to
++        // drive the Mega Drive planes) and may redirect the drawing (the host captures each
++        // layer on its own for the plane check; the frame itself is unchanged)
++        frameBufferPtr = plat_layer_begin(layerID, activeTileLayers[layerID], tileYPos, frameBufferPtr);
++        int scdLine    = 0;
++#endif
+         byte *scrollIndex = &lineScroll[tileYPos];
+         int tileY16       = tileYPos & 0xF;
+         int chunkY        = tileYPos >> 7;
+@@ -2221,6 +2300,10 @@
+                     chunkX += fullLayerwidth;
+                 if (chunkX >= fullLayerwidth)
+                     chunkX -= fullLayerwidth;
++#if RETRO_PLATFORM == RETRO_SCD32X
++                plat_layer_line(layerID, scdLine++, chunkX); // PORT32X
++#endif
++#if !SCD32X_NODRAW // PORT32X S5b: the pixels of this line (the scroll above and the bookkeeping below stay)
+                 int chunkXPos         = chunkX >> 7;
+                 int tilePxXPos        = chunkX & 0xF;
+                 int tileXPxRemain     = TILE_SIZE - tilePxXPos;
+@@ -2637,6 +2720,7 @@
+                     }
+                 }
+ 
++#endif // !SCD32X_NODRAW
+                 if (++tileY16 > TILE_SIZE - 1) {
+                     tileY16 = 0;
+                     ++tileY;
+@@ -2650,6 +2734,9 @@
+                 }
+             }
+         }
++#if RETRO_PLATFORM == RETRO_SCD32X
++        plat_layer_end(layerID); // PORT32X
++#endif
+     }
+     else if (renderType == RENDER_HW) {
+         TileLayer *layer      = &stageLayouts[activeTileLayers[layerID]];
+@@ -3481,6 +3568,7 @@
+ }
+ void DrawVLineScrollLayer(int layerID)
+ {
++    SCD_DRAWLOG("DrawVLineScrollLayer", -1, 0);
+     if (renderType == RENDER_SW) {
+         TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
+         if (!layer->xsize || !layer->ysize)
+@@ -3535,6 +3623,7 @@
+         ushort *frameBufferPtr = Engine.frameBuffer;
+         activePalette          = fullPalette[gfxLineBuffer[0]];
+         activePalette32        = fullPalette32[gfxLineBuffer[0]];
++        SCD_NODRAW_RETURN(); // PORT32X S5e: the scroll and palette state above stay - S5b cut them too (whole-game run)
+         int tileXPos           = xscrollOffset % (layerheight << 7);
+         if (tileXPos < 0)
+             tileXPos += layerheight << 7;
+@@ -4064,6 +4153,8 @@
+ }
+ void Draw3DFloorLayer(int layerID)
+ {
++    SCD_DRAWLOG("Draw3DFloorLayer", -1, 0);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
+     if (!layer->xsize || !layer->ysize)
+         return;
+@@ -4644,6 +4735,8 @@
+ }
+ void Draw3DSkyLayer(int layerID)
+ {
++    SCD_DRAWLOG("Draw3DSkyLayer", -1, 0);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
+     if (!layer->xsize || !layer->ysize)
+         return;
+@@ -4727,6 +4820,8 @@
+ 
+ void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
+ {
++    SCD_DRAWLOG("DrawRectangle", -1, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (A > 0xFF)
+         A = 0xFF;
+     if (renderType == RENDER_SW) {
+@@ -4828,6 +4923,7 @@
+ 
+ void SetFadeHQ(int R, int G, int B, int A)
+ {
++    SCD_DRAWLOG("SetFadeHQ", -1, 0);
+     if (A <= 0)
+         return;
+     if (A > 0xFF)
+@@ -4871,6 +4967,8 @@
+ 
+ void DrawTintRectangle(int XPos, int YPos, int width, int height)
+ {
++    SCD_DRAWLOG("DrawTintRectangle", -1, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         if (width + XPos > GFX_LINESIZE)
+             width = GFX_LINESIZE - XPos;
+@@ -4907,6 +5005,8 @@
+ void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
+                         int sheetID)
+ {
++    SCD_DRAWLOG("DrawScaledTintMask", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         int roundedYPos = 0;
+         int roundedXPos = 0;
+@@ -5008,6 +5108,8 @@
+ 
+ void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
+ {
++    SCD_DRAWLOG("DrawSprite", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (disableTouchControls) {
+         if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
+             return;
+@@ -5102,6 +5204,8 @@
+ 
+ void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
+ {
++    SCD_DRAWLOG("DrawSpriteFlipped", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         int widthFlip  = width;
+         int heightFlip = height;
+@@ -5399,6 +5503,8 @@
+ void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
+                       int sheetID)
+ {
++    SCD_DRAWLOG("DrawSpriteScaled", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         int roundedYPos = 0;
+         int roundedXPos = 0;
+@@ -5558,6 +5664,8 @@
+ void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
+                     int sheetID)
+ {
++    SCD_DRAWLOG("DrawScaledChar", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     // Not avaliable in SW Render mode
+ 
+     if (renderType == RENDER_HW) {
+@@ -5616,6 +5724,8 @@
+ void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
+                        int sheetID)
+ {
++    SCD_DRAWLOG("DrawSpriteRotated", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         int sprXPos    = (pivotX + sprX) << 9;
+         int sprYPos    = (pivotY + sprY) << 9;
+@@ -5880,6 +5990,8 @@
+ void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
+                         int sheetID)
+ {
++    SCD_DRAWLOG("DrawSpriteRotozoom", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (scale == 0)
+         return;
+ 
+@@ -6148,6 +6260,8 @@
+ 
+ void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
+ {
++    SCD_DRAWLOG("DrawBlendedSprite", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         if (width + XPos > GFX_LINESIZE)
+             width = GFX_LINESIZE - XPos;
+@@ -6236,6 +6350,8 @@
+ }
+ void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
+ {
++    SCD_DRAWLOG("DrawAlphaBlendedSprite", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (disableTouchControls) {
+         if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
+             return;
+@@ -6359,6 +6475,8 @@
+ }
+ void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
+ {
++    SCD_DRAWLOG("DrawAdditiveBlendedSprite", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         if (width + XPos > GFX_LINESIZE)
+             width = GFX_LINESIZE - XPos;
+@@ -6459,6 +6577,8 @@
+ }
+ void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
+ {
++    SCD_DRAWLOG("DrawSubtractiveBlendedSprite", sheetID, width * height);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     if (renderType == RENDER_SW) {
+         if (width + XPos > GFX_LINESIZE)
+             width = GFX_LINESIZE - XPos;
+@@ -6664,6 +6784,8 @@
+ 
+ void DrawFace(void *v, uint colour)
+ {
++    SCD_DRAWLOG("DrawFace", -1, 0);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     Vertex *verts = (Vertex *)v;
+ 
+     if (renderType == RENDER_SW) {
+@@ -6849,6 +6971,8 @@
+ }
+ void DrawTexturedFace(void *v, byte sheetID)
+ {
++    SCD_DRAWLOG("DrawTexturedFace", sheetID, 0);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     Vertex *verts = (Vertex *)v;
+ 
+     if (renderType == RENDER_SW) {
+@@ -7022,6 +7146,7 @@
+ 
+ void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
+ {
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     TextMenu *tMenu = (TextMenu *)menu;
+     int Y           = YPos << 9;
+     if (rowCount < 0)
+@@ -7052,6 +7177,7 @@
+ 
+ void DrawTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
+ {
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     TextMenu *tMenu = (TextMenu *)menu;
+     int id          = tMenu->entryStart[rowID];
+     for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
+@@ -7062,6 +7188,7 @@
+ }
+ void DrawStageTextEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
+ {
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     TextMenu *tMenu = (TextMenu *)menu;
+     int id          = tMenu->entryStart[rowID];
+     for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
+@@ -7077,6 +7204,7 @@
+ }
+ void DrawBlendedTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
+ {
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     TextMenu *tMenu = (TextMenu *)menu;
+     int id          = tMenu->entryStart[rowID];
+     for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
+@@ -7087,6 +7215,8 @@
+ }
+ void DrawTextMenu(void *menu, int XPos, int YPos)
+ {
++    SCD_DRAWLOG("DrawTextMenu", -1, 0);
++    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
+     TextMenu *tMenu = (TextMenu *)menu;
+     int cnt         = 0;
+     if (tMenu->visibleRowCount > 0) {
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp engine/Drawing.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Drawing.hpp	2026-10-06 22:13:24.404747143 +0000
+@@ -12,8 +12,14 @@
+ enum InkFlags { INK_NONE, INK_BLEND, INK_ALPHA, INK_ADD, INK_SUB };
+ enum DrawFXFlags { FX_SCALE, FX_ROTATE, FX_ROTOZOOM, FX_INK, FX_TINT, FX_FLIP };
+ 
++// PORT32X S5i: the SH2 configuration keeps 256 entries per draw layer (whole game: at most 56);
++// additions past it are dropped and logged
++#define DRAWLIST_SIZE (SCD32X_SMALL ? 0x100 : ENTITY_COUNT)
++#if SCD32X_SMALL
++void scd_drawlist_full(); // PORT32X S5i
++#endif
+ struct DrawListEntry {
+-    int entityRefs[ENTITY_COUNT];
++    int entityRefs[DRAWLIST_SIZE];
+     int listSize;
+ };
+ 
+@@ -28,9 +34,15 @@
+     int dataPosition;
+ };
+ 
+-extern ushort blendLookupTable[0x100 * 0x20];
+-extern ushort subtractLookupTable[0x100 * 0x20];
+-extern ushort tintLookupTable[0x10000];
++#if SCD32X_DRAWCART // PORT32X S7e
++extern ushort (&tintLookupTable)[0x10000];
++extern ushort (&blendLookupTable)[0x100 * 0x20];
++extern ushort (&subtractLookupTable)[0x100 * 0x20];
++#else
++extern ushort blendLookupTable[SCD32X_SMALL ? 1 : 0x100 * 0x20];
++extern ushort subtractLookupTable[SCD32X_SMALL ? 1 : 0x100 * 0x20];
++extern ushort tintLookupTable[SCD32X_SMALL ? 1 : 0x10000];
++#endif
+ 
+ extern int SCREEN_XSIZE;
+ extern int SCREEN_CENTERX;
+@@ -42,8 +54,17 @@
+ extern DrawListEntry drawListEntries[DRAWLAYER_COUNT];
+ 
+ extern int gfxDataPosition;
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(__sh__)
++#define SCD_DRAWLOG(fn, sheet, pixels) plat_draw_log(fn, sheet, pixels) // PORT32X S7e
++#else
++#define SCD_DRAWLOG(fn, sheet, pixels)
++#endif
+ extern GFXSurface gfxSurface[SURFACE_COUNT];
+-extern byte graphicData[GFXDATA_SIZE];
++#if SCD32X_DRAWCART // PORT32X S7e
++extern byte (&graphicData)[GFXDATA_SIZE];
++#else
++extern byte graphicData[SCD32X_SMALL ? 4 : GFXDATA_SIZE];
++#endif
+ 
+ #if RETRO_USE_ORIGINAL_CODE
+ #define VERTEX_COUNT (0x2000)
+@@ -77,18 +98,18 @@
+     Colour colour;
+ };
+ 
+-extern DrawVertex gfxPolyList[VERTEX_COUNT];
+-extern short gfxPolyListIndex[INDEX_COUNT];
++extern DrawVertex gfxPolyList[SCD32X_SMALL ? 1 : VERTEX_COUNT];
++extern short gfxPolyListIndex[SCD32X_SMALL ? 1 : INDEX_COUNT];
+ extern ushort gfxVertexSize;
+ extern ushort gfxVertexSizeOpaque;
+ extern ushort gfxIndexSize;
+ extern ushort gfxIndexSizeOpaque;
+ 
+-extern DrawVertex3D polyList3D[VERTEX3D_COUNT];
++extern DrawVertex3D polyList3D[SCD32X_SMALL ? 1 : VERTEX3D_COUNT];
+ 
+ extern ushort vertexSize3D;
+ extern ushort indexSize3D;
+-extern ushort tileUVArray[TILEUV_SIZE];
++extern ushort tileUVArray[SCD32X_SMALL ? 1 : TILEUV_SIZE]; // PORT32X S5i: hardware renderer only
+ extern float floor3DXPos;
+ extern float floor3DYPos;
+ extern float floor3DZPos;
+@@ -96,7 +117,7 @@
+ extern bool render3DEnabled;
+ extern bool hq3DFloorEnabled;
+ 
+-extern ushort texBuffer[HW_TEXBUFFER_SIZE];
++extern ushort texBuffer[SCD32X_SMALL ? 1 : HW_TEXBUFFER_SIZE];
+ extern byte texBufferMode;
+ 
+ #if !RETRO_USE_ORIGINAL_CODE
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Ini.cpp engine/Ini.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Ini.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Ini.cpp	2026-10-06 19:17:45.499982442 +0000
+@@ -154,6 +154,13 @@
+ 
+ int IniParser::SetString(const char *section, const char *key, char *value)
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no heap on the SH2 (Kobo rule 8) - nothing stored; callers set their values in the arguments
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no settings file on the SH2 - the defaults are assigned in the callers' arguments;
++    // storing them grew a std::vector of 360-byte items past the 20 KB heap (HEAP FULL at frame 0)
++#endif
+     int where = -1;
+     for (int x = 0; x < items.size(); x++) {
+         if (strcmp(section, items[x].section) == 0) {
+@@ -176,6 +183,13 @@
+ }
+ int IniParser::SetInteger(const char *section, const char *key, int value)
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no heap on the SH2 (Kobo rule 8) - nothing stored; callers set their values in the arguments
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no settings file on the SH2 - the defaults are assigned in the callers' arguments;
++    // storing them grew a std::vector of 360-byte items past the 20 KB heap (HEAP FULL at frame 0)
++#endif
+     int where = -1;
+     for (int x = 0; x < items.size(); x++) {
+         if (strcmp(section, items[x].section) == 0) {
+@@ -198,6 +212,13 @@
+ }
+ int IniParser::SetFloat(const char *section, const char *key, float value)
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no heap on the SH2 (Kobo rule 8) - nothing stored; callers set their values in the arguments
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no settings file on the SH2 - the defaults are assigned in the callers' arguments;
++    // storing them grew a std::vector of 360-byte items past the 20 KB heap (HEAP FULL at frame 0)
++#endif
+     int where = -1;
+     for (int x = 0; x < items.size(); x++) {
+         if (strcmp(section, items[x].section) == 0) {
+@@ -220,6 +241,13 @@
+ }
+ int IniParser::SetBool(const char *section, const char *key, bool value)
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no heap on the SH2 (Kobo rule 8) - nothing stored; callers set their values in the arguments
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no settings file on the SH2 - the defaults are assigned in the callers' arguments;
++    // storing them grew a std::vector of 360-byte items past the 20 KB heap (HEAP FULL at frame 0)
++#endif
+     int where = -1;
+     for (int x = 0; x < items.size(); x++) {
+         if (strcmp(section, items[x].section) == 0) {
+@@ -242,6 +270,13 @@
+ }
+ int IniParser::SetComment(const char *section, const char *key, const char *comment)
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no heap on the SH2 (Kobo rule 8) - nothing stored; callers set their values in the arguments
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return 1; // PORT32X S7b5: no settings file on the SH2 - the defaults are assigned in the callers' arguments;
++    // storing them grew a std::vector of 360-byte items past the 20 KB heap (HEAP FULL at frame 0)
++#endif
+     int where = -1;
+     for (int x = 0; x < items.size(); x++) {
+         if (strcmp(section, items[x].section) == 0) {
+@@ -265,6 +300,13 @@
+ 
+ void IniParser::Write(const char *filename, bool addPath)
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return; // PORT32X S7b5: no file system on the SH2
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++    return; // PORT32X S7b5: no settings file on the SH2 - the defaults are assigned in the callers' arguments;
++    // storing them grew a std::vector of 360-byte items past the 20 KB heap (HEAP FULL at frame 0)
++#endif
+     char pathBuffer[0x80];
+ 
+     if (addPath) {
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Input.cpp engine/Input.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Input.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Input.cpp	2026-10-05 08:41:02.616771453 +0000
+@@ -329,6 +329,11 @@
+ }
+ #endif //! RETRO_USING_SDL2
+ 
++#if RETRO_PLATFORM == RETRO_SCD32X
++// PORT32X: the Mega Drive pad is always there; nothing to open or close
++void ControllerInit(byte controllerID) {}
++void ControllerClose(byte controllerID) {}
++#else
+ void ControllerInit(byte controllerID)
+ {
+     SDL_GameController *controller = SDL_GameControllerOpen(controllerID);
+@@ -350,6 +355,7 @@
+         inputType = 0;
+     }
+ }
++#endif
+ 
+ void ProcessInput()
+ {
+@@ -434,6 +440,23 @@
+     }
+ #endif //! RETRO_USING_MOUSE
+ 
++#elif RETRO_PLATFORM == RETRO_SCD32X
++    // PORT32X: the engine's eight buttons are the Mega Drive pad's eight
++    static const unsigned int padBits[INPUT_ANY] = { PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_A, PAD_B, PAD_C, PAD_START };
++    unsigned int pad = plat_pad();
++    bool any         = false;
++    for (int i = 0; i < INPUT_ANY; i++) {
++        if (pad & padBits[i]) {
++            inputDevice[i].setHeld();
++            any = true;
++        }
++        else if (inputDevice[i].hold)
++            inputDevice[i].setReleased();
++    }
++    if (any)
++        inputDevice[INPUT_ANY].setHeld();
++    else
++        inputDevice[INPUT_ANY].setReleased();
+ #elif RETRO_USING_SDL1
+     if (SDL_NumJoysticks() > 0) {
+         controller = SDL_JoystickOpen(0);
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Math.cpp engine/Math.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Math.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Math.cpp	2026-10-05 21:36:04.234399362 +0000
+@@ -6,20 +6,53 @@
+ #define M_PI 3.14159265358979323846264338327950288
+ #endif
+ 
++#if SCD32X_CARTDATA
++int (&sinMLookupTable)[512] = *(int(*)[512])((int *)plat_cart_data(SCD_CART_TRIG) + 0); // PORT32X S5p: cart image
++#else
+ int sinMLookupTable[512];
++#endif
++#if SCD32X_CARTDATA
++int (&cosMLookupTable)[512] = *(int(*)[512])((int *)plat_cart_data(SCD_CART_TRIG) + 512); // PORT32X S5p: cart image
++#else
+ int cosMLookupTable[512];
++#endif
+ 
++#if SCD32X_CARTDATA
++int (&sin512LookupTable)[512] = *(int(*)[512])((int *)plat_cart_data(SCD_CART_TRIG) + 1024); // PORT32X S5p: cart image
++#else
+ int sin512LookupTable[512];
++#endif
++#if SCD32X_CARTDATA
++int (&cos512LookupTable)[512] = *(int(*)[512])((int *)plat_cart_data(SCD_CART_TRIG) + 1536); // PORT32X S5p: cart image
++#else
+ int cos512LookupTable[512];
++#endif
+ 
++#if SCD32X_CARTDATA
++int (&sin256LookupTable)[256] = *(int(*)[256])((int *)plat_cart_data(SCD_CART_TRIG) + 2048); // PORT32X S5p: cart image
++#else
+ int sin256LookupTable[256];
++#endif
++#if SCD32X_CARTDATA
++int (&cos256LookupTable)[256] = *(int(*)[256])((int *)plat_cart_data(SCD_CART_TRIG) + 2304); // PORT32X S5p: cart image
++#else
+ int cos256LookupTable[256];
++#endif
+ 
++#if SCD32X_CARTDATA
++byte (&arcTan256LookupTable)[0x100 * 0x100] = *(byte(*)[0x100 * 0x100])plat_cart_data(SCD_CART_ARCTAN); // PORT32X S5d
++#else
+ byte arcTan256LookupTable[0x100 * 0x100];
++#endif
+ 
+ void CalculateTrigAngles()
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X
++    srand(0); // PORT32X S5g: no clock on the console - and the host tests compare two runs, which need the same sequence
++#else
+     srand((unsigned)time(NULL));
++#endif
++#if !SCD32X_CARTDATA // PORT32X S5p: the trig tables are in the cart image on the SH2
+ 
+     for (int i = 0; i < 0x200; ++i) {
+         sinMLookupTable[i] = (sin((i / 256.0) * M_PI) * 4096.0);
+@@ -56,7 +89,8 @@
+         cos256LookupTable[i] = (cos512LookupTable[i * 2] >> 1);
+     }
+ 
+-    for (int Y = 0; Y < 0x100; ++Y) {
++#endif
++    for (int Y = 0; Y < 0x100 && !SCD32X_CARTDATA; ++Y) { // PORT32X S5d: in the cart image on the SH2
+         byte *atan = (byte *)&arcTan256LookupTable[Y];
+         for (int X = 0; X < 0x100; ++X) {
+             float angle = atan2f(Y, X);
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Math.hpp engine/Math.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Math.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Math.hpp	2026-10-05 21:36:04.234665589 +0000
+@@ -10,16 +10,44 @@
+ #define MEM_ZERO(x)  memset(&(x), 0, sizeof((x)))
+ #define MEM_ZEROP(x) memset((x), 0, sizeof(*(x)))
+ 
++#if SCD32X_CARTDATA
++extern int (&sinMLookupTable)[512]; // PORT32X S5p
++#else
+ extern int sinMLookupTable[0x200];
++#endif
++#if SCD32X_CARTDATA
++extern int (&cosMLookupTable)[512]; // PORT32X S5p
++#else
+ extern int cosMLookupTable[0x200];
++#endif
+ 
++#if SCD32X_CARTDATA
++extern int (&sin512LookupTable)[512]; // PORT32X S5p
++#else
+ extern int sin512LookupTable[0x200];
++#endif
++#if SCD32X_CARTDATA
++extern int (&cos512LookupTable)[512]; // PORT32X S5p
++#else
+ extern int cos512LookupTable[0x200];
++#endif
+ 
++#if SCD32X_CARTDATA
++extern int (&sin256LookupTable)[256]; // PORT32X S5p
++#else
+ extern int sin256LookupTable[0x100];
++#endif
++#if SCD32X_CARTDATA
++extern int (&cos256LookupTable)[256]; // PORT32X S5p
++#else
+ extern int cos256LookupTable[0x100];
++#endif
+ 
++#if SCD32X_CARTDATA
++extern byte (&arcTan256LookupTable)[0x100 * 0x100]; // PORT32X S5d
++#else
+ extern byte arcTan256LookupTable[0x100 * 0x100];
++#endif
+ 
+ // Setup Angles
+ void CalculateTrigAngles();
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.cpp engine/Object.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Object.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Object.cpp	2026-10-05 20:19:32.264793369 +0000
+@@ -4,7 +4,11 @@
+ int curObjectType = 0;
+ Entity objectEntityList[ENTITY_COUNT];
+ 
++#if SCD32X_CARTDATA
++char (&typeNames)[OBJECT_COUNT][0x40] = *(char(*)[OBJECT_COUNT][0x40])plat_cart_data(SCD_CART_TYPENAMES); // PORT32X S5j: cart image (filled while loading)
++#else
+ char typeNames[OBJECT_COUNT][0x40];
++#endif
+ 
+ int OBJECT_BORDER_X1       = 0x80;
+ int OBJECT_BORDER_X2       = 0;
+@@ -15,12 +19,18 @@
+ {
+     int objNameID  = 0;
+     int typeNameID = 0;
++#if SCD32X_CARTDATA
++    static char scdNameSink[0x40]; // PORT32X S5j: the names are in the cart image - store nothing
++    char *typeName = scdNameSink;
++#else
++    char *typeName = typeNames[objectID];
++#endif
+     while (objectName[objNameID]) {
+         if (objectName[objNameID] != ' ')
+-            typeNames[objectID][typeNameID++] = objectName[objNameID];
++            typeName[typeNameID++] = objectName[objNameID];
+         ++objNameID;
+     }
+-    typeNames[objectID][typeNameID] = 0;
++    typeName[typeNameID] = 0;
+     PrintLog("Set Object (%d) name to: %s", objectID, objectName);
+ }
+ 
+@@ -103,8 +113,14 @@
+                 }
+             }
+ 
+-            if (entity->drawOrder < DRAWLAYER_COUNT)
+-                drawListEntries[entity->drawOrder].entityRefs[drawListEntries[entity->drawOrder].listSize++] = objectLoop;
++            if (entity->drawOrder < DRAWLAYER_COUNT) {
++#if SCD32X_SMALL
++                if (drawListEntries[entity->drawOrder].listSize >= DRAWLIST_SIZE) // PORT32X S5i
++                    scd_drawlist_full();
++                else
++#endif
++                    drawListEntries[entity->drawOrder].entityRefs[drawListEntries[entity->drawOrder].listSize++] = objectLoop;
++            }
+         }
+     }
+ }
+@@ -130,8 +146,14 @@
+                 }
+             }
+ 
+-            if (entity->drawOrder < DRAWLAYER_COUNT)
+-                drawListEntries[entity->drawOrder].entityRefs[drawListEntries[entity->drawOrder].listSize++] = objectLoop;
++            if (entity->drawOrder < DRAWLAYER_COUNT) {
++#if SCD32X_SMALL
++                if (drawListEntries[entity->drawOrder].listSize >= DRAWLIST_SIZE) // PORT32X S5i
++                    scd_drawlist_full();
++                else
++#endif
++                    drawListEntries[entity->drawOrder].entityRefs[drawListEntries[entity->drawOrder].listSize++] = objectLoop;
++            }
+         }
+     }
+ }
+\ No newline at end of file
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.hpp engine/Object.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Object.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Object.hpp	2026-10-05 20:19:32.263381644 +0000
+@@ -49,7 +49,11 @@
+ extern int curObjectType;
+ extern Entity objectEntityList[ENTITY_COUNT];
+ 
++#if SCD32X_CARTDATA
++extern char (&typeNames)[OBJECT_COUNT][0x40]; // PORT32X S5j
++#else
+ extern char typeNames[OBJECT_COUNT][0x40];
++#endif
+ 
+ extern int OBJECT_BORDER_X1;
+ extern int OBJECT_BORDER_X2;
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Palette.cpp engine/Palette.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Palette.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Palette.cpp	2026-10-05 18:18:58.057544061 +0000
+@@ -25,7 +25,7 @@
+ 
+ int texPaletteNum = 0;
+ 
+-uint gfxPalette16to32[0x10000];
++uint gfxPalette16to32[SCD32X_SMALL ? 1 : 0x10000]; // PORT32X S5b
+ 
+ void LoadPalette(const char *filePath, int paletteID, int startPaletteIndex, int startIndex, int endIndex)
+ {
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Palette.hpp engine/Palette.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Palette.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Palette.hpp	2026-10-05 18:18:58.057149814 +0000
+@@ -40,7 +40,7 @@
+ 
+ extern int texPaletteNum;
+ 
+-extern uint gfxPalette16to32[0x10000];
++extern uint gfxPalette16to32[SCD32X_SMALL ? 1 : 0x10000]; // PORT32X S5b
+ 
+ #define RGB888_TO_RGB5551(r, g, b) ((((b) >> 3) << 1) | (((g) >> 3) << 6) | (((r) >> 3) << 11) | 0) // used in mobile vers
+ #define RGB888_TO_RGB565(r, g, b)  ((b) >> 3) | (((g) >> 2) << 5) | (((r) >> 3) << 11) // used in pc vers
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Reader.cpp engine/Reader.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Reader.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Reader.cpp	2026-10-06 01:30:10.460058159 +0000
+@@ -4,7 +4,39 @@
+ char rsdkName[0x400];
+ 
+ char fileName[0x100];
+-byte fileBuffer[0x2000];
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(__sh__)
++char scdReadName[0x100]; // PORT32X S7a: the file actually open (fileName is set before a load can fail)
++static struct {
++    const void *info;
++    char name[0x100];
++} scdInfoNames[16]; // PORT32X S7a4: a few FileInfo objects are alive at once (nested loads)
++void scd_info_name_save(const void *info)
++{
++    int free = -1;
++    for (int i = 0; i < 16; ++i) {
++        if (scdInfoNames[i].info == info) {
++            free = i;
++            break;
++        }
++        if (free < 0 && !scdInfoNames[i].info)
++            free = i;
++    }
++    if (free < 0)
++        free = 0;
++    scdInfoNames[free].info = info;
++    StrCopy(scdInfoNames[free].name, scdReadName);
++}
++void scd_info_name_load(const void *info, const char *fallback)
++{
++    for (int i = 0; i < 16; ++i)
++        if (scdInfoNames[i].info == info) {
++            StrCopy(scdReadName, scdInfoNames[i].name);
++            return;
++        }
++    StrCopy(scdReadName, fallback);
++}
++#endif
++byte fileBuffer[FILEBUFFER_SIZE]; // PORT32X S5r
+ int fileSize;
+ int vFileSize;
+ int readPos;
+@@ -228,6 +260,10 @@
+ 
+     PrintLog("Loaded File '%s'", filePathBuf);
+ 
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(__sh__)
++    StrCopy(scdReadName, fileName); // PORT32X S7a
++    plat_file_read(scdReadName, 0); // S7a3: opened counts too (an existence check reads nothing)
++#endif
+     return true;
+ }
+ 
+@@ -463,6 +499,9 @@
+     else {
+         printf("");
+     }
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(__sh__)
++    plat_file_read(scdReadName, (int)(bufferPosition + readPos - readSize) - virtualFileOffset); // PORT32X S7a: how far into the file
++#endif
+ }
+ 
+ void SetFileInfo(FileInfo *fileInfo)
+@@ -511,6 +550,9 @@
+         eStringNo      = 0;
+         eNybbleSwap    = 0;
+     }
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(__sh__)
++    scd_info_name_load(fileInfo, fileInfo->fileName); // PORT32X S7a4: the name saved with this FileInfo
++#endif
+ }
+ 
+ size_t GetFilePosition()
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Reader.hpp engine/Reader.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Reader.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Reader.hpp	2026-10-06 01:44:51.500094645 +0000
+@@ -1,6 +1,26 @@
+ #ifndef READER_H
+ #define READER_H
+ 
++#if RETRO_PLATFORM == RETRO_SCD32X && defined(__sh__)
++// PORT32X S7b: no file system on the SH2 - "Data.rsdk" is the stage's mini-pack in the cart
++// (cd32x/engine/plat_mars.cpp); nothing else can be opened (settings / saves fall back)
++struct ScdMemFile {
++    const unsigned char *data;
++    long size, pos;
++};
++ScdMemFile *scd_fopen(const char *path, const char *mode);
++size_t scd_fread(void *buffer, size_t elementSize, size_t elementCount, ScdMemFile *f);
++int scd_fseek(ScdMemFile *f, long offset, int whence);
++long scd_ftell(ScdMemFile *f);
++int scd_fclose(ScdMemFile *f);
++#define FileIO                                          ScdMemFile
++#define fOpen(path, mode)                               scd_fopen(path, mode)
++#define fRead(buffer, elementSize, elementCount, file)  scd_fread(buffer, elementSize, elementCount, file)
++#define fSeek(file, offset, whence)                     scd_fseek(file, offset, whence)
++#define fTell(file)                                     scd_ftell(file)
++#define fClose(file)                                    scd_fclose(file)
++#define fWrite(buffer, elementSize, elementCount, file) ((size_t)0)
++#else
+ #ifdef FORCE_CASE_INSENSITIVE
+ 
+ #include "fcaseopen.h"
+@@ -33,6 +53,7 @@
+ #endif
+ 
+ #endif
++#endif // PORT32X S7b
+ 
+ struct FileInfo {
+     char fileName[0x100];
+@@ -55,7 +76,9 @@
+ extern char rsdkName[0x400];
+ 
+ extern char fileName[0x100];
+-extern byte fileBuffer[0x2000];
++// PORT32X S5r: the file read buffer - 1 KB in the SH2 configuration (files are read from the cart)
++#define FILEBUFFER_SIZE (SCD32X_SMALL ? 0x400 : 0x2000)
++extern byte fileBuffer[FILEBUFFER_SIZE];
+ extern int fileSize;
+ extern int vFileSize;
+ extern int readPos;
+@@ -89,8 +112,18 @@
+ bool CheckRSDKFile(const char *filePath);
+ 
+ bool LoadFile(const char *filePath, FileInfo *fileInfo);
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(__sh__)
++extern char scdReadName[0x100]; // PORT32X S7a
++// PORT32X S7a4: the open file's name saved with each FileInfo (GetFileInfo copies the engine's
++// fileName, which is stale after a reopen in the data-pack branch of SetFileInfo)
++void scd_info_name_save(const void *info);
++void scd_info_name_load(const void *info, const char *fallback);
++#endif
+ inline bool CloseFile()
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(__sh__)
++    scdReadName[0] = 0; // PORT32X S7a
++#endif
+     int result = 0;
+     if (cFileHandle)
+         result = fClose(cFileHandle);
+@@ -105,8 +138,8 @@
+ 
+ inline size_t FillFileBuffer()
+ {
+-    if (readPos + 0x2000 <= fileSize)
+-        readSize = 0x2000;
++    if (readPos + FILEBUFFER_SIZE <= fileSize)
++        readSize = FILEBUFFER_SIZE;
+     else
+         readSize = fileSize - readPos;
+ 
+@@ -118,6 +151,9 @@
+ 
+ inline void GetFileInfo(FileInfo *fileInfo)
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(__sh__)
++    scd_info_name_save(fileInfo); // PORT32X S7a4
++#endif
+     StrCopy(fileInfo->fileName, fileName);
+     fileInfo->bufferPosition    = bufferPosition;
+     fileInfo->readPos           = readPos - readSize;
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/RetroEngine.cpp engine/RetroEngine.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/RetroEngine.cpp	2026-10-05 20:19:32.267005559 +0000
+@@ -32,6 +32,9 @@
+ 
+ bool ProcessEvents()
+ {
++#if RETRO_PLATFORM == RETRO_SCD32X
++    return plat_running(); // PORT32X: no window events; the platform decides when to stop
++#endif
+ #if RETRO_USING_SDL1 || RETRO_USING_SDL2
+     while (SDL_PollEvent(&Engine.sdlEvents)) {
+         // Main Events
+@@ -369,12 +372,14 @@
+ 
+ void RetroEngine::Run()
+ {
++#if RETRO_PLATFORM != RETRO_SCD32X // PORT32X: the platform layer paces the frames
+     unsigned long long targetFreq = SDL_GetPerformanceFrequency() / Engine.refreshRate;
+     unsigned long long curTicks   = 0;
+     unsigned long long prevTicks  = 0;
++#endif
+ 
+     while (running) {
+-#if !RETRO_USE_ORIGINAL_CODE
++#if !RETRO_USE_ORIGINAL_CODE && RETRO_PLATFORM != RETRO_SCD32X
+         if (!vsync) {
+             curTicks = SDL_GetPerformanceCounter();
+             if (curTicks < prevTicks + targetFreq)
+@@ -635,7 +640,11 @@
+                             if (globalVariablesCount >= GLOBALVAR_COUNT)
+                                 PrintLog("Failed to add global variable '%s' (max limit reached)", varName);
+                             else if (GetGlobalVariableID(varName) == 0xFF) {
++#if SCD32X_CARTDATA
++                                // PORT32X S5j: the names are in the cart image
++#else
+                                 StrCopy(globalVariableNames[globalVariablesCount], varName);
++#endif
+                                 globalVariables[globalVariablesCount] = varValue;
+                                 globalVariablesCount++;
+                             }
+@@ -1063,8 +1072,13 @@
+         for (byte v = 0; v < varCount; ++v) {
+             // Read Variable Name
+             FileRead(&fileBuffer, 1);
++#if SCD32X_CARTDATA
++            static char scdVarSink[0x20]; // PORT32X S5j: the names are in the cart image - parse, store nothing
++            FileRead(scdVarSink, fileBuffer);
++#else
+             FileRead(&globalVariableNames[v], fileBuffer);
+             globalVariableNames[v][fileBuffer] = 0;
++#endif
+ 
+             // Read Variable Value
+             FileRead(&fileBuffer2, 1);
+@@ -1121,24 +1135,30 @@
+             FileRead(&fileBuffer, 1);
+             stageListCount[cat] = fileBuffer;
+             for (int s = 0; s < stageListCount[cat]; ++s) {
++#if SCD32X_CARTDATA
++                static SceneInfo scdSceneSink; // PORT32X S5e: the stage list is in the cart image - parse, store nothing
++                SceneInfo &scene = scdSceneSink;
++#else
++                SceneInfo &scene = stageList[cat][s];
++#endif
+                 // Read Stage Folder
+                 FileRead(&fileBuffer, 1);
+-                FileRead(&stageList[cat][s].folder, fileBuffer);
+-                stageList[cat][s].folder[fileBuffer] = 0;
++                FileRead(&scene.folder, fileBuffer);
++                scene.folder[fileBuffer] = 0;
+ 
+                 // Read Stage ID
+                 FileRead(&fileBuffer, 1);
+-                FileRead(&stageList[cat][s].id, fileBuffer);
+-                stageList[cat][s].id[fileBuffer] = 0;
++                FileRead(&scene.id, fileBuffer);
++                scene.id[fileBuffer] = 0;
+ 
+                 // Read Stage Name
+                 FileRead(&fileBuffer, 1);
+-                FileRead(&stageList[cat][s].name, fileBuffer);
+-                stageList[cat][s].name[fileBuffer] = 0;
++                FileRead(&scene.name, fileBuffer);
++                scene.name[fileBuffer] = 0;
+ 
+                 // Read Stage Mode
+                 FileRead(&fileBuffer, 1);
+-                stageList[cat][s].highlighted = fileBuffer;
++                scene.highlighted = fileBuffer;
+             }
+         }
+ 
+@@ -1176,6 +1196,11 @@
+         }
+ #endif
+ 
++#if SCD32X_CARTDATA
++        if (strlen(Engine.startSceneFolder) && strlen(Engine.startSceneID)) // PORT32X S5e: the stage list is read-only
++            plat_log("PORT32X: stage=/scene= arguments ignored (the stage list is in the cart image)");
++        else
++#endif
+         if (strlen(Engine.startSceneFolder) && strlen(Engine.startSceneID)) {
+             SceneInfo *scene = &stageList[STAGELIST_BONUS][0xFE]; // slot 0xFF is used for "none" startStage
+             strcpy(scene->name, "_RSDK_SCENE");
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp engine/RetroEngine.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/RetroEngine.hpp	2026-10-06 22:13:24.399235858 +0000
+@@ -4,6 +4,80 @@
+ // Disables POSIX use c++ name blah blah stuff
+ #pragma warning(disable : 4996)
+ 
++#ifdef SONICCD32X
++// PORT32X: the Sega CD32X build (and its PC host build) has no SDL, no OpenGL,
++// no Ogg/Theora and no mod loader. The platform layer lives in plat_*.cpp.
++#define RETRO_USE_MOD_LOADER (0)
++#define RETRO_USING_OPENGL   (0)
++#define RETRO_USE_SDL_NONE   (1)
++#define RETRO_USING_VORBIS   (0)
++#define RETRO_USING_THEORA   (0)
++// PORT32X S5b: SCD32X_SH2 = the SH2 configuration (also buildable on the PC for tests):
++//   SCD32X_NODRAW - no pixels drawn: the scripts (draw events too) and the layer SCROLL still run,
++//                   the Mega Drive VDP draws the planes (S4); sprites come later (S5d)
++//   the pixel-only arrays shrink to nothing (SCD32X_SMALL)
++// PORT32X S7e: SCD32X_DRAW = the SH2 configuration WITH the engine's own renderer (the game's own
++// pictures into the 32X frame buffer); its pixels and blend tables come from the cart image
++#ifdef SCD32X_DRAW
++#ifndef SCD32X_SH2
++#define SCD32X_SH2
++#endif
++#define SCD32X_NODRAW (0)
++#define SCD32X_DRAWCART (1)
++#endif
++#if defined(SCD32X_SH2) && !defined(SCD32X_NODRAW)
++#define SCD32X_NODRAW (1)
++#endif
++#ifndef SCD32X_NODRAW
++#define SCD32X_NODRAW (0)
++#endif
++#ifdef SCD32X_SH2
++#define SCD32X_SMALL (1)
++#define SCD32X_CARTDATA (1) // PORT32X S5c: scripts, chunks, collision read from the cart image
++#else
++#define SCD32X_SMALL (0)
++#define SCD32X_CARTDATA (0)
++#endif
++// a pixel-drawing function returns at once in the no-draw build
++#define SCD_NODRAW_RETURN() \
++    do {                    \
++        if (SCD32X_NODRAW)  \
++            return;         \
++    } while (0)
++#include <stdint.h>
++#include <stdlib.h>
++// PORT32X: the engine uses SDL's integer type names everywhere
++typedef int8_t Sint8;
++typedef uint8_t Uint8;
++typedef int16_t Sint16;
++typedef uint16_t Uint16;
++typedef int32_t Sint32;
++typedef uint32_t Uint32;
++#else
++#define RETRO_USING_VORBIS (1)
++#define RETRO_USING_THEORA (1)
++#endif
++// PORT32X S5b: defaults for every build (the SH2 configuration sets them above)
++#ifndef SCD32X_NODRAW
++#define SCD32X_NODRAW (0)
++#endif
++#ifndef SCD32X_SMALL
++#define SCD32X_SMALL (0)
++#endif
++#ifndef SCD32X_CARTDATA
++#define SCD32X_CARTDATA (0)
++#endif
++#ifndef SCD32X_DRAWCART
++#define SCD32X_DRAWCART (0)
++#endif
++#ifndef SCD_NODRAW_RETURN
++#define SCD_NODRAW_RETURN() \
++    do {                    \
++        if (SCD32X_NODRAW)  \
++            return;         \
++    } while (0)
++#endif
++
+ // Setting this to true removes (almost) ALL changes from the original code, the trade off is that a playable game cannot be built, it is advised to
+ // be set to true only for preservation purposes
+ #ifndef RETRO_USE_ORIGINAL_CODE
+@@ -49,13 +123,16 @@
+ #define RETRO_VITA (7)
+ #define RETRO_UWP  (8)
+ #define RETRO_LINUX (9)
++#define RETRO_SCD32X (10) // PORT32X: Sega CD32X (and its PC host build)
+ 
+ // Platform types (Game manages platform-specific code such as HUD position using this rather than the above)
+ #define RETRO_STANDARD (0)
+ #define RETRO_MOBILE   (1)
+ 
+ // use this macro (RETRO_PLATFORM) to define platform specific code blocks and etc to run the engine
+-#if defined _WIN32
++#if defined SONICCD32X
++#define RETRO_PLATFORM (RETRO_SCD32X) // PORT32X: chosen before the host OS checks
++#elif defined _WIN32
+ #if defined WINAPI_FAMILY
+ #if WINAPI_FAMILY != WINAPI_FAMILY_APP
+ #define RETRO_PLATFORM (RETRO_WIN)
+@@ -89,7 +166,12 @@
+ #define RETRO_PLATFORM (RETRO_WIN) // Default
+ #endif
+ 
+-#if RETRO_PLATFORM == RETRO_VITA
++#if RETRO_PLATFORM == RETRO_SCD32X
++// PORT32X: 32X screen width, no mouse or touch
++#define BASE_PATH            ""
++#define DEFAULT_SCREEN_XSIZE 320
++#define DEFAULT_FULLSCREEN   false
++#elif RETRO_PLATFORM == RETRO_VITA
+ #define BASE_PATH            "ux0:data/SonicCD/"
+ #define DEFAULT_SCREEN_XSIZE 480
+ #define DEFAULT_FULLSCREEN   true
+@@ -203,6 +285,8 @@
+ #define RETRO_GAMEPLATFORMID (UAP_GetRetroGamePlatformId())
+ #elif RETRO_PLATFORM == RETRO_LINUX
+ #define RETRO_GAMEPLATFORMID (RETRO_STANDARD)
++#elif RETRO_PLATFORM == RETRO_SCD32X
++#define RETRO_GAMEPLATFORMID (RETRO_WIN) // PORT32X: scripts see the PC version
+ #else
+ #error Unspecified RETRO_GAMEPLATFORMID
+ #endif
+@@ -347,10 +431,21 @@
+ };
+ 
+ // General Defines
++#if RETRO_PLATFORM == RETRO_SCD32X && (defined(SCD32X_DRAW) || defined(SCD32X_SCREEN198))
++// PORT32X S7e: the 32X frame buffer holds 198 lines of the software renderer's 328-pixel lines
++// (512 + 328 * 198 * 2 = 130,400 of 131,072 bytes); SCD32X_SCREEN198 = the PC reference build
++#define SCREEN_YSIZE   (198)
++#elif RETRO_PLATFORM == RETRO_SCD32X
++#define SCREEN_YSIZE   (224) // PORT32X: the NTSC Mega Drive / 32X screen (Micronut99, S3a); scripts read Screen.YSize
++#else
+ #define SCREEN_YSIZE   (240)
++#endif
+ #define SCREEN_CENTERY (SCREEN_YSIZE / 2)
+ 
+-#if RETRO_PLATFORM == RETRO_WIN || RETRO_PLATFORM == RETRO_UWP || RETRO_PLATFORM == RETRO_ANDROID || RETRO_PLATFORM == RETRO_LINUX
++#if RETRO_PLATFORM == RETRO_SCD32X
++// PORT32X: no SDL / Ogg / Theora headers; see plat.hpp
++#include "plat.hpp"
++#elif RETRO_PLATFORM == RETRO_WIN || RETRO_PLATFORM == RETRO_UWP || RETRO_PLATFORM == RETRO_ANDROID || RETRO_PLATFORM == RETRO_LINUX
+ #if RETRO_USING_SDL2
+ #include <SDL.h>
+ #elif RETRO_USING_SDL1
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene.cpp engine/Scene.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Scene.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Scene.cpp	2026-10-06 22:13:24.405102265 +0000
+@@ -8,7 +8,11 @@
+     "Bonus Stages",
+     "Special Stages",
+ };
++#if SCD32X_CARTDATA
++SceneInfo (&stageList)[STAGELIST_MAX][0x100] = *(SceneInfo(*)[STAGELIST_MAX][0x100])plat_cart_data(SCD_CART_STAGELIST); // PORT32X S5e
++#else
+ SceneInfo stageList[STAGELIST_MAX][0x100];
++#endif
+ 
+ int stageMode = STAGEMODE_LOAD;
+ 
+@@ -74,12 +78,76 @@
+ LineScroll hParallax;
+ LineScroll vParallax;
+ 
++#if SCD32X_CARTDATA
++// PORT32X S5h: chunk table proxy + collision overlay over the cart image (see Scene.hpp)
++const ushort *scdChunkIndex = NULL; // S6a2: bound by LoadStageChunks (plat_chunk_arrays)
++const byte *scdChunkDir = NULL, *scdChunkPlane = NULL, *scdChunkSolid[CPATH_COUNT] = { NULL, NULL };
++int scdChunkCount = 0;
++uint scdChunkPatched[CHUNKTILE_COUNT / 32];
++static int scdChunkPatchCount = 0;
++static int scdChunkPatchIndex[SCD_CHUNK_PATCHES];
++static ScdChunkEntry scdChunkPatch[SCD_CHUNK_PATCHES];
++ScdChunkTable tiles128x128;
++ScdCollisionMasks collisionMasks[2];
++static int scd_collision_bind()
++{
++    CollisionMasks *img = (CollisionMasks *)plat_cart_data(SCD_CART_COLLISION);
++    for (int p = 0; p < 2; ++p) {
++        collisionMasks[p].floorMasks = img[p].floorMasks;
++        collisionMasks[p].lWallMasks = img[p].lWallMasks;
++        collisionMasks[p].rWallMasks = img[p].rWallMasks;
++        collisionMasks[p].roofMasks  = img[p].roofMasks;
++    }
++    return 1;
++}
++static int scdCollisionBound = scd_collision_bind();
++ScdChunkEntry *scd_chunk_entry(int i, bool create)
++{
++    for (int k = 0; k < scdChunkPatchCount; ++k)
++        if (scdChunkPatchIndex[k] == i)
++            return &scdChunkPatch[k];
++    if (!create)
++        return NULL;
++    if (scdChunkPatchCount >= SCD_CHUNK_PATCHES) {
++        static bool told = false;
++        if (!told) {
++            told = true;
++            plat_log("PORT32X: chunk patch list full - a Set16x16TileInfo write was dropped");
++        }
++        return NULL;
++    }
++    ScdChunkEntry *e = &scdChunkPatch[scdChunkPatchCount];
++    e->gfxDataPos    = scd_chunk_base(SCD_CF_GFXPOS, i);
++    e->tileIndex     = (ushort)scd_chunk_base(SCD_CF_INDEX, i);
++    e->direction     = (byte)scd_chunk_base(SCD_CF_DIR, i);
++    e->visualPlane   = (byte)scd_chunk_base(SCD_CF_PLANE, i);
++    for (int p = 0; p < CPATH_COUNT; ++p) e->collisionFlags[p] = (byte)scd_chunk_base(p ? SCD_CF_SOLID1 : SCD_CF_SOLID0, i);
++    scdChunkPatchIndex[scdChunkPatchCount++] = i;
++    scdChunkPatched[i >> 5] |= 1u << (i & 31);
++    return e;
++}
++int scd_chunk_patched_get(int i, int f) // S5p: a patched chunk (rare) - out of line
++{
++    const ScdChunkEntry *e = scd_chunk_entry(i, false);
++    return e ? scd_entry_get(e, f) : scd_chunk_base(f, i);
++}
++void scd_chunk_patches_reset()
++{
++    for (int k = 0; k < scdChunkPatchCount; ++k) scdChunkPatched[scdChunkPatchIndex[k] >> 5] &= ~(1u << (scdChunkPatchIndex[k] & 31));
++    scdChunkPatchCount = 0;
++}
++#else
+ Tiles128x128 tiles128x128;
+ CollisionMasks collisionMasks[2];
++#endif
+ 
+-byte tilesetGFXData[TILESET_SIZE];
++#if SCD32X_DRAWCART // PORT32X S7e: the tiles' pixels from the cart image
++byte (&tilesetGFXData)[TILESET_SIZE] = *(byte(*)[TILESET_SIZE])plat_cart_data(SCD_CART_TILEGFX);
++#else
++byte tilesetGFXData[SCD32X_SMALL ? 4 : TILESET_SIZE]; // PORT32X S5b
++#endif
+ 
+-ushort tile3DFloorBuffer[0x100 * 0x100];
++ushort tile3DFloorBuffer[SCD32X_SMALL ? 1 : 0x100 * 0x100]; // PORT32X S5b
+ bool drawStageGFXHQ = false;
+ 
+ #if RETRO_USE_MOD_LOADER
+@@ -338,8 +406,67 @@
+     Engine.frameCount++;
+ }
+ 
++#if SCD32X_CARTDATA
++bool scdStageLoaded = false; // PORT32X S5d
++#endif
++#if SCD32X_SMALL
++// PORT32X S5c: the layout pool. Reset when a new stage's backgrounds load; the foreground keeps its
++// rows on an act reload if they still fit.
++static int scdPoolUsed = 0;
++static ushort scdEmptyRows[0x100];
++static byte scdEmptyScroll[CHUNK_SIZE];
++void scd_layout_pool_reset()
++{
++    scdPoolUsed = 0;
++    for (int i = 0; i < LAYER_COUNT; ++i) {
++        memset(scdEmptyRows, 0, sizeof(scdEmptyRows));
++        stageLayouts[i].tiles      = scdEmptyRows;
++        stageLayouts[i].lineScroll = scdEmptyScroll;
++        stageLayouts[i].rowsCap    = 0;
++    }
++}
++void scd_layout_rows(TileLayer *layer, int rows)
++{
++    int size        = 0;
++    unsigned char *pool = plat_layout_pool(&size);
++    if (rows < 1)
++        rows = 1;
++    if (layer->rowsCap >= rows)
++        return;
++    int need = (rows * 0x100 * (int)sizeof(ushort) + rows * CHUNK_SIZE + 3) & ~3;
++    if (scdPoolUsed + need > size) {
++        plat_log("PORT32X: layout pool full - layer rows cut");
++        rows = (size - scdPoolUsed) / (0x100 * (int)sizeof(ushort) + CHUNK_SIZE);
++        if (rows < 1)
++            return;
++        need = (rows * 0x100 * (int)sizeof(ushort) + rows * CHUNK_SIZE + 3) & ~3;
++    }
++    layer->tiles      = (ushort *)(pool + scdPoolUsed);
++    layer->lineScroll = pool + scdPoolUsed + rows * 0x100 * sizeof(ushort);
++    layer->rowsCap    = rows;
++    scdPoolUsed += need;
++}
++int scd_layout_index_ok(int layer, int index)
++{
++    static bool told = false;
++    if (layer >= 0 && layer < LAYER_COUNT && index >= 0 && index < stageLayouts[layer].rowsCap * 0x100)
++        return 1;
++    if (!told) {
++        told = true;
++        plat_log("PORT32X: a script used a layout entry outside the layer's rows (dropped)");
++    }
++    return 0;
++}
++#endif
++
+ void LoadStageFiles(void)
+ {
++#if SCD32X_CARTDATA
++    scdStageLoaded = false; // PORT32X S5d
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X
++    plat_stage_loading(); // PORT32X S5g: the stage's cart image (one per stage load)
++#endif
+     StopAllSfx();
+     FileInfo infoStore;
+     FileInfo info;
+@@ -598,6 +725,12 @@
+     xScrollB = (playerList[0].XPos >> 16) - SCREEN_CENTERX + SCREEN_XSIZE;
+     yScrollA = (playerList[0].YPos >> 16) - SCREEN_SCROLL_UP;
+     yScrollB = (playerList[0].YPos >> 16) - SCREEN_SCROLL_UP + SCREEN_YSIZE;
++#if RETRO_PLATFORM == RETRO_SCD32X
++    plat_stage_loaded(); // PORT32X S5c: the PC build writes the cart image here
++#endif
++#if SCD32X_CARTDATA
++    scdStageLoaded = true; // PORT32X S5d: from here on, fill-once tables must not grow
++#endif
+ }
+ int LoadActFile(const char *ext, int stageID, FileInfo *info)
+ {
+@@ -643,6 +776,9 @@
+ 
+         FileRead(&stageLayouts[0].xsize, 1);
+         FileRead(&stageLayouts[0].ysize, 1);
++#if SCD32X_SMALL
++        scd_layout_rows(&stageLayouts[0], stageLayouts[0].ysize); // PORT32X S5c
++#endif
+         xBoundary1    = 0;
+         newXBoundary1 = 0;
+         yBoundary1    = 0;
+@@ -653,7 +789,11 @@
+         newXBoundary2 = stageLayouts[0].xsize << 7;
+         newYBoundary2 = stageLayouts[0].ysize << 7;
+ 
++#if SCD32X_SMALL
++        for (int i = 0; i < stageLayouts[0].rowsCap * 0x100; ++i) stageLayouts[0].tiles[i] = 0; // PORT32X S5c
++#else
+         for (int i = 0; i < 0x10000; ++i) stageLayouts[0].tiles[i] = 0;
++#endif
+ 
+         byte fileBuffer = 0;
+         for (int y = 0; y < stageLayouts[0].ysize; ++y) {
+@@ -728,6 +868,9 @@
+ }
+ void LoadStageBackground()
+ {
++#if SCD32X_SMALL
++    scd_layout_pool_reset(); // PORT32X S5c
++#endif
+     for (int i = 0; i < LAYER_COUNT; ++i) {
+         stageLayouts[i].type               = LAYER_NOSCROLL;
+         stageLayouts[i].deformationOffset  = 0;
+@@ -788,9 +931,16 @@
+             stageLayouts[i].scrollSpeed = fileBuffer << 10;
+             stageLayouts[i].scrollPos   = 0;
+ 
++#if SCD32X_SMALL
++            scd_layout_rows(&stageLayouts[i], stageLayouts[i].ysize); // PORT32X S5c
++            memset(stageLayouts[i].tiles, 0, stageLayouts[i].rowsCap * 0x100 * sizeof(ushort));
++            byte *lineScrollPtr = stageLayouts[i].lineScroll;
++            memset(stageLayouts[i].lineScroll, 0, stageLayouts[i].rowsCap * CHUNK_SIZE);
++#else
+             memset(stageLayouts[i].tiles, 0, TILELAYER_CHUNK_COUNT * sizeof(ushort));
+             byte *lineScrollPtr = stageLayouts[i].lineScroll;
+             memset(stageLayouts[i].lineScroll, 0, 0x7FFF);
++#endif
+ 
+             // Read Line Scroll
+             byte buf[3];
+@@ -831,6 +981,18 @@
+ }
+ void LoadStageChunks()
+ {
++#if SCD32X_CARTDATA
++    // PORT32X S6a2: this stage's chunk arrays (cart image); S5h: the original reloads the chunks
++    // here - patches go; S5c: the table itself is in the cart image
++    {
++        const unsigned char *solid[CPATH_COUNT];
++        plat_chunk_arrays(&scdChunkIndex, &scdChunkDir, &scdChunkPlane, solid, &scdChunkCount);
++        scdChunkSolid[0] = solid[0];
++        scdChunkSolid[1] = solid[1];
++    }
++    scd_chunk_patches_reset();
++    return;
++#endif
+     FileInfo info;
+     byte entry[3];
+ 
+@@ -860,6 +1022,16 @@
+ }
+ void LoadStageCollisions()
+ {
++#if SCD32X_CARTDATA
++    { // PORT32X S5h: the masks are in the cart image; flags and angles are RAM copies, refilled here
++        const CollisionMasks *img = (const CollisionMasks *)plat_cart_data(SCD_CART_COLLISION);
++        for (int p = 0; p < 2; ++p) {
++            memcpy(collisionMasks[p].angles, img[p].angles, sizeof(collisionMasks[p].angles));
++            memcpy(collisionMasks[p].flags, img[p].flags, sizeof(collisionMasks[p].flags));
++        }
++        return;
++    }
++#endif
+     FileInfo info;
+     if (LoadStageFile("CollisionMasks.bin", stageListPosition, &info)) {
+ 
+@@ -1082,6 +1254,7 @@
+             } while (c != 256);
+         }
+ 
++#if !SCD32X_SMALL // PORT32X S5b: the palette above stays; the tile pixels live in the Mega Drive VRAM
+         ReadGifPictureData(width, height, interlaced, tilesetGFXData, 0);
+ 
+         byte transparent = tilesetGFXData[0];
+@@ -1089,6 +1262,7 @@
+             if (tilesetGFXData[i] == transparent)
+                 tilesetGFXData[i] = 0;
+         }
++#endif
+ 
+         CloseFile();
+     }
+@@ -1114,6 +1288,7 @@
+             SetPaletteEntry(-1, c, clr[0], clr[1], clr[2]);
+         }
+ 
++#if !SCD32X_SMALL // PORT32X S5b: the palette above stays; the tile pixels live in the Mega Drive VRAM
+         byte *gfxData = tilesetGFXData;
+         byte buf[3];
+         while (true) {
+@@ -1138,6 +1313,7 @@
+             if (tilesetGFXData[i] == transparent)
+                 tilesetGFXData[i] = 0;
+         }
++#endif
+ 
+         CloseFile();
+     }
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene.hpp engine/Scene.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Scene.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Scene.hpp	2026-10-06 22:13:24.405350099 +0000
+@@ -88,8 +88,16 @@
+ };
+ 
+ struct TileLayer {
++#if SCD32X_SMALL
++    // PORT32X S5c: each layer gets exactly its rows from the layout pool (row width stays 0x100,
++    // so every tiles[x + (y << 8)] is unchanged); writes past rowsCap are dropped and logged
++    ushort *tiles;
++    byte *lineScroll;
++    int rowsCap;
++#else
+     ushort tiles[TILELAYER_CHUNK_COUNT];
+     byte lineScroll[TILELAYER_SCROLL_COUNT];
++#endif
+     int parallaxFactor;
+     int scrollSpeed;
+     int scrollPos;
+@@ -123,7 +131,11 @@
+ 
+ extern int stageListCount[STAGELIST_MAX];
+ extern char stageListNames[STAGELIST_MAX][0x20];
++#if SCD32X_CARTDATA
++extern SceneInfo (&stageList)[STAGELIST_MAX][0x100]; // PORT32X S5e: cart image
++#else
+ extern SceneInfo stageList[STAGELIST_MAX][0x100];
++#endif
+ 
+ extern int stageMode;
+ 
+@@ -191,12 +203,138 @@
+ extern LineScroll hParallax;
+ extern LineScroll vParallax;
+ 
++#if SCD32X_CARTDATA
++// PORT32X S5h: the chunk and collision tables live in the cart image, which the SH2 cannot write.
++// Set16x16TileInfo (Collision Chaos 2B-D, CC3, MM3) writes them during play, so:
++//  - chunks: tiles128x128 is a proxy. tiles128x128.field[c] reads the cart unless chunk c is
++//    patched (bitmap); a write copies the chunk's entry into a patch list (256 entries) and changes
++//    it there. Every use in the engine compiles unchanged. Patches are dropped when the chunks
++//    reload (LoadStageChunks - every stage load), as the original reloads them.
++//  - collision: flags and angles (10 KB) are RAM copies, refilled when the collision reloads
++//    (LoadStageCollisions - new stages only, as the original); the masks stay in the cart.
++enum { SCD_CF_GFXPOS, SCD_CF_INDEX, SCD_CF_DIR, SCD_CF_PLANE, SCD_CF_SOLID0, SCD_CF_SOLID1 };
++#define SCD_CHUNK_PATCHES (256)
++struct ScdChunkEntry {
++    int gfxDataPos;
++    ushort tileIndex;
++    byte direction, visualPlane;
++    byte collisionFlags[CPATH_COUNT];
++};
++// S6a2: the chunk table as separate arrays of scdChunkCount entries (cart image); reads past the end
++// return 0, as the untrimmed table holds there; gfxDataPos is tileIndex << 8 (software render)
++extern const ushort *scdChunkIndex;
++extern const byte *scdChunkDir, *scdChunkPlane, *scdChunkSolid[CPATH_COUNT];
++extern int scdChunkCount;
++extern uint scdChunkPatched[CHUNKTILE_COUNT / 32];
++ScdChunkEntry *scd_chunk_entry(int i, bool create);
++int scd_chunk_patched_get(int i, int f); // S5p: the rare path, out of line (Scene.cpp)
++void scd_chunk_patches_reset();
++inline int scd_chunk_base(int f, int i)
++{
++    if ((unsigned)i >= (unsigned)scdChunkCount)
++        return 0;
++    switch (f) {
++        case SCD_CF_GFXPOS: return scdChunkIndex[i] << 8;
++        case SCD_CF_INDEX: return scdChunkIndex[i];
++        case SCD_CF_DIR: return scdChunkDir[i];
++        case SCD_CF_PLANE: return scdChunkPlane[i];
++        case SCD_CF_SOLID0: return scdChunkSolid[0][i];
++        default: return scdChunkSolid[1][i];
++    }
++}
++inline int scd_entry_get(const ScdChunkEntry *e, int f)
++{
++    switch (f) {
++        case SCD_CF_GFXPOS: return e->gfxDataPos;
++        case SCD_CF_INDEX: return e->tileIndex;
++        case SCD_CF_DIR: return e->direction;
++        case SCD_CF_PLANE: return e->visualPlane;
++        case SCD_CF_SOLID0: return e->collisionFlags[0];
++        default: return e->collisionFlags[1];
++    }
++}
++inline void scd_entry_set(ScdChunkEntry *e, int f, int v)
++{
++    switch (f) {
++        case SCD_CF_GFXPOS: e->gfxDataPos = v; break;
++        case SCD_CF_INDEX: e->tileIndex = (ushort)v; break;
++        case SCD_CF_DIR: e->direction = (byte)v; break;
++        case SCD_CF_PLANE: e->visualPlane = (byte)v; break;
++        case SCD_CF_SOLID0: e->collisionFlags[0] = (byte)v; break;
++        default: e->collisionFlags[1] = (byte)v; break;
++    }
++}
++// S5p: the field is a template parameter - each access compiles to one bitmap test and one direct
++// read (S5h used a run-time switch: +12 KB in Collision, slower). Only the solidity plane stays a
++// run-time choice (collisionFlags[p]).
++template <typename T, int F> struct ScdChunkRef {
++    int i;
++    operator T() const
++    {
++        if (scdChunkPatched[i >> 5] & (1u << (i & 31)))
++            return (T)scd_chunk_patched_get(i, F);
++        return (T)scd_chunk_base(F, i);
++    }
++    ScdChunkRef &operator=(T v)
++    {
++        ScdChunkEntry *e = scd_chunk_entry(i, true);
++        if (e)
++            scd_entry_set(e, F, (int)v);
++        return *this;
++    }
++};
++template <typename T, int F> struct ScdChunkField {
++    ScdChunkRef<T, F> operator[](int i) const { return ScdChunkRef<T, F>{ i }; }
++};
++struct ScdSolidityRef {
++    int i, p;
++    operator byte() const
++    {
++        if (scdChunkPatched[i >> 5] & (1u << (i & 31)))
++            return (byte)scd_chunk_patched_get(i, p ? SCD_CF_SOLID1 : SCD_CF_SOLID0);
++        return (unsigned)i < (unsigned)scdChunkCount ? scdChunkSolid[p][i] : 0;
++    }
++    ScdSolidityRef &operator=(byte v)
++    {
++        ScdChunkEntry *e = scd_chunk_entry(i, true);
++        if (e)
++            e->collisionFlags[p] = v;
++        return *this;
++    }
++};
++struct ScdSolidityPlane {
++    int p;
++    ScdSolidityRef operator[](int i) const { return ScdSolidityRef{ i, p }; }
++};
++struct ScdChunkSolidity {
++    ScdSolidityPlane operator[](int p) const { return ScdSolidityPlane{ p ? 1 : 0 }; }
++};
++struct ScdChunkTable {
++    ScdChunkField<int, SCD_CF_GFXPOS> gfxDataPos;
++    ScdChunkField<ushort, SCD_CF_INDEX> tileIndex;
++    ScdChunkField<byte, SCD_CF_DIR> direction;
++    ScdChunkField<byte, SCD_CF_PLANE> visualPlane;
++    ScdChunkSolidity collisionFlags;
++};
++struct ScdCollisionMasks {
++    sbyte *floorMasks, *lWallMasks, *rWallMasks, *roofMasks; // in the cart image (never written)
++    uint angles[TILE_COUNT];                                 // RAM copies (Set16x16TileInfo writes them)
++    byte flags[TILE_COUNT];
++};
++extern ScdChunkTable tiles128x128;
++extern ScdCollisionMasks collisionMasks[2];
++#else
+ extern Tiles128x128 tiles128x128;
+ extern CollisionMasks collisionMasks[2];
++#endif
+ 
+-extern byte tilesetGFXData[TILESET_SIZE];
++#if SCD32X_DRAWCART // PORT32X S7e
++extern byte (&tilesetGFXData)[TILESET_SIZE];
++#else
++extern byte tilesetGFXData[SCD32X_SMALL ? 4 : TILESET_SIZE];
++#endif
+ 
+-extern ushort tile3DFloorBuffer[0x100 * 0x100];
++extern ushort tile3DFloorBuffer[SCD32X_SMALL ? 1 : 0x100 * 0x100];
+ extern bool drawStageGFXHQ;
+ 
+ void InitFirstStage();
+@@ -223,11 +361,31 @@
+ void LoadStageBackground();
+ void LoadStageChunks();
+ void LoadStageCollisions();
++#if SCD32X_SMALL
++// PORT32X S5c: the original engine's foreground has 256 rows; reads past the layer's real rows (Sonic
++// falling below the layout) land in cleared rows and give 0. The layout pool has no such rows, so
++// those reads return 0 here - the same answer.
++inline ushort scd_fg_tile(int i) { return (i >= 0 && i < stageLayouts[0].rowsCap * 0x100) ? stageLayouts[0].tiles[i] : 0; }
++#define SCD_FG_TILE(i) scd_fg_tile(i)
++#else
++#define SCD_FG_TILE(i) stageLayouts[0].tiles[i]
++#endif
++
++#if SCD32X_CARTDATA
++extern bool scdStageLoaded; // PORT32X S5d: the stage's files are loaded
++#endif
++#if SCD32X_SMALL
++void scd_layout_pool_reset();                      // PORT32X S5c
++void scd_layout_rows(TileLayer *layer, int rows);  // PORT32X S5c: give the layer at least `rows` rows
++int scd_layout_index_ok(int layer, int index);     // PORT32X S5c: script writes / reads inside the rows?
++#endif
+ void LoadStageGIFFile(int stageID);
+ void LoadStageGFXFile(int stageID);
+ 
+ inline void Init3DFloorBuffer(int layerID)
+ {
++    if (SCD32X_SMALL) // PORT32X S5b: 3D floors (special stages) are the 32X's job later
++        return;
+     for (int y = 0; y < TILELAYER_CHUNK_H; ++y) {
+         for (int x = 0; x < TILELAYER_CHUNK_W; ++x) {
+             int c                           = stageLayouts[layerID].tiles[(x >> 3) + (y >> 3 << 8)] << 6;
+@@ -239,6 +397,8 @@
+ 
+ inline void Copy16x16Tile(ushort dest, ushort src)
+ {
++    if (SCD32X_SMALL) // PORT32X S5b: animated tiles become Mega Drive tile updates later (TODO S5d)
++        return;
+     if (renderType == RENDER_SW) {
+         byte *destPtr = &tilesetGFXData[TILELAYER_CHUNK_W * dest];
+         byte *srcPtr  = &tilesetGFXData[TILELAYER_CHUNK_W * src];
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene3D.cpp engine/Scene3D.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Scene3D.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Scene3D.cpp	2026-10-06 22:05:11.173725275 +0000
+@@ -10,9 +10,9 @@
+ 
+ Face faceBuffer[FACEBUFFER_SIZE];
+ Vertex vertexBuffer[VERTEXBUFFER_SIZE];
+-Vertex vertexBufferT[VERTEXBUFFER_SIZE];
++Vertex vertexBufferT[VERTEXBUFFERT_SIZE]; // PORT32X S5i
+ 
+-DrawListEntry3D drawList3D[FACEBUFFER_SIZE];
++DrawListEntry3D drawList3D[DRAWLIST3D_SIZE]; // PORT32X S5i
+ 
+ int projectionX = 136;
+ int projectionY = 160;
+@@ -202,6 +202,16 @@
+     matrix->values[3][2] = 0;
+     matrix->values[3][3] = 0x100;
+ }
++#if SCD32X_SMALL
++void scd_3d_outside() // PORT32X S5i: a script used a vertex / face past the SH2's 3D buffers
++{
++    static bool told = false;
++    if (!told) {
++        told = true;
++        plat_log("PORT32X: a script used a 3D vertex / face past the SH2 buffers (dropped)");
++    }
++}
++#endif
+ void TransformVertexBuffer()
+ {
+     for (int y = 0; y < 4; ++y) {
+@@ -229,6 +239,17 @@
+ }
+ void TransformVerticies(Matrix *matrix, int startIndex, int endIndex)
+ {
++#if SCD32X_SMALL
++    if (startIndex < 0 || endIndex > VERTEXBUFFER_SIZE || startIndex >= VERTEXBUFFER_SIZE) { // PORT32X S5i
++        scd_3d_outside();
++        if (startIndex < 0)
++            startIndex = 0;
++        if (endIndex > VERTEXBUFFER_SIZE)
++            endIndex = VERTEXBUFFER_SIZE;
++        if (startIndex >= VERTEXBUFFER_SIZE)
++            return;
++    }
++#endif
+     if (startIndex > endIndex)
+         return;
+ 
+@@ -266,6 +287,8 @@
+ }
+ void Draw3DScene(int spriteSheetID)
+ {
++    SCD_DRAWLOG("Draw3DScene", spriteSheetID, faceCount);
++    SCD_NODRAW_RETURN(); // PORT32X S5b
+     Vertex quad[4];
+     for (int i = 0; i < faceCount; ++i) {
+         Face *face = &faceBuffer[drawList3D[i].faceID];
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene3D.hpp engine/Scene3D.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Scene3D.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Scene3D.hpp	2026-10-06 22:31:41.604576037 +0000
+@@ -1,8 +1,15 @@
+ #ifndef DRAWING3D_H
+ #define DRAWING3D_H
+ 
+-#define VERTEXBUFFER_SIZE (0x1000)
+-#define FACEBUFFER_SIZE   (0x400)
++// PORT32X S5i: the SH2 configuration uses 1,024 vertices / 256 faces (whole game, 15 s per stage:
++// at most 640 / 160 - Title). Script accesses past them are dropped and logged.
++// PORT32X S7e: the drawing build sizes the 3D buffers to the whole-game maxima (S5: 640 vertices, 160
++// faces - the title uses exactly that); the transformed vertices / draw list need SDRAM there
++#define VERTEXBUFFER_SIZE (SCD32X_DRAWCART ? 0x280 : SCD32X_SMALL ? 0x400 : 0x1000)
++#define FACEBUFFER_SIZE   (SCD32X_DRAWCART ? 0xA0 : SCD32X_SMALL ? 0x100 : 0x400)
++// only drawing reads the transformed vertices and the 3D draw list - nothing in the no-draw build
++#define VERTEXBUFFERT_SIZE (SCD32X_NODRAW ? 1 : VERTEXBUFFER_SIZE)
++#define DRAWLIST3D_SIZE    (SCD32X_NODRAW ? 1 : FACEBUFFER_SIZE)
+ 
+ enum FaceFlags {
+     FACE_FLAG_TEXTURED_3D = 0,
+@@ -53,9 +60,9 @@
+ 
+ extern Face faceBuffer[FACEBUFFER_SIZE];
+ extern Vertex vertexBuffer[VERTEXBUFFER_SIZE];
+-extern Vertex vertexBufferT[VERTEXBUFFER_SIZE];
++extern Vertex vertexBufferT[VERTEXBUFFERT_SIZE];
+ 
+-extern DrawListEntry3D drawList3D[FACEBUFFER_SIZE];
++extern DrawListEntry3D drawList3D[DRAWLIST3D_SIZE];
+ 
+ extern int projectionX;
+ extern int projectionY;
+@@ -76,6 +83,9 @@
+ void MatrixRotateZ(Matrix *matrix, int rotationZ);
+ void MatrixRotateXYZ(Matrix *matrix, int rotationX, int rotationY, int rotationZ);
+ void TransformVertexBuffer();
++#if SCD32X_SMALL
++void scd_3d_outside(); // PORT32X S5i
++#endif
+ void TransformVerticies(Matrix *matrix, int startIndex, int endIndex);
+ void Sort3DDrawList();
+ void Draw3DScene(int spriteSheetID);
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Script.cpp	2026-10-05 22:00:26.703187939 +0000
+@@ -6,8 +6,15 @@
+ ScriptFunction scriptFunctionList[FUNCTION_COUNT];
+ int scriptFunctionCount = 0;
+ 
++#if SCD32X_CARTDATA
++// PORT32X S5c: read-only once loaded - bound to the cart image; every use stays the same
++int (&scriptCode)[SCRIPTDATA_COUNT] = *(int (*)[SCRIPTDATA_COUNT])plat_cart_data(SCD_CART_SCRIPTCODE);
++int (&jumpTable)[JUMPTABLE_COUNT]   = *(int (*)[JUMPTABLE_COUNT])plat_cart_data(SCD_CART_JUMPTABLE);
++#else
+ int scriptCode[SCRIPTDATA_COUNT];
+ int jumpTable[JUMPTABLE_COUNT];
++#endif
++const int *plat_cart_jumptable() { return jumpTable; } // PORT32X S5c: for the host's image writer
+ int jumpTableStack[JUMPSTACK_COUNT];
+ int functionStack[FUNCSTACK_COUNT];
+ 
+@@ -46,15 +53,12 @@
+ #endif
+ 
+ struct FunctionInfo {
+-    FunctionInfo()
+-    {
+-        StrCopy(name, "");
+-        opcodeSize = 0;
+-    }
+-    FunctionInfo(const char *functionName, int opSize)
++    // PORT32X S5r: constexpr constructors - the const table below is then built by the compiler
++    // (read-only data, in the cart on the SH2) instead of being copied into RAM at start-up
++    constexpr FunctionInfo() : name(), opcodeSize(0) {}
++    constexpr FunctionInfo(const char *functionName, int opSize) : name(), opcodeSize(opSize)
+     {
+-        StrCopy(name, functionName);
+-        opcodeSize = opSize;
++        for (int i = 0; i < 0x1F && functionName[i]; ++i) name[i] = functionName[i];
+     }
+ 
+     char name[0x20];
+@@ -1919,6 +1923,10 @@
+     FileInfo info;
+     if (LoadFile(scriptPath, &info)) {
+         byte fileBuffer = 0;
++        // PORT32X S5c: on the SH2 the code is already in the cart image - parse (positions and
++        // the file position stay exact) but store nothing; elsewhere SCD_CODE(p) is *(p)
++        int scdSink = 0;
++#define SCD_CODE(p) (SCD32X_CARTDATA ? scdSink : *(p))
+         int *scriptCodePtr = &scriptCode[scriptCodePos];
+         int *jumpTablePtr       = &jumpTable[jumpTablePos];
+ 
+@@ -1938,13 +1946,13 @@
+             if (fileBuffer >= 0x80) {
+                 while (blockSize > 0) {
+                     FileRead(&fileBuffer, 1);
+-                    *scriptCodePtr = fileBuffer;
++                    SCD_CODE(scriptCodePtr) = fileBuffer;
+                     FileRead(&fileBuffer, 1);
+-                    *scriptCodePtr |= fileBuffer << 8;
++                    SCD_CODE(scriptCodePtr) |= fileBuffer << 8;
+                     FileRead(&fileBuffer, 1);
+-                    *scriptCodePtr |= fileBuffer << 16;
++                    SCD_CODE(scriptCodePtr) |= fileBuffer << 16;
+                     FileRead(&fileBuffer, 1);
+-                    *scriptCodePtr |= fileBuffer << 24;
++                    SCD_CODE(scriptCodePtr) |= fileBuffer << 24;
+ 
+                     ++scriptCodePtr;
+                     ++scriptCodePos;
+@@ -1955,7 +1963,7 @@
+             else {
+                 while (blockSize > 0) {
+                     FileRead(&fileBuffer, 1);
+-                    *scriptCodePtr = fileBuffer;
++                    SCD_CODE(scriptCodePtr) = fileBuffer;
+ 
+                     ++scriptCodePtr;
+                     ++scriptCodePos;
+@@ -1981,13 +1989,13 @@
+             if (fileBuffer >= 0x80) {
+                 while (blockSize > 0) {
+                     FileRead(&fileBuffer, 1);
+-                    *jumpTablePtr = fileBuffer;
++                    SCD_CODE(jumpTablePtr) = fileBuffer;
+                     FileRead(&fileBuffer, 1);
+-                    *jumpTablePtr |= fileBuffer << 8;
++                    SCD_CODE(jumpTablePtr) |= fileBuffer << 8;
+                     FileRead(&fileBuffer, 1);
+-                    *jumpTablePtr |= fileBuffer << 16;
++                    SCD_CODE(jumpTablePtr) |= fileBuffer << 16;
+                     FileRead(&fileBuffer, 1);
+-                    *jumpTablePtr |= fileBuffer << 24;
++                    SCD_CODE(jumpTablePtr) |= fileBuffer << 24;
+ 
+                     ++jumpTablePtr;
+                     ++jumpTablePos;
+@@ -1998,7 +2006,7 @@
+             else {
+                 while (blockSize > 0) {
+                     FileRead(&fileBuffer, 1);
+-                    *jumpTablePtr = fileBuffer;
++                    SCD_CODE(jumpTablePtr) = fileBuffer;
+ 
+                     ++jumpTablePtr;
+                     ++jumpTablePos;
+@@ -2132,8 +2140,10 @@
+ 
+ void ClearScriptData()
+ {
+-    memset(scriptCode, 0, SCRIPTDATA_COUNT * sizeof(int));
+-    memset(jumpTable, 0, JUMPTABLE_COUNT * sizeof(int));
++    if (!SCD32X_CARTDATA) { // PORT32X S5c: the cart image is read-only
++        memset(scriptCode, 0, SCRIPTDATA_COUNT * sizeof(int));
++        memset(jumpTable, 0, JUMPTABLE_COUNT * sizeof(int));
++    }
+ 
+     scriptFrameCount = 0;
+ 
+@@ -2176,7 +2186,8 @@
+         scriptInfo->spriteSheetID                      = 0;
+         scriptInfo->animFile                           = GetDefaultAnimationRef();
+         scriptInfo->mobile                             = true;
+-        typeNames[o][0]                                = 0;
++        if (!SCD32X_CARTDATA) // PORT32X S5j: cart image
++            typeNames[o][0] = 0;
+     }
+ 
+     for (int f = 0; f < FUNCTION_COUNT; ++f) {
+@@ -2197,6 +2208,33 @@
+ 
+ }
+ 
++#if RETRO_PLATFORM == RETRO_SCD32X
++// PORT32X: the 2011 scripts place a few screen-fixed sprites for a 240-line screen (the lives
++// counter at the bottom of the HUD). At 224 lines (Micronut99, S3a2) sprites of the objects
++// listed here that sit in the bottom 48 lines of a 240-line screen move up by the difference.
++// Any other screen-fixed sprite that still ends below the screen is reported once per object
++// type through plat_log, so the list can be completed from a real run.
++static const char *const scdBottomObjects[] = { "HUD" };
++static char scdReported[OBJECT_COUNT];
++static int scd_screen_y(int y, const SpriteFrame *frame)
++{
++    const char *name = typeNames[objectEntityList[objectLoop].type];
++    if (y >= 240 - 48) {
++        for (unsigned i = 0; i < sizeof(scdBottomObjects) / sizeof(scdBottomObjects[0]); ++i)
++            if (StrComp(name, scdBottomObjects[i]))
++                return y - (240 - SCREEN_YSIZE);
++    }
++    if (frame && y + frame->pivotY + frame->height > SCREEN_YSIZE && !scdReported[objectEntityList[objectLoop].type]) {
++        char text[0x80];
++        scdReported[objectEntityList[objectLoop].type] = 1;
++        sprintf(text, "PORT32X: object '%s' draws a screen sprite down to line %d (screen %d)", name, y + frame->pivotY + frame->height,
++                SCREEN_YSIZE);
++        plat_log(text);
++    }
++    return y;
++}
++#endif
++
+ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
+ {
+     bool running      = true;
+@@ -2815,6 +2853,41 @@
+                     case VAR_VPARALLAXSCROLLPOS: scriptEng.operands[i] = vParallax.scrollPos[arrayVal]; break;
+                     case VAR_3DSCENENOVERTICES: scriptEng.operands[i] = vertexCount; break;
+                     case VAR_3DSCENENOFACES: scriptEng.operands[i] = faceCount; break;
++#if SCD32X_SMALL
++                    case VAR_VERTEXBUFFERX:
++                    case VAR_VERTEXBUFFERY:
++                    case VAR_VERTEXBUFFERZ:
++                    case VAR_VERTEXBUFFERU:
++                    case VAR_VERTEXBUFFERV:
++                    case VAR_FACEBUFFERA:
++                    case VAR_FACEBUFFERB:
++                    case VAR_FACEBUFFERC:
++                    case VAR_FACEBUFFERD:
++                    case VAR_FACEBUFFERFLAG:
++                    case VAR_FACEBUFFERCOLOR: { // PORT32X S5i: inside the SH2's 3D buffers?
++                        int v  = scriptCode[scriptCodePtr - 1];
++                        int n  = v <= VAR_VERTEXBUFFERV ? VERTEXBUFFER_SIZE : FACEBUFFER_SIZE;
++                        if (arrayVal < 0 || arrayVal >= n) {
++                            scd_3d_outside();
++                            scriptEng.operands[i] = 0;
++                            break;
++                        }
++                        switch (v) {
++                            case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[arrayVal].x; break;
++                            case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[arrayVal].y; break;
++                            case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[arrayVal].z; break;
++                            case VAR_VERTEXBUFFERU: scriptEng.operands[i] = vertexBuffer[arrayVal].u; break;
++                            case VAR_VERTEXBUFFERV: scriptEng.operands[i] = vertexBuffer[arrayVal].v; break;
++                            case VAR_FACEBUFFERA: scriptEng.operands[i] = faceBuffer[arrayVal].a; break;
++                            case VAR_FACEBUFFERB: scriptEng.operands[i] = faceBuffer[arrayVal].b; break;
++                            case VAR_FACEBUFFERC: scriptEng.operands[i] = faceBuffer[arrayVal].c; break;
++                            case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[arrayVal].d; break;
++                            case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[arrayVal].flags; break;
++                            default: scriptEng.operands[i] = faceBuffer[arrayVal].colour; break;
++                        }
++                        break;
++                    }
++#else
+                     case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[arrayVal].x; break;
+                     case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[arrayVal].y; break;
+                     case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[arrayVal].z; break;
+@@ -2826,12 +2899,36 @@
+                     case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[arrayVal].d; break;
+                     case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[arrayVal].flags; break;
+                     case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[arrayVal].colour; break;
++#endif
+                     case VAR_3DSCENEPROJECTIONX: scriptEng.operands[i] = projectionX; break;
+                     case VAR_3DSCENEPROJECTIONY: scriptEng.operands[i] = projectionY; break;
+                     case VAR_ENGINESTATE: scriptEng.operands[i] = Engine.gameMode; break;
+                     case VAR_STAGEDEBUGMODE: scriptEng.operands[i] = debugMode; break;
+                     case VAR_ENGINEMESSAGE: scriptEng.operands[i] = Engine.message; break;
+-                    case VAR_SAVERAM: scriptEng.operands[i] = saveRAM[arrayVal]; break;
++#if SCD32X_SMALL
++                    case VAR_SAVERAM: // PORT32X S5l: inside the SH2's save data?
++                        if (arrayVal > scdSaveIndexMax) // PORT32X S5m: measured
++                            scdSaveIndexMax = arrayVal;
++                        if (arrayVal >= 0 && arrayVal < 0x2000) // PORT32X S5n: which 256-slot blocks
++                            scdSaveBlocks |= 1u << (arrayVal >> 8);
++                        if (scd_save_slot(arrayVal) < 0) { // PORT32X S5o: the two save regions
++                            scd_save_outside(arrayVal);
++                            scriptEng.operands[i] = 0;
++                        }
++                        else
++                            scriptEng.operands[i] = saveRAM[scd_save_slot(arrayVal)];
++                        break;
++#else
++                    case VAR_SAVERAM:
++#if RETRO_PLATFORM == RETRO_SCD32X
++                        if (arrayVal > scdSaveIndexMax) // PORT32X S5m: measured
++                            scdSaveIndexMax = arrayVal;
++                        if (arrayVal >= 0 && arrayVal < 0x2000) // PORT32X S5n: which 256-slot blocks
++                            scdSaveBlocks |= 1u << (arrayVal >> 8);
++#endif
++                        scriptEng.operands[i] = saveRAM[arrayVal];
++                        break;
++#endif
+                     case VAR_ENGINELANGUAGE: scriptEng.operands[i] = Engine.language; break;
+                     case VAR_OBJECTSPRITESHEET: {
+                         scriptEng.operands[i] = objectScriptList[objectEntityList[arrayVal].type].spriteSheetID;
+@@ -3084,6 +3181,9 @@
+             case FUNC_DRAWSPRITESCREENXY:
+                 opcodeSize  = 0;
+                 spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
++#if RETRO_PLATFORM == RETRO_SCD32X
++                scriptEng.operands[2] = scd_screen_y(scriptEng.operands[2], spriteFrame); // PORT32X
++#endif
+                 DrawSprite(scriptEng.operands[1] + spriteFrame->pivotX, scriptEng.operands[2] + spriteFrame->pivotY, spriteFrame->width,
+                            spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY, scriptInfo->spriteSheetID);
+                 break;
+@@ -3094,6 +3194,9 @@
+             case FUNC_DRAWNUMBERS: {
+                 opcodeSize = 0;
+                 int i      = 10;
++#if RETRO_PLATFORM == RETRO_SCD32X
++                scriptEng.operands[2] = scd_screen_y(scriptEng.operands[2], &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]]); // PORT32X
++#endif
+                 if (scriptEng.operands[6]) {
+                     while (scriptEng.operands[4] > 0) {
+                         int frameID = scriptEng.operands[3] % i / (i / 10) + scriptEng.operands[0];
+@@ -3285,12 +3388,18 @@
+             case FUNC_SPRITEFRAME:
+                 opcodeSize = 0;
+                 if (scriptSub == SUB_SETUP && scriptFrameCount < SPRITEFRAME_COUNT) {
+-                    scriptFrames[scriptFrameCount].pivotX = scriptEng.operands[0];
+-                    scriptFrames[scriptFrameCount].pivotY = scriptEng.operands[1];
+-                    scriptFrames[scriptFrameCount].width  = scriptEng.operands[2];
+-                    scriptFrames[scriptFrameCount].height = scriptEng.operands[3];
+-                    scriptFrames[scriptFrameCount].sprX   = scriptEng.operands[4];
+-                    scriptFrames[scriptFrameCount].sprY   = scriptEng.operands[5];
++#if SCD32X_CARTDATA
++                    static SpriteFrame scdSink; // PORT32X S5d: already in the cart image - count, store nothing
++                    SpriteFrame &sf = scdSink;
++#else
++                    SpriteFrame &sf = scriptFrames[scriptFrameCount];
++#endif
++                    sf.pivotX = scriptEng.operands[0];
++                    sf.pivotY = scriptEng.operands[1];
++                    sf.width  = scriptEng.operands[2];
++                    sf.height = scriptEng.operands[3];
++                    sf.sprX   = scriptEng.operands[4];
++                    sf.sprY   = scriptEng.operands[5];
+                     ++scriptFrameCount;
+                 }
+                 break;
+@@ -3440,6 +3549,9 @@
+             case FUNC_DRAWSPRITESCREENFX:
+                 opcodeSize  = 0;
+                 spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
++#if RETRO_PLATFORM == RETRO_SCD32X
++                scriptEng.operands[3] = scd_screen_y(scriptEng.operands[3], spriteFrame); // PORT32X
++#endif
+                 switch (scriptEng.operands[1]) {
+                     default: break;
+                     case FX_SCALE:
+@@ -3771,8 +3883,10 @@
+             case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
+             case FUNC_DRAW3DSCENE:
+                 opcodeSize = 0;
+-                TransformVertexBuffer();
+-                Sort3DDrawList();
++                if (!SCD32X_NODRAW) { // PORT32X S5i: they fill vertexBufferT / drawList3D, which only drawing reads
++                    TransformVertexBuffer();
++                    Sort3DDrawList();
++                }
+                 Draw3DScene(scriptInfo->spriteSheetID);
+                 break;
+             case FUNC_SETIDENTITYMATRIX:
+@@ -3897,9 +4011,19 @@
+                 }
+                 break;
+             case FUNC_GETTILELAYERENTRY:
++#if SCD32X_SMALL
++                if (!scd_layout_index_ok(scriptEng.operands[1], scriptEng.operands[2] + 0x100 * scriptEng.operands[3])) {
++                    scriptEng.operands[0] = 0; // PORT32X S5c: outside the layer's rows
++                    break;
++                }
++#endif
+                 scriptEng.operands[0] = stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]];
+                 break;
+             case FUNC_SETTILELAYERENTRY:
++#if SCD32X_SMALL
++                if (!scd_layout_index_ok(scriptEng.operands[1], scriptEng.operands[2] + 0x100 * scriptEng.operands[3]))
++                    break; // PORT32X S5c: outside the layer's rows - dropped (logged once)
++#endif
+                 stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
+                 break;
+             case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
+@@ -3923,18 +4047,39 @@
+                 break;
+             case FUNC_ADDDRAWLISTENTITYREF: {
+                 opcodeSize                                                                                           = 0;
++#if SCD32X_SMALL
++                if (drawListEntries[scriptEng.operands[0]].listSize >= DRAWLIST_SIZE) { // PORT32X S5i
++                    scd_drawlist_full();
++                    break;
++                }
++#endif
+                 drawListEntries[scriptEng.operands[0]].entityRefs[drawListEntries[scriptEng.operands[0]].listSize++] = scriptEng.operands[1];
+                 break;
+             }
+-            case FUNC_GETDRAWLISTENTITYREF: scriptEng.operands[0] = drawListEntries[scriptEng.operands[1]].entityRefs[scriptEng.operands[2]]; break;
++            case FUNC_GETDRAWLISTENTITYREF:
++#if SCD32X_SMALL
++                if (scriptEng.operands[2] < 0 || scriptEng.operands[2] >= DRAWLIST_SIZE) { // PORT32X S5i
++                    scd_drawlist_full();
++                    scriptEng.operands[0] = 0;
++                    break;
++                }
++#endif
++                scriptEng.operands[0] = drawListEntries[scriptEng.operands[1]].entityRefs[scriptEng.operands[2]];
++                break;
+             case FUNC_SETDRAWLISTENTITYREF:
+                 opcodeSize                                                               = 0;
++#if SCD32X_SMALL
++                if (scriptEng.operands[2] < 0 || scriptEng.operands[2] >= DRAWLIST_SIZE) { // PORT32X S5i
++                    scd_drawlist_full();
++                    break;
++                }
++#endif
+                 drawListEntries[scriptEng.operands[1]].entityRefs[scriptEng.operands[2]] = scriptEng.operands[0];
+                 break;
+             case FUNC_GET16X16TILEINFO: {
+                 scriptEng.operands[4] = scriptEng.operands[1] >> 7;
+                 scriptEng.operands[5] = scriptEng.operands[2] >> 7;
+-                scriptEng.operands[6] = stageLayouts[0].tiles[scriptEng.operands[4] + (scriptEng.operands[5] << 8)] << 6;
++                scriptEng.operands[6] = SCD_FG_TILE(scriptEng.operands[4] + (scriptEng.operands[5] << 8)) << 6;
+                 scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
+                 int index = tiles128x128.tileIndex[scriptEng.operands[6]];
+                 switch (scriptEng.operands[3]) {
+@@ -3956,9 +4101,18 @@
+                 Copy16x16Tile(scriptEng.operands[0], scriptEng.operands[1]);
+                 break;
+             case FUNC_SET16X16TILEINFO: {
++#if SCD32X_CARTDATA
++                { // PORT32X S5c: this writes the chunk / collision tables, which are cart data on the SH2
++                    static bool told = false;
++                    if (!told) {
++                        told = true;
++                        plat_log("PORT32X: Set16x16TileInfo used (chunk patch / collision overlay, S5h)");
++                    }
++                }
++#endif
+                 scriptEng.operands[4] = scriptEng.operands[1] >> 7;
+                 scriptEng.operands[5] = scriptEng.operands[2] >> 7;
+-                scriptEng.operands[6] = stageLayouts[0].tiles[scriptEng.operands[4] + (scriptEng.operands[5] << 8)] << 6;
++                scriptEng.operands[6] = SCD_FG_TILE(scriptEng.operands[4] + (scriptEng.operands[5] << 8)) << 6;
+                 scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
+                 switch (scriptEng.operands[3]) {
+                     case TILEINFO_INDEX:
+@@ -4021,7 +4175,14 @@
+                 TextMenu *menu = &gameMenu[scriptEng.operands[1]];
+                 switch (scriptEng.operands[2]) {
+                     case TEXTINFO_TEXTDATA:
++#if SCD32X_SMALL
++                        { // PORT32X S5l
++                            int at = menu->entryStart[scriptEng.operands[3]] + scriptEng.operands[4];
++                            scriptEng.operands[0] = at >= 0 && at < TEXTDATA_COUNT ? menu->textData[at] : 0;
++                        }
++#else
+                         scriptEng.operands[0] = menu->textData[menu->entryStart[scriptEng.operands[3]] + scriptEng.operands[4]];
++#endif
+                         break;
+                     case TEXTINFO_TEXTSIZE: scriptEng.operands[0] = menu->entrySize[scriptEng.operands[3]]; break;
+                     case TEXTINFO_ROWCOUNT: scriptEng.operands[0] = menu->rowCount; break;
+@@ -4608,7 +4769,16 @@
+                     case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
+                     case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
+                     case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
+-                    case VAR_TILELAYERYSIZE: stageLayouts[arrayVal].ysize = scriptEng.operands[i]; break;
++                    case VAR_TILELAYERYSIZE:
++#if SCD32X_SMALL
++                        if (scriptEng.operands[i] > stageLayouts[arrayVal].rowsCap) { // PORT32X S5c
++                            plat_log("PORT32X: a script grew a layer beyond its rows (kept at its rows)");
++                            stageLayouts[arrayVal].ysize = stageLayouts[arrayVal].rowsCap;
++                            break;
++                        }
++#endif
++                        stageLayouts[arrayVal].ysize = scriptEng.operands[i];
++                        break;
+                     case VAR_TILELAYERTYPE: stageLayouts[arrayVal].type = scriptEng.operands[i]; break;
+                     case VAR_TILELAYERANGLE:
+                         stageLayouts[arrayVal].angle = scriptEng.operands[i];
+@@ -4636,6 +4806,54 @@
+                     case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
+                     case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
+                     case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
++#if SCD32X_SMALL
++                    case VAR_3DSCENENOVERTICES: // PORT32X S5i: kept inside the SH2's 3D buffers
++                        vertexCount = scriptEng.operands[i];
++                        if (vertexCount > VERTEXBUFFER_SIZE) {
++                            scd_3d_outside();
++                            vertexCount = VERTEXBUFFER_SIZE;
++                        }
++                        break;
++                    case VAR_3DSCENENOFACES:
++                        faceCount = scriptEng.operands[i];
++                        if (faceCount > FACEBUFFER_SIZE) {
++                            scd_3d_outside();
++                            faceCount = FACEBUFFER_SIZE;
++                        }
++                        break;
++                    case VAR_VERTEXBUFFERX:
++                    case VAR_VERTEXBUFFERY:
++                    case VAR_VERTEXBUFFERZ:
++                    case VAR_VERTEXBUFFERU:
++                    case VAR_VERTEXBUFFERV:
++                    case VAR_FACEBUFFERA:
++                    case VAR_FACEBUFFERB:
++                    case VAR_FACEBUFFERC:
++                    case VAR_FACEBUFFERD:
++                    case VAR_FACEBUFFERFLAG:
++                    case VAR_FACEBUFFERCOLOR: { // PORT32X S5i: inside the SH2's 3D buffers? (else dropped)
++                        int v = scriptCode[scriptCodePtr - 1];
++                        int n = v <= VAR_VERTEXBUFFERV ? VERTEXBUFFER_SIZE : FACEBUFFER_SIZE;
++                        if (arrayVal < 0 || arrayVal >= n) {
++                            scd_3d_outside();
++                            break;
++                        }
++                        switch (v) {
++                            case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
++                            case VAR_VERTEXBUFFERY: vertexBuffer[arrayVal].y = scriptEng.operands[i]; break;
++                            case VAR_VERTEXBUFFERZ: vertexBuffer[arrayVal].z = scriptEng.operands[i]; break;
++                            case VAR_VERTEXBUFFERU: vertexBuffer[arrayVal].u = scriptEng.operands[i]; break;
++                            case VAR_VERTEXBUFFERV: vertexBuffer[arrayVal].v = scriptEng.operands[i]; break;
++                            case VAR_FACEBUFFERA: faceBuffer[arrayVal].a = scriptEng.operands[i]; break;
++                            case VAR_FACEBUFFERB: faceBuffer[arrayVal].b = scriptEng.operands[i]; break;
++                            case VAR_FACEBUFFERC: faceBuffer[arrayVal].c = scriptEng.operands[i]; break;
++                            case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
++                            case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
++                            default: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
++                        }
++                        break;
++                    }
++#else
+                     case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
+                     case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
+                     case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
+@@ -4649,12 +4867,34 @@
+                     case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
+                     case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
+                     case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
++#endif
+                     case VAR_3DSCENEPROJECTIONX: projectionX = scriptEng.operands[i]; break;
+                     case VAR_3DSCENEPROJECTIONY: projectionY = scriptEng.operands[i]; break;
+                     case VAR_ENGINESTATE: Engine.gameMode = scriptEng.operands[i]; break;
+                     case VAR_STAGEDEBUGMODE: debugMode = scriptEng.operands[i]; break;
+                     case VAR_ENGINEMESSAGE: break;
+-                    case VAR_SAVERAM: saveRAM[arrayVal] = scriptEng.operands[i]; break;
++#if SCD32X_SMALL
++                    case VAR_SAVERAM: // PORT32X S5l: outside the SH2's save data: dropped
++                        if (arrayVal > scdSaveIndexMax) // PORT32X S5m: measured
++                            scdSaveIndexMax = arrayVal;
++                        if (arrayVal >= 0 && arrayVal < 0x2000) // PORT32X S5n: which 256-slot blocks
++                            scdSaveBlocks |= 1u << (arrayVal >> 8);
++                        if (scd_save_slot(arrayVal) < 0) // PORT32X S5o: the two save regions
++                            scd_save_outside(arrayVal);
++                        else
++                            saveRAM[scd_save_slot(arrayVal)] = scriptEng.operands[i];
++                        break;
++#else
++                    case VAR_SAVERAM:
++#if RETRO_PLATFORM == RETRO_SCD32X
++                        if (arrayVal > scdSaveIndexMax) // PORT32X S5m: measured
++                            scdSaveIndexMax = arrayVal;
++                        if (arrayVal >= 0 && arrayVal < 0x2000) // PORT32X S5n: which 256-slot blocks
++                            scdSaveBlocks |= 1u << (arrayVal >> 8);
++#endif
++                        saveRAM[arrayVal] = scriptEng.operands[i];
++                        break;
++#endif
+                     case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
+                     case VAR_OBJECTSPRITESHEET: {
+                         objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.hpp engine/Script.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Script.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Script.hpp	2026-10-05 18:31:15.747707544 +0000
+@@ -8,7 +8,11 @@
+ #define JUMPSTACK_COUNT (0x400)
+ #define FUNCSTACK_COUNT (0x400)
+ 
++#if RETRO_PLATFORM == RETRO_SCD32X
++#define RETRO_USE_COMPILER (0) // PORT32X: the game ships bytecode; the text-script compiler is not needed
++#else
+ #define RETRO_USE_COMPILER (1)
++#endif
+ 
+ struct ScriptPtr {
+     int scriptCodePtr;
+@@ -50,7 +54,11 @@
+ extern ScriptFunction scriptFunctionList[FUNCTION_COUNT];
+ extern int scriptFunctionCount;
+ 
++#if SCD32X_CARTDATA
++extern int (&scriptCode)[SCRIPTDATA_COUNT]; // PORT32X S5c
++#else
+ extern int scriptCode[SCRIPTDATA_COUNT];
++#endif
+ extern int jumpTableData[JUMPTABLE_COUNT];
+ 
+ extern int jumpTableStack[JUMPSTACK_COUNT];
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Sprite.cpp engine/Sprite.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Sprite.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Sprite.cpp	2026-10-05 18:19:59.098536027 +0000
+@@ -246,7 +246,8 @@
+         StrCopy(gfxSurface[sheetID].fileName, "");
+         int dataPosStart = gfxSurface[sheetID].dataPosition;
+         int dataPosEnd   = gfxSurface[sheetID].dataPosition + gfxSurface[sheetID].height * gfxSurface[sheetID].width;
+-        for (int i = 0x200000 - dataPosEnd; i > 0; --i) graphicData[dataPosStart++] = graphicData[dataPosEnd++];
++        if (!SCD32X_SMALL) // PORT32X S5b: no sprite pixels on the SH2
++            for (int i = 0x200000 - dataPosEnd; i > 0; --i) graphicData[dataPosStart++] = graphicData[dataPosEnd++];
+         gfxDataPosition -= gfxSurface[sheetID].height * gfxSurface[sheetID].width;
+         for (int i = 0; i < SURFACE_COUNT; ++i) {
+             if (gfxSurface[i].dataPosition > gfxSurface[sheetID].dataPosition)
+@@ -257,6 +258,11 @@
+ 
+ int LoadBMPFile(const char *filePath, byte sheetID)
+ {
++#if SCD32X_SMALL
++    // PORT32X S5b: Sonic CD's sprites are all GIF; other formats would need pixels the SH2 does not keep
++    plat_log("PORT32X: sprite sheet format not supported on the SH2");
++    return false;
++#endif
+     FileInfo info;
+     if (LoadFile(filePath, &info)) {
+         GFXSurface *surface = &gfxSurface[sheetID];
+@@ -380,7 +386,8 @@
+ 
+         gfxDataPosition += surface->width * surface->height;
+         if (gfxDataPosition < GFXDATA_SIZE) {
+-            ReadGifPictureData(surface->width, surface->height, interlaced, graphicData, surface->dataPosition);
++            if (!SCD32X_SMALL) // PORT32X S5b: sizes and positions kept, pixels not (the SH2 does not draw)
++                ReadGifPictureData(surface->width, surface->height, interlaced, graphicData, surface->dataPosition);
+         }
+         else {
+             gfxDataPosition = 0;
+@@ -394,6 +401,11 @@
+ }
+ int LoadGFXFile(const char *filePath, byte sheetID)
+ {
++#if SCD32X_SMALL
++    // PORT32X S5b: Sonic CD's sprites are all GIF; other formats would need pixels the SH2 does not keep
++    plat_log("PORT32X: sprite sheet format not supported on the SH2");
++    return false;
++#endif
+     FileInfo info;
+     if (LoadFile(filePath, &info)) {
+         GFXSurface *surface = &gfxSurface[sheetID];
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Text.cpp engine/Text.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Text.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Text.cpp	2026-10-05 21:52:05.999475305 +0000
+@@ -1,77 +1,106 @@
+ #include "RetroEngine.hpp"
+ 
++#if SCD32X_SMALL
++// PORT32X S5q: the menus live in the SH2's frame buffer (SDRAM is short)
++TextMenu (&gameMenu)[TEXTMENU_COUNT] = *(TextMenu(*)[TEXTMENU_COUNT])plat_fb_data(SCD_FB_MENUS, sizeof(TextMenu) * TEXTMENU_COUNT);
++#else
+ TextMenu gameMenu[TEXTMENU_COUNT];
++#endif
++#if SCD32X_SMALL
++void scd_text_full() // PORT32X S5l
++{
++    static bool told = false;
++    if (!told) {
++        told = true;
++        plat_log("PORT32X: menu text full (6,144) - characters dropped");
++    }
++}
++#endif
+ int textMenuSurfaceNo = 0;
+ 
++#if SCD32X_CARTDATA
++FontCharacter (&fontCharacterList)[FONTCHAR_COUNT] = *(FontCharacter(*)[FONTCHAR_COUNT])plat_cart_data(SCD_CART_FONT); // PORT32X S5j: cart image (filled while loading)
++#else
+ FontCharacter fontCharacterList[FONTCHAR_COUNT];
++#endif
+ 
+ void LoadFontFile(const char *filePath)
+ {
++#if SCD32X_CARTDATA
++    // PORT32X S5j: the font is in the cart image - parse, store nothing; a font loaded during play
++    // would be missing from the image
++    static FontCharacter scdFontSink;
++#define SCD_FONT(c) scdFontSink
++    if (scdStageLoaded)
++        plat_log("PORT32X: a font file was loaded after the stage load (not in the cart image)");
++#else
++#define SCD_FONT(c) fontCharacterList[c]
++#endif
+     byte fileBuffer = 0;
+     int cnt         = 0;
+     FileInfo info;
+     if (LoadFile(filePath, &info)) {
+         while (!ReachedEndOfFile()) {
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].id = fileBuffer;
++            SCD_FONT(cnt).id = fileBuffer;
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].id += fileBuffer << 8;
++            SCD_FONT(cnt).id += fileBuffer << 8;
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].id += fileBuffer << 16;
++            SCD_FONT(cnt).id += fileBuffer << 16;
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].id += fileBuffer << 24;
++            SCD_FONT(cnt).id += fileBuffer << 24;
+ 
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].srcX = fileBuffer;
++            SCD_FONT(cnt).srcX = fileBuffer;
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].srcX += fileBuffer << 8;
++            SCD_FONT(cnt).srcX += fileBuffer << 8;
+ 
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].srcY = fileBuffer;
++            SCD_FONT(cnt).srcY = fileBuffer;
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].srcY += fileBuffer << 8;
++            SCD_FONT(cnt).srcY += fileBuffer << 8;
+ 
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].width = fileBuffer + 1;
++            SCD_FONT(cnt).width = fileBuffer + 1;
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].width += fileBuffer << 8;
++            SCD_FONT(cnt).width += fileBuffer << 8;
+ 
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].height = fileBuffer + 1;
++            SCD_FONT(cnt).height = fileBuffer + 1;
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].height += fileBuffer << 8;
++            SCD_FONT(cnt).height += fileBuffer << 8;
+ 
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].pivotX = fileBuffer;
++            SCD_FONT(cnt).pivotX = fileBuffer;
+             FileRead(&fileBuffer, 1);
+             if (fileBuffer > 0x80) {
+-                fontCharacterList[cnt].pivotX += (fileBuffer - 0x80) << 8;
+-                fontCharacterList[cnt].pivotX += -0x8000;
++                SCD_FONT(cnt).pivotX += (fileBuffer - 0x80) << 8;
++                SCD_FONT(cnt).pivotX += -0x8000;
+             }
+             else {
+-                fontCharacterList[cnt].pivotX += fileBuffer << 8;
++                SCD_FONT(cnt).pivotX += fileBuffer << 8;
+             }
+ 
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].pivotY = fileBuffer;
++            SCD_FONT(cnt).pivotY = fileBuffer;
+             FileRead(&fileBuffer, 1);
+             if (fileBuffer > 0x80) {
+-                fontCharacterList[cnt].pivotY += (fileBuffer - 0x80) << 8;
+-                fontCharacterList[cnt].pivotY += -0x8000;
++                SCD_FONT(cnt).pivotY += (fileBuffer - 0x80) << 8;
++                SCD_FONT(cnt).pivotY += -0x8000;
+             }
+             else {
+-                fontCharacterList[cnt].pivotY += fileBuffer << 8;
++                SCD_FONT(cnt).pivotY += fileBuffer << 8;
+             }
+ 
+             FileRead(&fileBuffer, 1);
+-            fontCharacterList[cnt].xAdvance = fileBuffer;
++            SCD_FONT(cnt).xAdvance = fileBuffer;
+             FileRead(&fileBuffer, 1);
+             if (fileBuffer > 0x80) {
+-                fontCharacterList[cnt].xAdvance += (fileBuffer - 0x80) << 8;
+-                fontCharacterList[cnt].xAdvance += -0x8000;
++                SCD_FONT(cnt).xAdvance += (fileBuffer - 0x80) << 8;
++                SCD_FONT(cnt).xAdvance += -0x8000;
+             }
+             else {
+-                fontCharacterList[cnt].xAdvance += fileBuffer << 8;
++                SCD_FONT(cnt).xAdvance += fileBuffer << 8;
+             }
+ 
+             // Unused
+@@ -130,7 +159,8 @@
+                                 character = 0;
+                             }
+                         }
+-                        menu->textData[menu->textDataPos++] = character;
++                        SCD_TEXT_PUT(menu, menu->textDataPos, character);
++            menu->textDataPos++;
+                         menu->entrySize[menu->rowCount]++;
+                     }
+                 }
+@@ -165,7 +195,8 @@
+                             character = 0;
+                         }
+                     }
+-                    menu->textData[menu->textDataPos++] = character;
++                    SCD_TEXT_PUT(menu, menu->textDataPos, character);
++            menu->textDataPos++;
+                     menu->entrySize[menu->rowCount]++;
+                 }
+             }
+@@ -199,7 +230,8 @@
+                             if (i == 1024)
+                                 character = 0;
+                         }
+-                        menu->textData[menu->textDataPos++] = character;
++                        SCD_TEXT_PUT(menu, menu->textDataPos, character);
++            menu->textDataPos++;
+                         menu->entrySize[menu->rowCount]++;
+                     }
+                 }
+@@ -225,7 +257,8 @@
+     menu->entrySize[menu->rowCount]      = 0;
+     for (int i = 0; i < StrLength(text);) {
+         if (text[i] != '\0') {
+-            menu->textData[menu->textDataPos++] = text[i];
++            SCD_TEXT_PUT(menu, menu->textDataPos, text[i]);
++            menu->textDataPos++;
+             menu->entrySize[menu->rowCount]++;
+             ++i;
+         }
+@@ -255,7 +288,8 @@
+             if (j == 1024) {
+                 num = 0;
+             }
+-            menu->textData[menu->textDataPos++] = (char)num;
++            SCD_TEXT_PUT(menu, menu->textDataPos, (char)num);
++            menu->textDataPos++;
+             menu->entrySize[menu->rowCount]++;
+             ++i;
+         }
+@@ -271,7 +305,8 @@
+     menu->entrySize[rowID]               = 0;
+     for (int i = 0; i < StrLength(text);) {
+         if (text[i] != '\0') {
+-            menu->textData[menu->textDataPos++] = text[i];
++            SCD_TEXT_PUT(menu, menu->textDataPos, text[i]);
++            menu->textDataPos++;
+             menu->entrySize[rowID]++;
+             ++i;
+         }
+@@ -286,7 +321,8 @@
+     menu->entrySize[rowID]               = 0;
+     for (int i = 0; i < StrLength(text);) {
+         if (text[i] != '\0') {
+-            menu->textData[entryPos++] = text[i];
++            SCD_TEXT_PUT(menu, entryPos, text[i]);
++            entryPos++;
+             menu->entrySize[rowID]++;
+             ++i;
+         }
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Text.hpp engine/Text.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Text.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Text.hpp	2026-10-06 22:31:41.604963112 +0000
+@@ -1,8 +1,24 @@
+ #ifndef TEXTSYSTEM_H
+ #define TEXTSYSTEM_H
+ 
+-#define TEXTDATA_COUNT  (0x2800)
+-#define TEXTENTRY_COUNT (0x200)
++// PORT32X S5l: the SH2 configuration keeps 6,144 characters per menu (whole game: at most 4,992 -
++// Credits); writes past it are dropped and logged
++// PORT32X S7e: the drawing build keeps the menus in SDRAM (the frame buffer holds the picture) - the
++// title uses no menu text; larger menus come with their scenes later
++#define TEXTDATA_COUNT  (SCD32X_DRAWCART ? 0x100 : SCD32X_SMALL ? 0x1800 : 0x2800)
++#if SCD32X_SMALL
++void scd_text_full(); // PORT32X S5l
++#define SCD_TEXT_PUT(menu, pos, ch)          \
++    do {                                     \
++        if ((pos) >= 0 && (pos) < TEXTDATA_COUNT) \
++            (menu)->textData[(pos)] = (ch);  \
++        else                                 \
++            scd_text_full();                 \
++    } while (0)
++#else
++#define SCD_TEXT_PUT(menu, pos, ch) ((menu)->textData[(pos)] = (ch))
++#endif
++#define TEXTENTRY_COUNT (SCD32X_DRAWCART ? 0x40 : 0x200) // PORT32X S7e: menus in SDRAM in the drawing build
+ #define TEXTMENU_COUNT  (0x2)
+ 
+ #define FONTCHAR_COUNT (0x400)
+@@ -36,10 +52,18 @@
+     short xAdvance;
+ };
+ 
++#if SCD32X_SMALL
++extern TextMenu (&gameMenu)[TEXTMENU_COUNT]; // PORT32X S5q
++#else
+ extern TextMenu gameMenu[TEXTMENU_COUNT];
++#endif
+ extern int textMenuSurfaceNo;
+ 
++#if SCD32X_CARTDATA
++extern FontCharacter (&fontCharacterList)[FONTCHAR_COUNT]; // PORT32X S5j
++#else
+ extern FontCharacter fontCharacterList[FONTCHAR_COUNT];
++#endif
+ 
+ void LoadFontFile(const char *filePath);
+ void LoadTextFile(TextMenu *menu, const char *filePath, byte mapCode);
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp engine/Userdata.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Userdata.cpp	2026-10-06 21:39:41.147396747 +0000
+@@ -53,10 +53,30 @@
+ 
+ int globalVariablesCount;
+ int globalVariables[GLOBALVAR_COUNT];
++#if SCD32X_CARTDATA
++char (&globalVariableNames)[GLOBALVAR_COUNT][0x20] = *(char(*)[GLOBALVAR_COUNT][0x20])plat_cart_data(SCD_CART_GLOBALNAMES); // PORT32X S5j: cart image (filled while loading)
++#else
+ char globalVariableNames[GLOBALVAR_COUNT][0x20];
++#endif
+ 
+ char gamePath[0x100];
+ int saveRAM[SAVEDATA_SIZE];
++#if RETRO_PLATFORM == RETRO_SCD32X
++int scdSaveIndexMax = -1; // PORT32X S5m
++uint scdSaveBlocks   = 0;  // PORT32X S5n
++#endif
++#if SCD32X_SMALL
++void scd_save_outside(int index) // PORT32X S5l
++{
++    static bool told = false;
++    if (!told) {
++        told = true;
++        char msg[0x60];
++        sprintf(msg, "PORT32X: a script used save slot %d - outside the SH2's two save regions", index);
++        plat_log(msg);
++    }
++}
++#endif
+ Achievement achievements[ACHIEVEMENT_COUNT];
+ LeaderboardEntry leaderboards[LEADERBOARD_COUNT];
+ 
+@@ -182,7 +202,22 @@
+             return false;
+         useSGame = true;
+     }
++#if SCD32X_SMALL
++    { // PORT32X S5o: the file keeps the game's 8,192-slot layout; the SH2 keeps the two used regions
++        int block[0x100];
++        for (int b = 0; b < SCD_SAVE_GAME_SLOTS / 0x100; ++b) {
++            memset(block, 0, sizeof(block));
++            fRead(block, 4, 0x100, saveFile);
++            for (int k = 0; k < 0x100; ++k) {
++                int slot = scd_save_slot(b * 0x100 + k);
++                if (slot >= 0)
++                    saveRAM[slot] = block[k];
++            }
++        }
++    }
++#else
+     fRead(saveRAM, 4, SAVEDATA_SIZE, saveFile);
++#endif
+ 
+     fClose(saveFile);
+     return true;
+@@ -273,7 +308,20 @@
+ #endif
+ #endif
+ 
++#if SCD32X_SMALL
++    { // PORT32X S5o: written back in the game's 8,192-slot layout (unused slots as 0)
++        int block[0x100];
++        for (int b = 0; b < SCD_SAVE_GAME_SLOTS / 0x100; ++b) {
++            for (int k = 0; k < 0x100; ++k) {
++                int slot = scd_save_slot(b * 0x100 + k);
++                block[k] = slot >= 0 ? saveRAM[slot] : 0;
++            }
++            fWrite(block, 4, 0x100, saveFile);
++        }
++    }
++#else
+     fWrite(saveRAM, 4, SAVEDATA_SIZE, saveFile);
++#endif
+     fClose(saveFile);
+     return true;
+ }
+@@ -627,6 +675,20 @@
+ #endif
+     }
+ 
++#if RETRO_PLATFORM == RETRO_SCD32X
++    // PORT32X: the console has fixed settings, whatever settings.ini says:
++    // 320-pixel screen, software renderer, no HQ special-stage floor (its 2x buffer
++    // alone is ~600 KB), no idle dimming, 60 Hz.
++    SCREEN_XSIZE        = DEFAULT_SCREEN_XSIZE;
++    SCREEN_XSIZE_CONFIG = SCREEN_XSIZE;
++    renderType          = RENDER_SW;
++    Engine.gameRenderType = Engine.gameRenderTypes[renderType];
++    Engine.useHQModes   = false;
++    Engine.dimLimit     = -1;
++    Engine.refreshRate  = 60;
++    Engine.startFullScreen = false;
++#endif
++
+     // Loaded here so it can be disabled
+ #if RETRO_PLATFORM == RETRO_WIN && _MSC_VER
+     if (Engine.useSteamDir) {
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp engine/Userdata.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Userdata.hpp	2026-10-05 21:23:09.274632934 +0000
+@@ -8,7 +8,30 @@
+ 
+ #define MOD_COUNT (0x100)
+ 
+-#define SAVEDATA_SIZE (0x2000)
++// PORT32X S5o: Sonic CD's scripts use two regions of the 8,192 save slots (whole game, S5n):
++// 0-255 (records, settings) and 7,168-8,191 (per-stage state). The SH2 configuration keeps just
++// those: 1,280 slots, low region first. scd_save_slot() maps a game slot to the SH2 slot (-1: none).
++#define SAVEDATA_SIZE (SCD32X_SMALL ? 0x500 : 0x2000)
++#define SCD_SAVE_GAME_SLOTS (0x2000)
++#define SCD_SAVE_LOW_END (0x100)
++#define SCD_SAVE_HIGH_START (0x1C00)
++inline int scd_save_slot(int i)
++{
++    if (!SCD32X_SMALL)
++        return i;
++    if (i >= 0 && i < SCD_SAVE_LOW_END)
++        return i;
++    if (i >= SCD_SAVE_HIGH_START && i < SCD_SAVE_GAME_SLOTS)
++        return SCD_SAVE_LOW_END + (i - SCD_SAVE_HIGH_START);
++    return -1;
++}
++#if SCD32X_SMALL
++void scd_save_outside(int index); // PORT32X S5l
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X
++extern int scdSaveIndexMax;   // PORT32X S5m: the highest save slot a script indexed (read or write)
++extern uint scdSaveBlocks;    // PORT32X S5n: bit b = a script indexed a slot in [b*256, b*256+255]
++#endif
+ 
+ enum OnlineMenuTypes {
+     ONLINEMENU_ACHIEVEMENTS = 0,
+@@ -26,7 +49,11 @@
+ 
+ extern int globalVariablesCount;
+ extern int globalVariables[GLOBALVAR_COUNT];
++#if SCD32X_CARTDATA
++extern char (&globalVariableNames)[GLOBALVAR_COUNT][0x20]; // PORT32X S5j
++#else
+ extern char globalVariableNames[GLOBALVAR_COUNT][0x20];
++#endif
+ 
+ extern char gamePath[0x100];
+ extern int saveRAM[SAVEDATA_SIZE];
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Video.cpp engine/Video.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Video.cpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Video.cpp	2026-10-05 08:41:02.618110595 +0000
+@@ -1,4 +1,25 @@
+ #include "RetroEngine.hpp"
++#if !RETRO_USING_THEORA
++// PORT32X: no OGV video on the 32X. A video request is logged and skipped, and the
++// game continues as if the player had skipped it.
++int currentVideoFrame = 0;
++int videoFrameCount   = 0;
++int videoWidth        = 0;
++int videoHeight       = 0;
++float videoAR         = 0;
++byte videoSurface     = 0;
++int videoFilePos      = 0;
++int videoPlaying      = 0;
++int vidFrameMS        = 0;
++int vidBaseticks      = 0;
++
++void PlayVideoFile(char *filePath) { PrintLog("PORT32X: video '%s' skipped", filePath); }
++void UpdateVideoFrame() {}
++int ProcessVideo() { return 0; }
++void StopVideoPlayback() { videoPlaying = 0; }
++void SetupVideoBuffer(int width, int height) {}
++void CloseVideoBuffer() {}
++#else
+ #include <string>
+ #include <vector>
+ 
+@@ -370,3 +391,4 @@
+ #endif
+     }
+ }
++#endif // RETRO_USING_THEORA
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Video.hpp engine/Video.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/Video.hpp	2026-08-16 06:48:31.000000000 +0000
++++ engine/Video.hpp	2026-10-05 08:41:02.618150468 +0000
+@@ -1,7 +1,9 @@
+ #ifndef VIDEO_H
+ #define VIDEO_H
+ 
++#if RETRO_USING_THEORA // PORT32X: no OGV videos on the 32X
+ #include "theoraplay.h"
++#endif
+ 
+ extern int currentVideoFrame;
+ extern int videoFrameCount;
+@@ -9,10 +11,12 @@
+ extern int videoHeight;
+ extern float videoAR;
+ 
++#if RETRO_USING_THEORA
+ extern THEORAPLAY_Decoder *videoDecoder;
+ extern const THEORAPLAY_VideoFrame *videoVidData;
+ extern const THEORAPLAY_AudioPacket *videoAudioData;
+ extern THEORAPLAY_Io callbacks;
++#endif
+ 
+ extern byte videoSurface;
+ extern int videoFilePos;
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
+--- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1970-01-01 00:00:00.000000000 +0000
++++ engine/plat.hpp	2026-10-06 22:13:24.399662245 +0000
+@@ -0,0 +1,67 @@
++#ifndef PLAT_H
++#define PLAT_H
++// PORT32X: the platform layer of the Sega CD32X port.
++// plat_host.cpp implements it for the PC host build (frames to PNG, pad scripts,
++// virtual clock, logs); plat_mars.cpp will implement it on the SH2.
++
++// Time: the host build runs on a virtual clock (every frame = 1/60 s).
++unsigned int plat_ticks_ms();
++
++// Video: the engine's 16-bit (RGB565) frame, width x height, pitch in pixels.
++void plat_present(const unsigned short *frame, int width, int height, int pitch);
++
++// Input: the Mega Drive pad bits (see plat_pad bits below).
++enum {
++    PAD_UP = 1 << 0, PAD_DOWN = 1 << 1, PAD_LEFT = 1 << 2, PAD_RIGHT = 1 << 3,
++    PAD_A = 1 << 4, PAD_B = 1 << 5, PAD_C = 1 << 6, PAD_START = 1 << 7,
++    PAD_X = 1 << 8, PAD_Y = 1 << 9, PAD_Z = 1 << 10, PAD_MODE = 1 << 11,
++};
++unsigned int plat_pad();
++
++// Audio: music is a CD track, sound effects are mixed by the platform.
++void plat_music_play(const char *fileName, int loop, unsigned int loopPoint);
++void plat_music_stop();
++void plat_sfx_play(int sfx, int loop);
++void plat_sfx_loaded(int sfx, const char *name, int rate, int channels, int bits, int samples);
++
++// Tile layers: DrawHLineScrollLayer reports, per layer slot, the layer drawn, the layer
++// line shown on screen line 0, and the horizontal layer position of every screen line.
++// plat_layer_begin returns the buffer to draw into (normally the frame passed in).
++unsigned short *plat_layer_begin(int slot, int layer, int tileYPos, unsigned short *frame);
++void plat_layer_line(int slot, int line, int x);
++void plat_layer_end(int slot);
++
++// S5c: the cart image - arrays that are read-only once a stage is loaded (scripts, chunks,
++// collision) live in the cart on the SH2. plat_cart_data returns where each one is.
++enum { SCD_CART_SCRIPTCODE, SCD_CART_JUMPTABLE, SCD_CART_CHUNKS, SCD_CART_COLLISION, SCD_CART_SCRIPTFRAMES, SCD_CART_ANIMFRAMES,
++       SCD_CART_ANIMLIST, SCD_CART_ARCTAN, SCD_CART_STAGELIST, SCD_CART_TYPENAMES, SCD_CART_GLOBALNAMES,
++       SCD_CART_ANIMFILES, SCD_CART_FONT, SCD_CART_TRIG,
++       SCD_CART_GFXDATA, SCD_CART_TILEGFX, SCD_CART_BLEND, SCD_CART_COUNT }; // S7e: pixels + blend tables
++void *plat_cart_data(int kind);
++// S7a: a file of the data pack was read up to this position (PC builds: the per-stage mini-pack
++// builder logs it, SCD32X_FILELOG; the SH2 build does not call it)
++void plat_file_read(const char *path, int position);
++// S7e: the game's drawing, measured (PC builds: SCD32X_DRAWLOG=file; the SH2 build does not call it)
++void plat_draw_log(const char *function, int sheet, int pixels);
++// S7e: where the engine's renderer draws (SH2 drawing build: the 32X frame buffer)
++unsigned short *plat_frame_target();
++void plat_stage_loading(); // a stage is about to load (the SH2 selects that stage's cart image here)
++void plat_stage_loaded();  // a stage's files are loaded (the PC build writes the cart image here)
++const int *plat_cart_jumptable(); // (engine side) where jumpTable is - it is local to Script.cpp
++// S5c: memory for the layouts (SH2: spare 32X frame-buffer memory, as Kobo used it)
++unsigned char *plat_layout_pool(int *size);
++// S5q: RAM the SH2 keeps in the frame buffer (zeroed at start). SH2 frame buffer (128 KB):
++// record 12 KB | menus 34 KB | layout pool 82 KB (Credits need 80)
++enum { SCD_FB_MENUS, SCD_FB_COUNT };
++// S6a2: the chunk table of the current stage's cart image as separate arrays of n entries
++// (the console image stores it that way, trimmed; gfxDataPos is not stored: it is tileIndex << 8)
++void plat_chunk_arrays(const unsigned short **tileIndex, const unsigned char **direction, const unsigned char **visualPlane,
++                       const unsigned char **solidity /* [2] */, int *n);
++unsigned char *plat_fb_data(int kind, int size);
++
++// Logging and the end of the program (a console never quits).
++void plat_log(const char *text);
++void plat_fatal(const char *text);
++bool plat_running();
++
++#endif
