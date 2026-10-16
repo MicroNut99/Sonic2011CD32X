@@ -8,6 +8,8 @@
 #else
 #define SCD_MD_HOT
 #endif
+void sgb_out_begin(SgbOut *o, uint16_t *out, int max) SCD_MD_HOT;
+uint16_t sgb_md_color(uint16_t c) SCD_MD_HOT;
 void sgb_write(void *ctx, uint16_t addr, uint16_t word) SCD_MD_HOT;
 void sgb_write_run(void *ctx, uint16_t addr, const uint16_t *words, int n) SCD_MD_HOT;
 int sgb_out_end(SgbOut *o, uint16_t vA, uint16_t vB, const int16_t *hsA, const int16_t *hsB, int lines,

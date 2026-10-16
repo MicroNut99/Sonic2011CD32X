@@ -16,6 +16,7 @@ $CXX -E -P -std=c++17 -DSONICCD32X -DSCD32X_SH2 -DSCD_PLANES=1 -DSCD_AOT_EXTRACT
     engine/Script.cpp -o engine/Script_aot.ii
 # R1V: the subs that run every frame - their code into SDRAM on the console (sh2emu -profile: "scripts per engine
 # frame by object type and event" and the cart code stall ranking); names as the game names its object types
-HOT=${SCD_HOT_SCRIPTS:-StageSetup:player,Ring:player,PlayerObject:draw,InvisibleBlock:player,CrumbleLedge3:player,PlayerObject:main,Ring:draw,StageSetup:main,PaletteAnimation:main}
+# R1X: and the shared instruction functions the frame's scripts call most (op:FUNC_...)
+HOT=${SCD_HOT_SCRIPTS:-StageSetup:player,Ring:player,PlayerObject:draw,PlayerObject:main,Ring:draw,StageSetup:main,PaletteAnimation:main,HUD:draw,op:FUNC_PLAYEROBJECTCOLLISION,op:FUNC_DRAWNUMBERS,op:FUNC_DRAWSPRITE,op:FUNC_DRAWSPRITESCREENXY}
 python3 tools/scd_aot.py --data "$DATA" --ii engine/Script_aot.ii --scene "$SCENE" --out engine/ScriptNative.inc --hot "$HOT"
 rm -f engine/Script_aot.ii

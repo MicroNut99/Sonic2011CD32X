@@ -2171,7 +2171,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              strcpy(scene->name, "_RSDK_SCENE");
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp engine/RetroEngine.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/RetroEngine.hpp	2026-10-16 14:42:11.757294549 -0700
++++ engine/RetroEngine.hpp	2026-10-16 15:18:51.084947275 -0700
 @@ -4,6 +4,93 @@
  // Disables POSIX use c++ name blah blah stuff
  #pragma warning(disable : 4996)
@@ -2330,15 +2330,6 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #if RETRO_USING_SDL2
  #include <SDL.h>
  #elif RETRO_USING_SDL1
-@@ -482,7 +590,7 @@
- #endif
- 
-     void Init();
--    void Run();
-+    void Run() SCD_HOT; // PORT32X R1W: the main loop - SDRAM on the console
- 
-     bool LoadGameConfig(const char *filepath);
- #if RETRO_USE_MOD_LOADER
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene.cpp engine/Scene.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Scene.cpp	2026-08-15 23:48:31.000000000 -0700
 +++ engine/Scene.cpp	2026-10-16 14:59:01.552555128 -0700

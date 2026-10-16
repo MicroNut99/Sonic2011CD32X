@@ -17,7 +17,6 @@
 #else
 #define SCD_MD_HOT
 #endif
-uint16_t md_name(const MdLayer *L, int cx, int cy) SCD_MD_HOT;
 void md_plane_update(MdPlane *p, const MdLayer *L, uint16_t nameBase, int tileYPos, const int *lineX, int lines, int screenW,
                      int16_t *hscroll, uint16_t *vscroll, MdWriteFn write, void *ctx) SCD_MD_HOT;
 
@@ -51,16 +50,17 @@ static void write_cols(MdPlane *p, const MdLayer *L, uint16_t nameBase, int r, i
 {
     /* R1W: md_name's reads, taken once per chunk (the layout entry) and once per 16-pixel tile (the chunk entry) along
        the row instead of once per cell - the same names; then the piece's words in runs of consecutive addresses
-       (one at the plane's 64-column wrap). The names do not depend on the writes (the record is not the layout). */
+       (one at the plane's 64-column wrap). The names do not depend on the writes (the record is not the layout).
+       R1X: one tile a step - both its cells (an even column), or one cell (an odd column: the tile's right one, or the
+       piece's last column: its left one); the layer's width is whole chunks, so a tile never straddles its wrap. */
     uint16_t names[MD_PLANE_W];
     const uint16_t *lrow = L->layout + (int32_t)(int16_t)(layerRow >> 4) * (int16_t)L->layoutStride;
+    const uint16_t *chunks = L->chunks, *quads = L->quads, *crow = 0;
     const unsigned ey = (unsigned)((layerRow >> 1) & 7) << 3, qy = (unsigned)(layerRow & 1) << 1;
+    const int sf = L->showFront, sb = L->showBack;
     const uint16_t rowAddr = (uint16_t)(nameBase + ((r * MD_PLANE_W) << 1));
     int cwi = (int)(c0 % wCells); /* the only modulo: once per written row piece */
-    unsigned cw, wc = (unsigned)wCells, lastChunk = ~0u, lastTile = ~0u, col = (unsigned)c0 & (MD_PLANE_W - 1);
-    uint32_t chunkBase = 0;
-    const uint16_t *q = 0; /* the tile's two names on this cell row (0: the tile shows nothing on this plane) */
-    uint16_t front = 0;
+    unsigned cw, wc = (unsigned)wCells, lastChunk = ~0u, col = (unsigned)c0 & (MD_PLANE_W - 1);
     int32_t left = c1 - c0 + 1;
     if (cwi < 0)
         cwi += wCells;
@@ -68,34 +68,26 @@ static void write_cols(MdPlane *p, const MdLayer *L, uint16_t nameBase, int r, i
     while (left > 0) {
         int n = left > (int32_t)(MD_PLANE_W - col) ? (int)(MD_PLANE_W - col) : (int)left, k = 0;
         while (k < n) {
-            /* R1X: a whole 16-pixel tile (two cells, an even column) at a time; one cell for an odd column or the last
-               one. The layer's width is whole chunks, so a tile never straddles its wrap. */
-            const int two = !(cw & 1) && k + 1 < n;
+            uint16_t e, a = 0, b = 0;
             if ((cw >> 4) != lastChunk) {
                 lastChunk = cw >> 4;
-                chunkBase = (uint32_t)lrow[lastChunk] << 6;
-                lastTile  = ~0u;
+                crow      = chunks + ((uint32_t)lrow[lastChunk] << 6) + ey;
             }
-            if ((cw >> 1) != lastTile) {
-                uint16_t e = L->chunks[chunkBase + ey + ((cw >> 1) & 7)];
-                int f      = MD_CE_FRONT(e);
-                lastTile   = cw >> 1;
-                if (MD_CE_HIDDEN(e) || (f ? !L->showFront : !L->showBack))
-                    q = 0;
-                else {
-                    q     = L->quads + (((uint32_t)MD_CE_TILE(e) << 2) + MD_CE_FLIP(e)) * 4 + qy;
-                    front = (uint16_t)(f << 15);
-                }
+            e = crow[(cw >> 1) & 7];
+            if (!MD_CE_HIDDEN(e) && (MD_CE_FRONT(e) ? sf : sb)) {
+                const uint16_t *q = quads + (((uint32_t)MD_CE_TILE(e) << 2) + MD_CE_FLIP(e)) * 4 + qy;
+                uint16_t front    = (uint16_t)(MD_CE_FRONT(e) << 15);
+                a                 = (uint16_t)(q[0] | front);
+                b                 = (uint16_t)(q[1] | front);
             }
-            if (two) {
-                names[k]     = q ? (uint16_t)(q[0] | front) : (uint16_t)0;
-                names[k + 1] = q ? (uint16_t)(q[1] | front) : (uint16_t)0;
+            if (!(cw & 1) && k + 1 < n) {
+                names[k]     = a;
+                names[k + 1] = b;
                 k += 2;
                 cw += 2;
             }
             else {
-                names[k] = q ? (uint16_t)(q[cw & 1] | front) : (uint16_t)0;
-                k++;
+                names[k++] = (cw & 1) ? b : a;
                 cw++;
             }
             if (cw == wc)

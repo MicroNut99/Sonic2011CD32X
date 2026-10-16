@@ -284,10 +284,37 @@ def c_bytes(b):
     return '"' + "".join("\\x%02x" % c for c in b) + '"'
 
 
+# R1X: an instruction whose code (its case body) is at least this many tokens is not copied into every sub that uses
+# it: one shared function per instruction (scdop_<name>) runs the same statements - with the same locals, made as the
+# copies make them - and gives back opcodeSize for the write-back, which stays in the sub. The native code shrinks
+# (fewer cart cache misses), the shared functions stay in the cache.
+OUTLINE_TOKENS = 60
+
+
 class Gen:
     def __init__(self, scene, funcs, fenum, venum, ex):
         self.scene, self.funcs, self.fenum, self.venum, self.ex = scene, funcs, fenum, venum, ex
         self.problems = {}
+        self.outlined = {}  # instruction name -> the shared function's text
+
+    def outline(self, op):
+        """the shared function's name for this instruction, or None to copy its code into the sub"""
+        fname = self.fenum[op.func]
+        b = self.body(op)
+        if len(b) < OUTLINE_TOKENS:
+            return None
+        name = "scdop_" + fname
+        if fname not in self.outlined:
+            self.outlined[fname] = "\n".join([
+                "static int %s(int opcodeSize, byte scriptSub)" % name, "{",
+                "    ObjectScript *scriptInfo = &objectScriptList[objectEntityList[objectLoop].type];",
+                "    Entity *entity = &objectEntityList[objectLoop];",
+                "    Player *player = &playerList[activePlayer];",
+                "    SpriteFrame *spriteFrame = nullptr;",
+                "    (void)scriptInfo; (void)entity; (void)player; (void)spriteFrame; (void)scriptSub;",
+                "    do { %s } while (0);" % cpp.join(b),
+                "    return opcodeSize;", "}"])
+        return name
 
     def array_val(self, mode, a, b):
         idx = ("scriptEng.arrayPosition[%d]" % b) if a == 1 else str(b)
@@ -405,7 +432,15 @@ class Gen:
                 code.append("return false;")
             else:
                 ctl = False
-            if not ctl:
+            oname = self.outline(op) if not ctl else None
+            if oname:
+                code.append("opcodeSize = %s(%d, scriptSub);" % (oname, self.funcs[f][1]))
+                w = self.writes(op)
+                if w:
+                    code.append("if (opcodeSize > 0) { %s }" % " ".join(w))
+                if op.next != nxt:
+                    code.append("goto L%d;" % op.next)
+            elif not ctl:
                 code.append("scriptInfo = &objectScriptList[objectEntityList[objectLoop].type];")
                 code.append("entity = &objectEntityList[objectLoop];")
                 code.append("player = &playerList[activePlayer];")
@@ -465,10 +500,12 @@ def main():
     for item in filter(None, a.only.split(",")):
         t, s = item.rsplit(":", 1)
         only.add((t.strip().replace(" ", ""), s.strip()))
-    hot_subs, hot_funcs = set(), set()
+    hot_subs, hot_funcs, hot_ops = set(), set(), set()
     for item in filter(None, (x.strip() for x in a.hot.split(","))):
         if re.fullmatch(r"F\d+", item):
             hot_funcs.add(int(item[1:]))
+        elif item.startswith("op:"):  # R1X: a shared instruction function, e.g. op:FUNC_DRAWSPRITESCREENXY
+            hot_ops.add(item)
         else:
             t, s = item.rsplit(":", 1)
             hot_subs.add((t.strip().replace(" ", ""), s.strip()))
@@ -551,6 +588,11 @@ def main():
             for n in sorted(out_funcs):
                 w("        case %d: return scdn_F%d(scriptSub);\n" % (n, n))
             w("        default: return true; /* no such function: the interpreter would run garbage - stop */\n    }\n}\n")
+        for name in sorted(gen.outlined):  # R1X: the shared instruction functions
+            w("\n// instruction %s (shared)\n" % name + gen.outlined[name].replace(
+                "static int scdop_%s(int opcodeSize, byte scriptSub)" % name,
+                "static int scdop_%s(int opcodeSize, byte scriptSub)%s;\nstatic int scdop_%s(int opcodeSize, byte scriptSub)" % (
+                    name, " SCD_HOT" if ("op:" + name) in hot_ops else "", name)) + "\n")
         for n in sorted(out_funcs):
             w("\n" + out_funcs[n][0] + "\n")
         for cp, cname, jp, text, name, sub, nops in out_subs:

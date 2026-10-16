@@ -384,6 +384,7 @@ static void prof_report(void)
     free(idx);
 }
 static u32 eng_text_hi; /* defined with the engine layout below */
+static u32 sdt_lo, sdt_hi; /* (tentative) the engine's code in SDRAM - defined with the engine layout below */
 /* the profiler's view of an instruction's stalls (-profile): by kind, and line fills by kind */
 enum { PK_IF_CART, PK_D_CART, PK_IF_SD, PK_D_SD, PK_FB, PK_OTHER, PK_N };
 static const char *pk_name[PK_N] = { "cart code", "cart data", "SDRAM code", "SDRAM data", "frame buffer", "other" };
@@ -403,6 +404,7 @@ static int idle_k = -2;
 static u32 presented_addr, presented_at_loaded, last_presented;
 static u64 eng_busy, *eng_busy_list;
 static int *eng_frame_at; /* the console frame (vertical blank count) each engine frame ended in */
+static int opt_fl_from = -1, opt_fl_to = -1; /* -frames A B: each engine frame ending in console frames A..B */
 static int eng_n, eng_cap;
 static u32 *eng_fn_cur, *eng_fn_all; /* per engine frame: cycles by function (nsyms+1 each) */
 static u32 scr_cur[1024], *scr_all;    /* per engine frame: script cycles by type * 4 + event */
@@ -658,6 +660,32 @@ static void cost_report(void)
                 printf("\n");
             }
             free(ord);
+            if (opt_fl_from >= 0) { /* -frames A B */
+                printf("  engine frames ending in console frames %d-%d (busy, then the functions that took most of it):\n",
+                       opt_fl_from, opt_fl_to);
+                for (int f = 0; f < eng_n; ++f) {
+                    if (eng_frame_at[f] < opt_fl_from || eng_frame_at[f] > opt_fl_to)
+                        continue;
+                    const u32 *row = eng_fn_all + (size_t)f * W;
+                    printf("    %.3f  frame %d:", eng_busy_list[f] / vb, eng_frame_at[f]);
+                    u32 shown[8];
+                    int ns2 = 0;
+                    for (int r = 0; r < 8; ++r) {
+                        size_t best = W;
+                        for (size_t k = 0; k < W; ++k) {
+                            int dup = 0;
+                            for (int q = 0; q < ns2; ++q) dup |= shown[q] == (u32)k;
+                            if (!dup && row[k] && (best == W || row[k] > row[best]))
+                                best = k;
+                        }
+                        if (best == W)
+                            break;
+                        shown[ns2++] = (u32)best;
+                        printf(" %.30s %.3f%s", best < (size_t)nsyms ? syms[best].name : "?", row[best] / vb, r < 7 ? "," : "");
+                    }
+                    printf("\n");
+                }
+            }
         }
         if (scr_all) { /* the scripts: by object type and event */
             static const char *ev[4] = { "main", "player", "draw", "setup" };
@@ -741,6 +769,30 @@ static void cost_report(void)
             cum += save;
             printf("  %8.0f saved/frame, %5.1f%% of all cart code stalls so far, %6u bytes so far  %.60s\n", save / F,
                    100.0 * cum / (tot > 0 ? tot : 1), bytes, syms[k].name);
+        }
+        free(j);
+    }
+    if (sdt_hi) { /* R1X: what each function in SDRAM saves against the cart (its code line fills x (cart - SDRAM)) */
+        printf("code in SDRAM (.sdtext): what each function saves against the cart, per frame:\n");
+        int *j = malloc(sizeof(int) * ((size_t)nsyms + 1));
+        int n = 0;
+        for (int i = 0; i < nsyms; ++i)
+            if (syms[i].a >= sdt_lo && syms[i].a < sdt_hi && sym_code(i))
+                j[n++] = i;
+        for (int a = 0; a < n; ++a)
+            for (int b = a + 1; b < n; ++b)
+                if (cost[j[b]].fills[PK_IF_SD] > cost[j[a]].fills[PK_IF_SD]) {
+                    int t = j[a];
+                    j[a]  = j[b];
+                    j[b]  = t;
+                }
+        for (int a = 0; a < n; ++a) {
+            int k = j[a];
+            u32 size = k + 1 < nsyms ? syms[k + 1].a - syms[k].a : 0;
+            if (syms[k + 1].a > sdt_hi)
+                size = sdt_hi - syms[k].a;
+            double save = (double)cost[k].fills[PK_IF_SD] * (opt_cart_fill - opt_sdram_fill) / F;
+            printf("  %8.0f saved/frame %6u bytes %6.2f a byte  %.60s\n", save, size, size ? save / size : 0, syms[k].name);
         }
         free(j);
     }
@@ -2665,7 +2717,7 @@ int main(int argc, char **argv)
                    "  -nofifo        no frame-buffer write FIFO model; -fbword N cycles per FIFO word (default 5)\n"
                    "  -profile A B   where the SH2's time goes between frames A and B (per engine frame, by function,\n"
                    "                 by script object type, cart stalls)\n"
-                   "  -callers NAME  with -profile: who calls NAME\n  -pcprof NAME   with -profile: NAME's every instruction (count, cycles, stalls per address; up to 8)\n"
+                   "  -callers NAME  with -profile: who calls NAME\n  -pcprof NAME   with -profile: NAME's every instruction (count, cycles, stalls per address; up to 8)\n  -frames A B    with -profile: every engine frame that ends in console frames A..B, with its top functions\n"
                    "  -cartwait N    cart waits per single access (default 15); -cartrd N, -cartfill N (default 87) set\n"
                    "                 an uncached long read / a cache line directly; -fbread N (default 8); -k68word N (75)\n"
                    "  -novbistop     keep running when line 10 freezes\n");
@@ -2722,6 +2774,10 @@ int main(int argc, char **argv)
             opt_rec_crc_n = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-callers") && i + 1 < argc)
             opt_callers = argv[++i];
+        else if (!strcmp(argv[i], "-frames") && i + 2 < argc) {
+            opt_fl_from = atoi(argv[++i]);
+            opt_fl_to   = atoi(argv[++i]);
+        }
         else if (!strcmp(argv[i], "-pcprof") && i + 1 < argc) {
             if (pcp_n < PCP_MAX)
                 pcp_name[pcp_n++] = argv[++i];
