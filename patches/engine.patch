@@ -601,7 +601,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.cpp	2026-10-16 15:07:48.385497542 -0700
++++ engine/Drawing.cpp	2026-10-16 15:29:54.138724723 -0700
 @@ -15,9 +15,15 @@
  // it rather than remove it outright.
  #define DONT_USE_VIEW_ANGLE (1)
@@ -865,11 +865,14 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (showHitboxes) {
          for (int i = 0; i < debugHitboxCount; ++i) {
              DebugHitboxInfo *info = &debugHitboxList[i];
-@@ -2127,8 +2208,79 @@
+@@ -2127,8 +2208,92 @@
  }
  #endif
  
 +#if SCD32X_NODRAW
++// PORT32X R1X: hParallax.linePos holds PARALLAX_COUNT copies of this number (the foreground's fill); SCD_LINEPOS_NONE = not known
++#define SCD_LINEPOS_NONE (-0x7FFFFFFF - 1)
++static int scdLinePosAll = SCD_LINEPOS_NONE;
 +// PORT32X R1V: the no-draw build's per-line positions, as R1T's loop computed them, in one counter: the layer line
 +// `ly` runs from tileYPos and wraps at the layer's height (the loop's tileY16 / tileY / chunkY and its scroll index
 +// jump back to the layer's first line at the same moment); above the water the deformation table, below it the
@@ -884,15 +887,25 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +{
 +    const int *__restrict linePos = hParallax.linePos;
 +    const int *__restrict deformOn = hParallax.deform;
++    static int *uniOut = nullptr; // R1X: this buffer holds uniN copies of uniX (only this function writes it)
++    static int uniX = 0, uniN = 0;
 +    if (uniform && !scdHDeformAny) {
 +        int x = linePos[0];
 +        if (x < 0)
 +            x += width;
 +        if (x >= width)
 +            x -= width;
-+        for (int n = (above > 0 ? above : 0) + (below > 0 ? below : 0); n > 0; --n) *out++ = x;
++        int n = (above > 0 ? above : 0) + (below > 0 ? below : 0);
++        if (out == uniOut && x == uniX && n == uniN)
++            return; // the foreground's second slot: the same numbers are there already
++        uniOut = out;
++        uniX   = x;
++        uniN   = n;
++        for (; n > 0; --n) *out++ = x;
 +        return;
 +    }
++    if (out == uniOut)
++        uniOut = nullptr; // per-line numbers below
 +    if (!scdHDeformAny) {
 +        // R1X: no entry deforms (the background of a stage without line deformation): each line is its scroll entry's
 +        // position, wrapped - the loop below without the deform test; a run of lines with one entry wraps it once
@@ -945,7 +958,34 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer   = &stageLayouts[activeTileLayers[layerID]];
          int screenwidth16  = (GFX_LINESIZE >> 4) - 1;
-@@ -2173,7 +2325,24 @@
+@@ -2157,7 +2322,16 @@
+             lastXSize     = layer->xsize;
+             yscrollOffset = yScrollOffset;
+             lineScroll    = layer->lineScroll;
++#if SCD32X_NODRAW
++            // PORT32X R1X: the foreground's second slot in a frame finds the 256 entries already holding this number
++            // (nothing else writes them in between: scdLinePosAll is reset where they are written)
++            if (scdLinePosAll != xScrollOffset) {
++                for (int i = 0; i < PARALLAX_COUNT; ++i) hParallax.linePos[i] = xScrollOffset;
++                scdLinePosAll = xScrollOffset;
++            }
++#else
+             for (int i = 0; i < PARALLAX_COUNT; ++i) hParallax.linePos[i] = xScrollOffset;
++#endif
+             deformationData  = &bgDeformationData0[(byte)(yscrollOffset + layer->deformationOffset)];
+             deformationDataW = &bgDeformationData1[(byte)(yscrollOffset + waterDrawPos + layer->deformationOffsetW)];
+         }
+@@ -2165,6 +2339,9 @@
+         if (layer->type == LAYER_HSCROLL) {
+             if (lastXSize != layerwidth) {
+                 int fullLayerwidth = layerwidth << 7;
++#if SCD32X_NODRAW
++                scdLinePosAll = SCD_LINEPOS_NONE; // PORT32X R1X: the entries are written below
++#endif
+                 for (int i = 0; i < hParallax.entryCount; ++i) {
+                     hParallax.linePos[i] = xScrollOffset * hParallax.parallaxFactor[i] >> 8;
+                     hParallax.scrollPos[i] += hParallax.scrollSpeed[i];
+@@ -2173,7 +2350,24 @@
                      if (hParallax.scrollPos[i] < 0)
                          hParallax.scrollPos[i] += fullLayerwidth << 16;
                      hParallax.linePos[i] += hParallax.scrollPos[i] >> 16;
@@ -970,7 +1010,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  }
              }
              lastXSize = layerwidth;
-@@ -2184,6 +2353,13 @@
+@@ -2184,6 +2378,13 @@
          int tileYPos           = yscrollOffset % (layerheight << 7);
          if (tileYPos < 0)
              tileYPos += layerheight << 7;
@@ -984,7 +1024,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          byte *scrollIndex = &lineScroll[tileYPos];
          int tileY16       = tileYPos & 0xF;
          int chunkY        = tileYPos >> 7;
-@@ -2191,6 +2367,22 @@
+@@ -2191,6 +2392,22 @@
  
          // Draw Above Water (if applicable)
          int drawableLines[2] = { waterDrawPos, SCREEN_YSIZE - waterDrawPos };
@@ -1007,7 +1047,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          for (int i = 0; i < 2; ++i) {
              while (drawableLines[i]--) {
                  activePalette   = fullPalette[*lineBuffer];
-@@ -2203,8 +2395,9 @@
+@@ -2203,8 +2420,9 @@
                          deform = *deformationData;
  
                      // Fix for SS5 mobile bug
@@ -1019,7 +1059,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                          deform >>= 4;
  
                      chunkX += deform;
-@@ -2221,6 +2414,10 @@
+@@ -2221,6 +2439,10 @@
                      chunkX += fullLayerwidth;
                  if (chunkX >= fullLayerwidth)
                      chunkX -= fullLayerwidth;
@@ -1030,7 +1070,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  int chunkXPos         = chunkX >> 7;
                  int tilePxXPos        = chunkX & 0xF;
                  int tileXPxRemain     = TILE_SIZE - tilePxXPos;
-@@ -2637,6 +2834,7 @@
+@@ -2637,6 +2859,7 @@
                      }
                  }
  
@@ -1038,7 +1078,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  if (++tileY16 > TILE_SIZE - 1) {
                      tileY16 = 0;
                      ++tileY;
-@@ -2650,8 +2848,21 @@
+@@ -2650,8 +2873,22 @@
                  }
              }
          }
@@ -1053,6 +1093,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +}
 +static void scd_hline_hw(int layerID)
 +{
++    scdLinePosAll = SCD_LINEPOS_NONE; // PORT32X R1X: this path writes hParallax.linePos
 +    {
 +#else
      else if (renderType == RENDER_HW) {
@@ -1060,7 +1101,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          TileLayer *layer      = &stageLayouts[activeTileLayers[layerID]];
          byte *lineScrollPtr   = NULL;
          int chunkPosX         = 0;
-@@ -3481,6 +3692,7 @@
+@@ -3481,6 +3718,7 @@
  }
  void DrawVLineScrollLayer(int layerID)
  {
@@ -1068,7 +1109,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
          if (!layer->xsize || !layer->ysize)
-@@ -3535,6 +3747,7 @@
+@@ -3535,6 +3773,7 @@
          ushort *frameBufferPtr = Engine.frameBuffer;
          activePalette          = fullPalette[gfxLineBuffer[0]];
          activePalette32        = fullPalette32[gfxLineBuffer[0]];
@@ -1076,7 +1117,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          int tileXPos           = xscrollOffset % (layerheight << 7);
          if (tileXPos < 0)
              tileXPos += layerheight << 7;
-@@ -4064,6 +4277,8 @@
+@@ -4064,6 +4303,8 @@
  }
  void Draw3DFloorLayer(int layerID)
  {
@@ -1085,7 +1126,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4644,6 +4859,8 @@
+@@ -4644,6 +4885,8 @@
  }
  void Draw3DSkyLayer(int layerID)
  {
@@ -1094,7 +1135,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4727,6 +4944,8 @@
+@@ -4727,6 +4970,8 @@
  
  void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
  {
@@ -1103,7 +1144,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A > 0xFF)
          A = 0xFF;
      if (renderType == RENDER_SW) {
-@@ -4828,6 +5047,7 @@
+@@ -4828,6 +5073,7 @@
  
  void SetFadeHQ(int R, int G, int B, int A)
  {
@@ -1111,7 +1152,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A <= 0)
          return;
      if (A > 0xFF)
-@@ -4871,6 +5091,8 @@
+@@ -4871,6 +5117,8 @@
  
  void DrawTintRectangle(int XPos, int YPos, int width, int height)
  {
@@ -1120,7 +1161,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -4907,6 +5129,8 @@
+@@ -4907,6 +5155,8 @@
  void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                          int sheetID)
  {
@@ -1129,7 +1170,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5008,6 +5232,8 @@
+@@ -5008,6 +5258,8 @@
  
  void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
@@ -1138,7 +1179,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -5102,6 +5328,8 @@
+@@ -5102,6 +5354,8 @@
  
  void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
  {
@@ -1147,7 +1188,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int widthFlip  = width;
          int heightFlip = height;
-@@ -5399,6 +5627,8 @@
+@@ -5399,6 +5653,8 @@
  void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                        int sheetID)
  {
@@ -1156,7 +1197,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5558,6 +5788,8 @@
+@@ -5558,6 +5814,8 @@
  void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                      int sheetID)
  {
@@ -1165,7 +1206,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      // Not avaliable in SW Render mode
  
      if (renderType == RENDER_HW) {
-@@ -5616,6 +5848,8 @@
+@@ -5616,6 +5874,8 @@
  void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                         int sheetID)
  {
@@ -1174,7 +1215,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int sprXPos    = (pivotX + sprX) << 9;
          int sprYPos    = (pivotY + sprY) << 9;
-@@ -5880,6 +6114,8 @@
+@@ -5880,6 +6140,8 @@
  void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
                          int sheetID)
  {
@@ -1183,7 +1224,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (scale == 0)
          return;
  
-@@ -6148,6 +6384,8 @@
+@@ -6148,6 +6410,8 @@
  
  void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
@@ -1192,7 +1233,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6236,6 +6474,8 @@
+@@ -6236,6 +6500,8 @@
  }
  void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1201,7 +1242,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -6359,6 +6599,8 @@
+@@ -6359,6 +6625,8 @@
  }
  void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1210,7 +1251,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6459,6 +6701,8 @@
+@@ -6459,6 +6727,8 @@
  }
  void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1219,7 +1260,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6664,6 +6908,8 @@
+@@ -6664,6 +6934,8 @@
  
  void DrawFace(void *v, uint colour)
  {
@@ -1228,7 +1269,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -6849,6 +7095,8 @@
+@@ -6849,6 +7121,8 @@
  }
  void DrawTexturedFace(void *v, byte sheetID)
  {
@@ -1237,7 +1278,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -7022,6 +7270,7 @@
+@@ -7022,6 +7296,7 @@
  
  void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
  {
@@ -1245,7 +1286,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int Y           = YPos << 9;
      if (rowCount < 0)
-@@ -7052,6 +7301,7 @@
+@@ -7052,6 +7327,7 @@
  
  void DrawTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1253,7 +1294,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7062,6 +7312,7 @@
+@@ -7062,6 +7338,7 @@
  }
  void DrawStageTextEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1261,7 +1302,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7077,6 +7328,7 @@
+@@ -7077,6 +7354,7 @@
  }
  void DrawBlendedTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1269,7 +1310,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7087,6 +7339,8 @@
+@@ -7087,6 +7365,8 @@
  }
  void DrawTextMenu(void *menu, int XPos, int YPos)
  {
