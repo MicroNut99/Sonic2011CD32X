@@ -52,10 +52,7 @@ const char sh2_build_marker[] = "SH2-VS7D"; /* the Sub-CPU looks for "SH2-V" */
 #define CMD_CHUNK_TO_CART 46
 #define FILE_ENGINE 21         /* Sub-CPU: 21 -> "SONICCD.PAK" at cart 0 */
 #define FILE_DATA 22           /* Sub-CPU: 22 -> "SCDDATA.PAK" at cart 0x180000 */
-#define FILE_FIRST_SCENE 0x200 /* R1M: the scene the engine starts in (Makefile START = "1 0") -> "L1S000.IMG" at
-                                  cart 0x080000. Was 0x100 (the title), which the engine then loaded Palmtree
-                                  Panic over: two 1.9 MB loads. The engine finds 0x200 already there and does
-                                  not load it again. MUST match START: the title (START = "0 0") is 0x100. */
+#define FILE_FIRST_SCENE 0x100 /* Sub-CPU: 0x100 -> "L0S000.IMG" at cart 0x080000 */
 #define CHUNK_BYTES 32768
 #define ENGINE_MAX 0x080000
 #define SCENE_MAX 0x280000 /* S7e: 0x080000 - 0x300000 (sprite and tile pixels in the scene image) */

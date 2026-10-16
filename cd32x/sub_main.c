@@ -1003,7 +1003,7 @@ int main(void)
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_LAST_ADDR, 0);
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_READY_ADDR, 0);
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_BAD_ADDR, 0);
-                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15124, 0);            /* R1M (from R1I): COMM4 still held the start-up
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15124, 0);            /* R1N (from R1I): COMM4 still held the start-up
                                                                                   check 0x1234 - the 68000 took it as a
                                                                                   record id and copied frame-buffer junk
                                                                                   (R1H: ID 1234, REC 0004 0004 0006 ...;
