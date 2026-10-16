@@ -34,6 +34,7 @@
         .equ    SGB_LAST,  0xFF8002         /* w: id of the last record taken (COMM4 / COMM6) */
         .equ    SGB_READY, 0xFF8004         /* w: 1 = a record waits in SGB_REC for vertical blank */
         .equ    SGB_BAD,   0xFF8006         /* w: R1G - 1 = a record id came with no valid record behind it */
+        .equ    SGB_DIAGF, 0xFF8008         /* w: R1H - 1 = take the records but do not apply them (diagnosis) */
         .equ    SGB_REC,   0xFF8010         /* the record: length word + up to SGB_RECMAX words */
         .equ    SGB_RECMAX,6000
 
@@ -203,6 +204,7 @@ md_start:
         clr.w   SGB_READY               /* the planes stay off until the Sub-CPU loads an act  */
         clr.w   SGB_LAST
         clr.w   SGB_BAD
+        clr.w   SGB_DIAGF
         move.l  #0,0xA12010
         move.l  #0,0xA12014
         move.l  #0,0xA12018
@@ -1527,6 +1529,11 @@ sgb_vblank:
         move.w  #0x000E,0xC00000
 98:     tst.w   SGB_READY
         beq.w   99f
+        tst.w   SGB_DIAGF               /* R1H: diagnosis - the record stays in SGB_REC for the Sub-CPU */
+        beq.b   97f                     /* to read; the VDP is not touched (the text stays)            */
+        clr.w   SGB_READY
+        rts
+97:
         movem.l d2-d4/a2-a3,-(sp)
         lea     SGB_REC+2,a0            /* after the length word */
         lea     0xC00004,a2             /* VDP control */

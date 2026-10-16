@@ -109,6 +109,16 @@ static int sub_quiet = 0;
 #define SGB_FLAG_ADDR    0xFF8000        /* 68000 work RAM - the listener's SGB_ equates */
 #define SGB_LAST_ADDR    0xFF8002
 #define SGB_READY_ADDR   0xFF8004
+#define SGB_BAD_ADDR     0xFF8006        /* R1G: 1 = an id with no valid record */
+#define SGB_DIAG_ADDR    0xFF8008        /* R1H: 1 = the 68000 takes the records but does not apply them */
+#define SGB_REC_ADDR     0xFF8010
+/* R1H DIAGNOSIS DISC (SGB_DIAG 1): the act's cells and colours are NOT loaded (the font stays), the 68000
+   copies each record but does not write it to the VDP (the text stays where it is), and the Sub-CPU
+   prints rows 12-13 once a second: the last record id, the bad flag and the record's first words.
+   R1G showed a grid of dots instead of the level: this shows what the 68000 actually receives. */
+#ifndef SGB_DIAG
+#define SGB_DIAG 1
+#endif
 #define MD_CMD_INIT_HW_  1               /* hw_md.s command numbers (md_init_hw, copy_vram, set_palette) */
 #define MD_CMD_COPY_VRAM_ 7
 #define MD_CMD_SET_PALETTE_ 12
@@ -136,7 +146,7 @@ static const char *find_sh2_marker(const char *p, int len)
 
 void print_diag(char *temp, const char *msg, int x, int y) {
     if (quiet) return;
-    if (planes_on) return;                    /* SONIC REV R1: the planes use that video RAM */
+    if (planes_on && !SGB_DIAG) return;       /* SONIC REV R1: the planes use that video RAM (R1H: not in diagnosis) */
 #if !KOBO_DIAG_TEXT
     return;                                   /* K19: green text switched off (see top) */
 #endif
@@ -669,6 +679,23 @@ int main(void)
             }
         }
 
+#if SGB_DIAG
+        if (planes_on) {   /* R1H: once a second, what the 68000 has taken (SGB_REC = its copy of the record) */
+            static uint32_t dt = 0;
+            uint32_t now = GET_TICKS;
+            if (now - dt >= 60) {
+                uint16_t w[8];
+                int k;
+                dt = now;
+                for (k = 0; k < 8; k++) w[k] = (uint16_t)do_md_cmd1(MD_CMD_READ_32X_16, SGB_REC_ADDR + 2 * k);
+                sprintf(tbuf, "SGB ID:%04X BAD:%X ST:%04X T:%04X     ", (uint16_t)do_md_cmd1(MD_CMD_READ_32X_16, SGB_LAST_ADDR),
+                        do_md_cmd1(MD_CMD_READ_32X_16, SGB_BAD_ADDR) & 0xF, sh2_state, (unsigned int)(now & 0xFFFF));
+                print_diag(temp, tbuf, 2, 12);
+                sprintf(tbuf, "REC %04X %04X %04X %04X %04X %04X %04X %04X", w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+                print_diag(temp, tbuf, 2, 13);
+            }
+        }
+#endif
         if (planes_on) {
             /* SONIC REV R1: COMM4 carries the plane record ids now - no start-up checks on it */
         } else if (comm4 == 0x0EEE) {
@@ -968,8 +995,11 @@ int main(void)
                     do_md_cmd3(MD_CMD_COPY_VRAM_, 0xE000, (int)(base + oZero), 0x1000);
                     do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0x40000010);   /* VSRAM 0 */
                     do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00000, 0);            /* plane A, plane B: 0 */
+#if !SGB_DIAG
                     do_md_cmd3(MD_CMD_COPY_VRAM_, 0x0000, (int)(base + oCell), cells * 16);
                     do_md_cmd3(MD_CMD_SET_PALETTE_, (int)(base + oCram), 0, 64);
+#endif
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_DIAG_ADDR, SGB_DIAG);  /* R1H */
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_LAST_ADDR, 0);
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_READY_ADDR, 0);
                     planes_on = 1;                                            /* no more Kobo text */
