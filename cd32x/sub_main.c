@@ -178,7 +178,6 @@ void print_diag(char *temp, const char *msg, int x, int y) {
 #define CART_IMG_BASE   0x000000
 #define CART_SLOT       0x20000
 #define CMD_CHUNK_TO_CART 46
-#define CMD_CHUNK_COMPARE 47   /* R1J fast loading (OpenJazz REV's D32X M1c): CMD 46 without the write - is the chunk already in the cart? */
 #define CMD_CART_TO_FB    47             
 static int cur_img = 0;
 static int g_nexc = 0;                   
@@ -676,7 +675,7 @@ int main(void)
                 l_st = sh2_state;
                 sprintf(tbuf, "32X:%X 32XReg:%X STATE:%X CKPT:%04X     ", cmd, comm4, sh2_state, (unsigned int)(ckpt >> 16));
                 print_diag(temp, tbuf, 2, 10);
-                {   /* R1K: the last 8 line-10 STATE values with the time each appeared (68000 vertical blanks
+                {   /* R1L (from R1K): the last 8 line-10 STATE values with the time each appeared (68000 vertical blanks
                        / 16, hex: 3.75 per second), rows 17 and 27, newest last - what came just before a
                        stall (R1B-R1D, R1I, R1J: STATE 101, 32XReg 101, CKPT 0000 after the scene load) */
                     static uint16_t hs[8], ht[8];
@@ -769,7 +768,7 @@ int main(void)
             }
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0); 
         }
-        else if (cmd == CMD_CHUNK_TO_CART || cmd == CMD_CHUNK_COMPARE) {
+        else if (cmd == CMD_CHUNK_TO_CART) {
             int chunk = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
             int length = do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
             int off = chunk * 32768;
@@ -813,10 +812,9 @@ int main(void)
             if (n > 0) {
                 scd_sub_read((void *)0x0C0000, saved_lba + chunk * 16, n);   
                 switch_banks();                                   
-                if (cmd != CMD_CHUNK_COMPARE)          /* R1J: CMD 47 compares only, nothing written */
-                    for (p = 0; p < bytes; p += 0x4000)
-                        do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, 0x400000 + coff + p, 0x200000 + p,
-                                   bytes - p < 0x4000 ? bytes - p : 0x4000);
+                for (p = 0; p < bytes; p += 0x4000)
+                    do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, 0x400000 + coff + p, 0x200000 + p,
+                               bytes - p < 0x4000 ? bytes - p : 0x4000);
 #if CART_VERIFY_READBACK
                 do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15104, (int)(coff >> 20) & 3);   
                 for (p = 0; p < bytes; p += 0x4000)
@@ -863,7 +861,7 @@ int main(void)
 #endif
             }
 #endif
-            sprintf(tbuf, "%s I%d C%d @%06lX %s          ", cmd == CMD_CHUNK_COMPARE ? "CMP " : "CART", cur_img, chunk,
+            sprintf(tbuf, "CART I%d C%d @%06lX %s          ", cur_img, chunk,
 #if CART_TARGET == 1
                     (unsigned long)(0x600001 + 2 * coff),      
 #else
@@ -1025,7 +1023,7 @@ int main(void)
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_LAST_ADDR, 0);
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_READY_ADDR, 0);
                     do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_BAD_ADDR, 0);
-                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15124, 0);            /* R1I: COMM4 still held the start-up
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15124, 0);            /* R1L (from R1I): COMM4 still held the start-up
                                                                                   check 0x1234 - the 68000 took it as a
                                                                                   record id and copied frame-buffer junk
                                                                                   (R1H: ID 1234, REC 0004 0004 0006 ...;
