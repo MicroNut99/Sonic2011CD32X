@@ -449,6 +449,8 @@ def main():
     ap.add_argument("--scene", default="1:0")
     ap.add_argument("--out", required=True)
     ap.add_argument("--only", default="", help="TYPE:SUB,... (type names as the game names them, sub = main/player/draw/setup)")
+    ap.add_argument("--hot", default="", help="R1V: TYPE:SUB,... and F<n>,... whose code goes into SDRAM on the console "
+                    "(SCD_HOT: the ones that run every frame)")
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args()
     funcs, fenum, venum = engine_tables(a.script_cpp)
@@ -463,6 +465,13 @@ def main():
     for item in filter(None, a.only.split(",")):
         t, s = item.rsplit(":", 1)
         only.add((t.strip().replace(" ", ""), s.strip()))
+    hot_subs, hot_funcs = set(), set()
+    for item in filter(None, (x.strip() for x in a.hot.split(","))):
+        if re.fullmatch(r"F\d+", item):
+            hot_funcs.add(int(item[1:]))
+        else:
+            t, s = item.rsplit(":", 1)
+            hot_subs.add((t.strip().replace(" ", ""), s.strip()))
 
     out_subs, out_funcs, done_funcs, skipped = [], {}, {}, []
     count_ops = 0
@@ -532,7 +541,10 @@ def main():
               lst, pos, scene.label, len(out_subs), len(out_funcs)))
         w("namespace {\n")
         for n in sorted(out_funcs):
-            w("static bool scdn_F%d(byte scriptSub);\n" % n)
+            w("static bool scdn_F%d(byte scriptSub)%s;\n" % (n, " SCD_HOT" if n in hot_funcs else ""))
+        for cp, cname, jp, text, name, sub, nops in out_subs:  # R1V: the ones that run every frame into SDRAM
+            if (name.replace(" ", ""), sub) in hot_subs:
+                w("static bool %s(byte scriptSub) SCD_HOT; // %s, %s\n" % (cname, name, sub))
         if done_funcs.get(-1):
             # CallFunction with a variable: the interpreter takes scriptFunctionList[n] - every function is native
             w("static bool scdn_call(byte scriptSub)\n{\n    switch (scriptEng.operands[0]) {\n")

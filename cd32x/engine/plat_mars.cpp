@@ -16,7 +16,7 @@ extern "C" {
 #define CART_STAGE ((const unsigned char *)0x02080000) /* cached: the cart is read-only */
 #define CART_PACK ((const unsigned char *)0x02300000) /* S7e: the data pack at 3 MB (the scene slot grew) */
 #define SCD_BOOT_RECORD ((volatile unsigned int *)0x06001F00) /* "SCDB", engine, stage, pack bytes */
-#define SCD_HEAP_LIMIT 0x0603C400u                            /* the master stack (12 KB) starts here (S7b3) */
+#define SCD_HEAP_LIMIT 0x0603D400u                            /* the master stack (8 KB, R1W) starts here (S7b3) */
 #define SC_VDP_FBCTL (*(volatile unsigned short *)0x2000410A)
 #define SC_CRAM ((volatile unsigned short *)0x20004200)
 #define SC_FB ((volatile unsigned short *)0x24000000)
@@ -259,6 +259,7 @@ static bool sgb_shows(int slots, bool front)
             return true;
     return false;
 }
+static void planes_frame() SCD_HOT; /* PORT32X R1V: every frame - SDRAM (RetroEngine.hpp SCD_HOT) */
 static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.cpp sgb_frame) */
 {
     int fgSlots = 0, bgLayer = -1, bgSlots = 0;
@@ -354,6 +355,7 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
 #if SCD32X_DRAWCART
 static void draw_show(); // S7e (below)
 #endif
+void plat_present(const unsigned short *, int, int, int) SCD_HOT; /* R1V: SDRAM */
 void plat_present(const unsigned short *, int, int, int)
 {
 #if SCD32X_DRAWCART
@@ -454,6 +456,7 @@ static void draw_show() /* convert to the 32X's 15-bit colours, line table, show
 #if SCD_DEMO_PAD
 // REV R1 test disc: the PC check's pad (tools/run_md_check.sh) - after 4 s, every 4 s: spin dash
 // (hold down, press C, release), run right 3 s with one jump - so Sonic moves and the camera scrolls
+unsigned int plat_pad() SCD_HOT; /* R1W: SDRAM */
 unsigned int plat_pad()
 {
     unsigned int ms = presented * 1000 / 60;
@@ -478,6 +481,7 @@ void plat_sfx_loaded(int, const char *, int, int, int, int) {}
 #if SCD_PLANES
 // REV R1: each drawn layer slot's scroll (DrawHLineScrollLayer) - layer 0 (the foreground) for
 // plane A, the first other layer for plane B (two background layers at once: no record)
+unsigned short *plat_layer_begin(int slot, int layer, int tileYPos, unsigned short *frame) SCD_HOT; /* R1W: SDRAM */
 unsigned short *plat_layer_begin(int slot, int layer, int tileYPos, unsigned short *frame)
 {
     if (slot >= 0 && slot < 4) {
@@ -502,6 +506,7 @@ void plat_layer_line(int slot, int line, int x)
         xB[line] = x;
 }
 void plat_layer_end(int) {}
+int *plat_layer_lines(int slot) SCD_HOT; /* R1W: SDRAM */
 int *plat_layer_lines(int slot) /* R1T: as plat_layer_line - layer 0 into xA, the frame's background layer into xB */
 {
     if (slot < 0 || slot >= 4)

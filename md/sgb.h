@@ -44,6 +44,8 @@ typedef struct {
 
 void sgb_out_begin(SgbOut *o, uint16_t *out, int max);
 void sgb_write(void *ctx, uint16_t addr, uint16_t word); /* MdWriteFn, ctx = SgbOut* */
+/* R1W: n words for the addresses addr, addr + 2, ... - exactly what n sgb_write calls write (md_planes.c's rows) */
+void sgb_write_run(void *ctx, uint16_t addr, const uint16_t *words, int n);
 /* closes the record; returns its size in words (the length word included), -1 if it did not fit */
 int sgb_out_end(SgbOut *o, uint16_t vA, uint16_t vB, const int16_t *hsA, const int16_t *hsB, int lines,
                 const uint16_t *cramIdx, const uint16_t *cramCol, int ncram);

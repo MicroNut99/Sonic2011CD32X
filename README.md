@@ -44,7 +44,7 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | Every act converted and checked against the engine on the PC (R0) | **done** – [docs/R0_SURVEY.md](docs/R0_SURVEY.md): 68 of 70 acts; 332–801 patterns per act (room for 1,535); 2–4 palette lines; 0 layers the VDP cannot show; 46 acts identical frame by frame, 22 with small local differences to explain |
 | Genesis planes streamed by the 68000 from SH2-made records | S3c / S4b: 60 fps in **Fusion** (a standalone 68000 program). Not yet run on the console. |
 | The 2011 engine on the SH2 from the cart | proven on the console in rounds S5–S7 (title scene starts; 30 fps with drawing off) |
-| R1: the engine drives the planes (records through the frame buffer, the listener copies them in vblank) | **On the console (R1S)**: Palmtree Panic 1 on the Genesis planes, scrolling with the engine - at 27-29 frames a second, half the game's speed. Speed rounds from R1T: where the SH2's time goes and the plan in [docs/R1_NOTES.md](docs/R1_NOTES.md) (*Speed*). |
+| R1: the engine drives the planes (records through the frame buffer, the listener copies them in vblank) | **On the console (R1S)**: Palmtree Panic 1 on the Genesis planes, scrolling with the engine - at 27-29 frames a second, half the game's speed. Speed rounds R1T-R1W (native scripts, hot code in SDRAM, ...): **60 frames a second in sh2emu**, every engine frame under one vertical blank - next: the console. [docs/R1_NOTES.md](docs/R1_NOTES.md) (*Speed*). |
 
 ## Rounds
 

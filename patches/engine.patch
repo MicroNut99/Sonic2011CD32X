@@ -1,6 +1,6 @@
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Animation.cpp engine/Animation.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Animation.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Animation.cpp	2026-10-15 21:43:01.361667987 -0700
++++ engine/Animation.cpp	2026-10-16 14:42:11.751484748 -0700
 @@ -1,14 +1,30 @@
  #include "RetroEngine.hpp"
  
@@ -121,14 +121,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      // If matching anim is found return that, otherwise load a new anim
      for (int a = 0; a < 0x100; ++a) {
          if (StrLength(animationFileList[a].fileName) <= 0) {
-@@ -132,6 +191,7 @@
+@@ -132,8 +191,11 @@
              return &animationFileList[a];
      }
      return NULL;
 +#endif
  }
  
++// PORT32X R1W: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void ProcessObjectAnimation(void *objScr, void *ent) SCD_HOT;
  void ProcessObjectAnimation(void *objScr, void *ent)
+ {
+     ObjectScript *objectScript = (ObjectScript *)objScr;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Animation.hpp engine/Animation.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Animation.hpp	2026-08-15 23:48:31.000000000 -0700
 +++ engine/Animation.hpp	2026-10-15 21:43:01.361844346 -0700
@@ -396,7 +400,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              StrCopy(sfxList[i].name, "");
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Collision.cpp engine/Collision.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Collision.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Collision.cpp	2026-10-15 21:43:01.362510973 -0700
++++ engine/Collision.cpp	2026-10-16 13:53:02.361326325 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +
@@ -448,7 +452,16 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  tile += tileX + (tileY << 3);
                  int tileIndex = tiles128x128.tileIndex[tile];
                  if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_LRB
-@@ -557,7 +558,7 @@
+@@ -543,6 +544,8 @@
+         }
+     }
+ }
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void LWallCollision(Player *player, CollisionSensor *sensor) SCD_HOT;
+ void LWallCollision(Player *player, CollisionSensor *sensor)
+ {
+     int c;
+@@ -557,7 +560,7 @@
              int chunkY = YPos >> 7;
              int tileY  = (YPos & 0x7F) >> 4;
              if (XPos > -1 && YPos > -1) {
@@ -457,7 +470,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  tile += tileX + (tileY << 3);
                  int tileIndex = tiles128x128.tileIndex[tile];
                  if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_TOP
-@@ -630,7 +631,7 @@
+@@ -630,7 +633,7 @@
              int chunkY = YPos >> 7;
              int tileY  = (YPos & 0x7F) >> 4;
              if (XPos > -1 && YPos > -1) {
@@ -466,7 +479,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  tile += tileX + (tileY << 3);
                  int tileIndex = tiles128x128.tileIndex[tile];
                  if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_TOP
-@@ -713,7 +714,7 @@
+@@ -713,7 +716,7 @@
              int chunkY = YPos >> 7;
              int tileY  = (YPos & 0x7F) >> 4;
              if (XPos > -1 && YPos > -1) {
@@ -475,7 +488,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  tile += tileX + (tileY << 3);
                  int tileIndex = tiles128x128.tileIndex[tile];
                  if (tiles128x128.collisionFlags[player->collisionPlane][tile] != SOLID_TOP
-@@ -1634,7 +1635,7 @@
+@@ -1634,7 +1637,7 @@
          int tileX     = (XPos & 0x7F) >> 4;
          int chunkY    = YPos >> 7;
          int tileY     = (YPos & 0x7F) >> 4;
@@ -484,7 +497,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          int tileIndex = tiles128x128.tileIndex[chunk];
          if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_LRB && tiles128x128.collisionFlags[cPath][chunk] != SOLID_NONE) {
              switch (tiles128x128.direction[chunk]) {
-@@ -1693,7 +1694,7 @@
+@@ -1693,7 +1696,7 @@
          int tileX     = (XPos & 0x7F) >> 4;
          int chunkY    = YPos >> 7;
          int tileY     = (YPos & 0x7F) >> 4;
@@ -493,7 +506,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          chunk         = chunk + tileX + (tileY << 3);
          int tileIndex = tiles128x128.tileIndex[chunk];
          if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_TOP && tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
-@@ -1753,7 +1754,7 @@
+@@ -1753,7 +1756,7 @@
          int tileX     = (XPos & 0x7F) >> 4;
          int chunkY    = YPos >> 7;
          int tileY     = (YPos & 0x7F) >> 4;
@@ -502,7 +515,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          chunk         = chunk + tileX + (tileY << 3);
          int tileIndex = tiles128x128.tileIndex[chunk];
          if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_TOP && tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
-@@ -1813,7 +1814,7 @@
+@@ -1813,7 +1816,7 @@
          int tileX     = (XPos & 0x7F) >> 4;
          int chunkY    = YPos >> 7;
          int tileY     = (YPos & 0x7F) >> 4;
@@ -511,7 +524,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          chunk         = chunk + tileX + (tileY << 3);
          int tileIndex = tiles128x128.tileIndex[chunk];
          if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_TOP && tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
-@@ -1876,7 +1877,7 @@
+@@ -1876,7 +1879,7 @@
              int tileX     = (XPos & 0x7F) >> 4;
              int chunkY    = YPos >> 7;
              int tileY     = (YPos & 0x7F) >> 4;
@@ -520,7 +533,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              int tileIndex = tiles128x128.tileIndex[chunk];
              if (tiles128x128.collisionFlags[cPath][chunk] != SOLID_LRB && tiles128x128.collisionFlags[cPath][chunk] != SOLID_NONE) {
                  switch (tiles128x128.direction[chunk]) {
-@@ -1946,7 +1947,7 @@
+@@ -1946,7 +1949,7 @@
              int tileX     = (XPos & 0x7F) >> 4;
              int chunkY    = YPos >> 7;
              int tileY     = (YPos & 0x7F) >> 4;
@@ -529,7 +542,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              int tileIndex = tiles128x128.tileIndex[chunk];
              if (tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
                  switch (tiles128x128.direction[chunk]) {
-@@ -2015,7 +2016,7 @@
+@@ -2015,7 +2018,7 @@
              int tileX     = (XPos & 0x7F) >> 4;
              int chunkY    = YPos >> 7;
              int tileY     = (YPos & 0x7F) >> 4;
@@ -538,7 +551,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              int tileIndex = tiles128x128.tileIndex[chunk];
              if (tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
                  switch (tiles128x128.direction[chunk]) {
-@@ -2085,7 +2086,7 @@
+@@ -2085,7 +2088,7 @@
              int tileX     = (XPos & 0x7F) >> 4;
              int chunkY    = YPos >> 7;
              int tileY     = (YPos & 0x7F) >> 4;
@@ -547,6 +560,24 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              int tileIndex = tiles128x128.tileIndex[chunk];
              if (tiles128x128.collisionFlags[cPath][chunk] < SOLID_NONE) {
                  switch (tiles128x128.direction[chunk]) {
+@@ -2249,6 +2252,8 @@
+     }
+ 
+ }
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void TouchCollision(int left, int top, int right, int bottom) SCD_HOT;
+ void TouchCollision(int left, int top, int right, int bottom)
+ {
+     Player *player       = &playerList[activePlayer];
+@@ -2799,6 +2804,8 @@
+     }
+ #endif
+ }
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void PlatformCollision(int left, int top, int right, int bottom) SCD_HOT;
+ void PlatformCollision(int left, int top, int right, int bottom)
+ {
+     Player *player       = &playerList[activePlayer];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Collision.hpp engine/Collision.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Collision.hpp	2026-08-15 23:48:31.000000000 -0700
 +++ engine/Collision.hpp	2026-10-15 21:43:01.362930766 -0700
@@ -570,7 +601,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.cpp	2026-10-16 12:34:59.634964757 -0700
++++ engine/Drawing.cpp	2026-10-16 14:42:52.661539627 -0700
 @@ -15,9 +15,15 @@
  // it rather than remove it outright.
  #define DONT_USE_VIEW_ANGLE (1)
@@ -671,7 +702,34 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          if (Engine.useHQModes) {
              Engine.frameBuffer2x = new ushort[GFX_LINESIZE_DOUBLE * (SCREEN_YSIZE * 2)];
              memset(Engine.frameBuffer2x, 0, GFX_LINESIZE_DOUBLE * (SCREEN_YSIZE * 2) * sizeof(ushort));
-@@ -434,6 +474,9 @@
+@@ -397,6 +437,8 @@
+ 
+     return 1;
+ }
++// PORT32X R1W: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void FlipScreen() SCD_HOT;
+ void FlipScreen()
+ {
+     if (Engine.gameMode == ENGINE_EXITGAME)
+@@ -404,6 +446,9 @@
+ 
+ #if !RETRO_USE_ORIGINAL_CODE
+     float dimAmount = 1.0;
++#if !(defined(__sh__) && defined(SCD32X_SH2))
++    // PORT32X R1W: not on the console - the dim (the PC's idle screen darkening) is drawn only by the OpenGL / SDL
++    // paths below; on the SH2 these float sums (library calls) ran every frame for nothing that is shown or read
+     if ((!Engine.masterPaused || Engine.frameStep) && !drawStageGFXHQ) {
+         if (Engine.dimTimer < Engine.dimLimit) {
+             if (Engine.dimPercent < 1.0) {
+@@ -419,6 +464,7 @@
+         dimAmount = Engine.dimMax * Engine.dimPercent;
+     }
+ #endif
++#endif
+ 
+     if (renderType == RENDER_SW) {
+ #if RETRO_USING_OPENGL
+@@ -434,6 +480,9 @@
              TransferRetroBuffer();
              RenderFromRetroBuffer();
          }
@@ -681,7 +739,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #elif RETRO_USING_SDL2
          SDL_Rect *destScreenPos = NULL;
          SDL_Rect destScreenPos_scaled, destScreenPosRect;
-@@ -1038,7 +1081,9 @@
+@@ -1038,7 +1087,9 @@
  void ReleaseRenderDevice()
  {
      if (Engine.frameBuffer)
@@ -691,7 +749,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (Engine.frameBuffer2x)
          delete[] Engine.frameBuffer2x;
  
-@@ -1077,6 +1122,9 @@
+@@ -1077,6 +1128,9 @@
  #endif
  }
  
@@ -701,7 +759,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void SetFullScreen(bool fs)
  {
  
-@@ -1161,9 +1209,15 @@
+@@ -1161,9 +1215,15 @@
  #endif
      }
  }
@@ -717,7 +775,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      for (int y = 0; y < 0x100; y++) {
          for (int x = 0; x < 0x20; x++) {
              blendLookupTable[x + (0x20 * y)]    = y * x >> 8;
-@@ -1179,6 +1233,7 @@
+@@ -1179,6 +1239,7 @@
  
  void ClearScreen(byte index)
  {
@@ -725,7 +783,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          ushort colour       = activePalette[index];
          ushort *framebuffer = Engine.frameBuffer;
-@@ -1306,6 +1361,9 @@
+@@ -1306,6 +1367,9 @@
  
  void UpdateHardwareTextures()
  {
@@ -735,7 +793,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      SetActivePalette(0, 0, SCREEN_YSIZE);
      UpdateTextureBufferWithTiles();
      UpdateTextureBufferWithSortedSprites();
-@@ -1517,6 +1575,9 @@
+@@ -1517,6 +1581,9 @@
  
  void SetupPolygonLists()
  {
@@ -745,7 +803,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      int vID = 0;
      for (int i = 0; i < VERTEX_COUNT; i++) {
          gfxPolyListIndex[vID++] = (i << 2) + 0;
-@@ -1542,6 +1603,9 @@
+@@ -1542,6 +1609,9 @@
  
  void UpdateTextureBufferWithTiles()
  {
@@ -755,7 +813,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      int tileIndex = 0;
      if (texBufferMode == 0) {
          // regular 1024 set of tiles
-@@ -1676,6 +1740,9 @@
+@@ -1676,6 +1746,9 @@
  }
  void UpdateTextureBufferWithSortedSprites()
  {
@@ -765,7 +823,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      byte sortedSurfaceCount = 0;
      byte sortedSurfaceList[SURFACE_COUNT];
  
-@@ -1854,6 +1921,9 @@
+@@ -1854,6 +1927,9 @@
  }
  void UpdateTextureBufferWithSprites()
  {
@@ -775,7 +833,16 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      for (int i = 0; i < SURFACE_COUNT; ++i) {
          if (gfxSurface[i].texStartY + gfxSurface[i].height <= HW_TEXTURE_SIZE && gfxSurface[i].texStartX > -1) {
              int gfxPos = gfxSurface[i].dataPosition;
-@@ -1888,7 +1958,7 @@
+@@ -1874,6 +1950,8 @@
+     }
+ }
+ 
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void DrawObjectList(int Layer) SCD_HOT;
+ void DrawObjectList(int Layer)
+ {
+     int size = drawListEntries[Layer].listSize;
+@@ -1888,11 +1966,13 @@
  
          if (type) {
              activePlayer = 0;
@@ -784,7 +851,13 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  ProcessScript(objectScriptList[type].subDraw.scriptCodePtr, objectScriptList[type].subDraw.jumpTablePtr, SUB_DRAW);
          }
      }
-@@ -2037,6 +2107,7 @@
+ }
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void DrawStageGFX() SCD_HOT;
+ void DrawStageGFX()
+ {
+     waterDrawPos = waterLevel - yScrollOffset;
+@@ -2037,6 +2117,7 @@
  #if !RETRO_USE_ORIGINAL_CODE
  void DrawDebugOverlays()
  {
@@ -792,29 +865,92 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (showHitboxes) {
          for (int i = 0; i < debugHitboxCount; ++i) {
              DebugHitboxInfo *info = &debugHitboxList[i];
-@@ -2129,6 +2200,7 @@
+@@ -2127,8 +2208,59 @@
+ }
+ #endif
  
++#if SCD32X_NODRAW
++// PORT32X R1V: the no-draw build's per-line positions, as R1T's loop computed them, in one counter: the layer line
++// `ly` runs from tileYPos and wraps at the layer's height (the loop's tileY16 / tileY / chunkY and its scroll index
++// jump back to the layer's first line at the same moment); above the water the deformation table, below it the
++// water's. Out: one position a line (lines above + below = SCREEN_YSIZE: DrawStageGFX clamps the water line).
++// R1W: uniform = the foreground (DrawHLineScrollLayer has just set all 256 linePos entries to one number): with no
++// entry that deforms (Scene.cpp scdHDeformAny) every line's position is that number, wrapped as below - the loop's
++// result without reading the lines' scroll entries (one frame-buffer read a line).
++static void scd_hline_lines(int *__restrict out, const byte *lineScroll, int ly, int lh, int width, int above, int below,
++                            const int *deform, const int *deformW, int uniform) SCD_HOT_NOINLINE;
++static void scd_hline_lines(int *__restrict out, const byte *lineScroll, int ly, int lh, int width, int above, int below,
++                            const int *deform, const int *deformW, int uniform)
++{
++    const int *__restrict linePos = hParallax.linePos;
++    const int *__restrict deformOn = hParallax.deform;
++    if (uniform && !scdHDeformAny) {
++        int x = linePos[0];
++        if (x < 0)
++            x += width;
++        if (x >= width)
++            x -= width;
++        for (int n = (above > 0 ? above : 0) + (below > 0 ? below : 0); n > 0; --n) *out++ = x;
++        return;
++    }
++    for (int pass = 0; pass < 2; ++pass) {
++        int n         = pass ? below : above;
++        const int *dd = pass ? deformW : deform;
++        while (n-- > 0) {
++            const int s = lineScroll[ly];
++            int x       = linePos[s];
++            if (deformOn[s])
++                x += *dd;
++            ++dd;
++            if (x < 0)
++                x += width;
++            if (x >= width)
++                x -= width;
++            *out++ = x;
++            if (++ly == lh)
++                ly = 0;
++        }
++    }
++}
++#endif
++#if SCD32X_NODRAW
++// PORT32X R1W: the RENDER_HW half (the PC's OpenGL path, never taken on the console) is a function of its own, so the
++// RENDER_SW half - three times a frame - is small enough for SDRAM (SCD_HOT)
++static void scd_hline_hw(int layerID) __attribute__((noinline));
++void DrawHLineScrollLayer(int layerID) SCD_HOT;
++#endif
  void DrawHLineScrollLayer(int layerID)
  {
 +    SCD_DRAWLOG("DrawHLineScrollLayer", -1, 0);
      if (renderType == RENDER_SW) {
          TileLayer *layer   = &stageLayouts[activeTileLayers[layerID]];
          int screenwidth16  = (GFX_LINESIZE >> 4) - 1;
-@@ -2173,7 +2245,12 @@
+@@ -2173,7 +2305,24 @@
                      if (hParallax.scrollPos[i] < 0)
                          hParallax.scrollPos[i] += fullLayerwidth << 16;
                      hParallax.linePos[i] += hParallax.scrollPos[i] >> 16;
--                    hParallax.linePos[i] %= fullLayerwidth;
 +#if defined(SONICCD32X)
 +                    // PORT32X R1T: a value already in 0 .. width-1 is its own remainder - the division (a library
 +                    // call on the SH2, about 130 a frame) only for the others; the result is the same
-+                    if ((unsigned int)hParallax.linePos[i] >= (unsigned int)fullLayerwidth)
++                    if ((unsigned int)hParallax.linePos[i] >= (unsigned int)fullLayerwidth) {
++                        // R1V: a power-of-two width (128 x a power-of-two chunks) without the division: C's %
++                        // keeps the dividend's sign - the low bits, minus the width for a negative value
++                        if (fullLayerwidth > 0 && !(fullLayerwidth & (fullLayerwidth - 1))) {
++                            int r = hParallax.linePos[i] & (fullLayerwidth - 1);
++                            if (hParallax.linePos[i] < 0 && r)
++                                r -= fullLayerwidth;
++                            hParallax.linePos[i] = r;
++                        }
++                        else
++                            hParallax.linePos[i] %= fullLayerwidth;
++                    }
++#else
+                     hParallax.linePos[i] %= fullLayerwidth;
 +#endif
-+                        hParallax.linePos[i] %= fullLayerwidth;
                  }
              }
              lastXSize = layerwidth;
-@@ -2184,6 +2261,13 @@
+@@ -2184,6 +2333,13 @@
          int tileYPos           = yscrollOffset % (layerheight << 7);
          if (tileYPos < 0)
              tileYPos += layerheight << 7;
@@ -828,7 +964,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          byte *scrollIndex = &lineScroll[tileYPos];
          int tileY16       = tileYPos & 0xF;
          int chunkY        = tileYPos >> 7;
-@@ -2191,6 +2275,55 @@
+@@ -2191,6 +2347,22 @@
  
          // Draw Above Water (if applicable)
          int drawableLines[2] = { waterDrawPos, SCREEN_YSIZE - waterDrawPos };
@@ -841,42 +977,9 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +        // other effect.
 +        {
 +            int *lines = plat_layer_lines(layerID);
-+            if (lines) {
-+                const int fullLayerwidth = layerwidth << 7;
-+                for (int i = 0; i < 2; ++i) {
-+                    while (drawableLines[i]--) {
-+                        const int s = *scrollIndex;
-+                        int chunkX  = hParallax.linePos[s];
-+                        if (i == 0) {
-+                            if (hParallax.deform[s])
-+                                chunkX += *deformationData;
-+                            ++deformationData;
-+                        }
-+                        else {
-+                            if (hParallax.deform[s])
-+                                chunkX += *deformationDataW;
-+                            ++deformationDataW;
-+                        }
-+                        ++scrollIndex;
-+                        if (chunkX < 0)
-+                            chunkX += fullLayerwidth;
-+                        if (chunkX >= fullLayerwidth)
-+                            chunkX -= fullLayerwidth;
-+                        *lines++ = chunkX;
-+                        if (++tileY16 > TILE_SIZE - 1) {
-+                            tileY16 = 0;
-+                            ++tileY;
-+                        }
-+                        if (tileY > 7) {
-+                            if (++chunkY == layerheight) {
-+                                chunkY = 0;
-+                                scrollIndex -= 0x80 * layerheight;
-+                            }
-+                            tileY = 0;
-+                        }
-+                    }
-+                }
-+            }
++            if (lines)
++                scd_hline_lines(lines, lineScroll, tileYPos, layerheight << 7, layerwidth << 7, drawableLines[0], drawableLines[1],
++                                deformationData, deformationDataW, !activeTileLayers[layerID]);
 +            activePalette   = fullPalette[gfxLineBuffer[SCREEN_YSIZE - 1]];
 +            activePalette32 = fullPalette32[gfxLineBuffer[SCREEN_YSIZE - 1]];
 +        }
@@ -884,7 +987,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          for (int i = 0; i < 2; ++i) {
              while (drawableLines[i]--) {
                  activePalette   = fullPalette[*lineBuffer];
-@@ -2203,8 +2336,9 @@
+@@ -2203,8 +2375,9 @@
                          deform = *deformationData;
  
                      // Fix for SS5 mobile bug
@@ -896,7 +999,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                          deform >>= 4;
  
                      chunkX += deform;
-@@ -2221,6 +2355,10 @@
+@@ -2221,6 +2394,10 @@
                      chunkX += fullLayerwidth;
                  if (chunkX >= fullLayerwidth)
                      chunkX -= fullLayerwidth;
@@ -907,7 +1010,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  int chunkXPos         = chunkX >> 7;
                  int tilePxXPos        = chunkX & 0xF;
                  int tileXPxRemain     = TILE_SIZE - tilePxXPos;
-@@ -2637,6 +2775,7 @@
+@@ -2637,6 +2814,7 @@
                      }
                  }
  
@@ -915,7 +1018,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  if (++tileY16 > TILE_SIZE - 1) {
                      tileY16 = 0;
                      ++tileY;
-@@ -2650,6 +2789,10 @@
+@@ -2650,8 +2828,21 @@
                  }
              }
          }
@@ -924,9 +1027,20 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +        plat_layer_end(layerID); // PORT32X
 +#endif
      }
++#if SCD32X_NODRAW
++    else if (renderType == RENDER_HW) // PORT32X R1W: the same code, below
++        scd_hline_hw(layerID);
++}
++static void scd_hline_hw(int layerID)
++{
++    {
++#else
      else if (renderType == RENDER_HW) {
++#endif
          TileLayer *layer      = &stageLayouts[activeTileLayers[layerID]];
-@@ -3481,6 +3624,7 @@
+         byte *lineScrollPtr   = NULL;
+         int chunkPosX         = 0;
+@@ -3481,6 +3672,7 @@
  }
  void DrawVLineScrollLayer(int layerID)
  {
@@ -934,7 +1048,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
          if (!layer->xsize || !layer->ysize)
-@@ -3535,6 +3679,7 @@
+@@ -3535,6 +3727,7 @@
          ushort *frameBufferPtr = Engine.frameBuffer;
          activePalette          = fullPalette[gfxLineBuffer[0]];
          activePalette32        = fullPalette32[gfxLineBuffer[0]];
@@ -942,7 +1056,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          int tileXPos           = xscrollOffset % (layerheight << 7);
          if (tileXPos < 0)
              tileXPos += layerheight << 7;
-@@ -4064,6 +4209,8 @@
+@@ -4064,6 +4257,8 @@
  }
  void Draw3DFloorLayer(int layerID)
  {
@@ -951,7 +1065,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4644,6 +4791,8 @@
+@@ -4644,6 +4839,8 @@
  }
  void Draw3DSkyLayer(int layerID)
  {
@@ -960,7 +1074,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4727,6 +4876,8 @@
+@@ -4727,6 +4924,8 @@
  
  void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
  {
@@ -969,7 +1083,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A > 0xFF)
          A = 0xFF;
      if (renderType == RENDER_SW) {
-@@ -4828,6 +4979,7 @@
+@@ -4828,6 +5027,7 @@
  
  void SetFadeHQ(int R, int G, int B, int A)
  {
@@ -977,7 +1091,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A <= 0)
          return;
      if (A > 0xFF)
-@@ -4871,6 +5023,8 @@
+@@ -4871,6 +5071,8 @@
  
  void DrawTintRectangle(int XPos, int YPos, int width, int height)
  {
@@ -986,7 +1100,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -4907,6 +5061,8 @@
+@@ -4907,6 +5109,8 @@
  void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                          int sheetID)
  {
@@ -995,7 +1109,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5008,6 +5164,8 @@
+@@ -5008,6 +5212,8 @@
  
  void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
@@ -1004,7 +1118,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -5102,6 +5260,8 @@
+@@ -5102,6 +5308,8 @@
  
  void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
  {
@@ -1013,7 +1127,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int widthFlip  = width;
          int heightFlip = height;
-@@ -5399,6 +5559,8 @@
+@@ -5399,6 +5607,8 @@
  void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                        int sheetID)
  {
@@ -1022,7 +1136,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5558,6 +5720,8 @@
+@@ -5558,6 +5768,8 @@
  void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                      int sheetID)
  {
@@ -1031,7 +1145,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      // Not avaliable in SW Render mode
  
      if (renderType == RENDER_HW) {
-@@ -5616,6 +5780,8 @@
+@@ -5616,6 +5828,8 @@
  void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                         int sheetID)
  {
@@ -1040,7 +1154,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int sprXPos    = (pivotX + sprX) << 9;
          int sprYPos    = (pivotY + sprY) << 9;
-@@ -5880,6 +6046,8 @@
+@@ -5880,6 +6094,8 @@
  void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
                          int sheetID)
  {
@@ -1049,7 +1163,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (scale == 0)
          return;
  
-@@ -6148,6 +6316,8 @@
+@@ -6148,6 +6364,8 @@
  
  void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
@@ -1058,7 +1172,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6236,6 +6406,8 @@
+@@ -6236,6 +6454,8 @@
  }
  void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1067,7 +1181,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -6359,6 +6531,8 @@
+@@ -6359,6 +6579,8 @@
  }
  void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1076,7 +1190,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6459,6 +6633,8 @@
+@@ -6459,6 +6681,8 @@
  }
  void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1085,7 +1199,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6664,6 +6840,8 @@
+@@ -6664,6 +6888,8 @@
  
  void DrawFace(void *v, uint colour)
  {
@@ -1094,7 +1208,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -6849,6 +7027,8 @@
+@@ -6849,6 +7075,8 @@
  }
  void DrawTexturedFace(void *v, byte sheetID)
  {
@@ -1103,7 +1217,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -7022,6 +7202,7 @@
+@@ -7022,6 +7250,7 @@
  
  void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
  {
@@ -1111,7 +1225,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int Y           = YPos << 9;
      if (rowCount < 0)
-@@ -7052,6 +7233,7 @@
+@@ -7052,6 +7281,7 @@
  
  void DrawTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1119,7 +1233,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7062,6 +7244,7 @@
+@@ -7062,6 +7292,7 @@
  }
  void DrawStageTextEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1127,7 +1241,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7077,6 +7260,7 @@
+@@ -7077,6 +7308,7 @@
  }
  void DrawBlendedTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1135,7 +1249,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7087,6 +7271,8 @@
+@@ -7087,6 +7319,8 @@
  }
  void DrawTextMenu(void *menu, int XPos, int YPos)
  {
@@ -1322,7 +1436,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (addPath) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Input.cpp engine/Input.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Input.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Input.cpp	2026-10-16 12:43:46.318952710 -0700
++++ engine/Input.cpp	2026-10-16 14:42:11.752846437 -0700
 @@ -329,6 +329,11 @@
  }
  #endif //! RETRO_USING_SDL2
@@ -1335,15 +1449,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void ControllerInit(byte controllerID)
  {
      SDL_GameController *controller = SDL_GameControllerOpen(controllerID);
-@@ -350,6 +355,7 @@
+@@ -350,7 +355,10 @@
          inputType = 0;
      }
  }
 +#endif
  
++// PORT32X R1W: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void ProcessInput() SCD_HOT;
  void ProcessInput()
  {
-@@ -434,6 +440,23 @@
+ #if RETRO_USING_SDL2
+@@ -434,6 +442,23 @@
      }
  #endif //! RETRO_USING_MOUSE
  
@@ -1367,7 +1484,16 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #elif RETRO_USING_SDL1
      if (SDL_NumJoysticks() > 0) {
          controller = SDL_JoystickOpen(0);
-@@ -532,7 +555,27 @@
+@@ -505,6 +530,8 @@
+ }
+ #endif //! !RETRO_USE_ORIGINAL_CODE
+ 
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void CheckKeyPress(InputData *input, byte flags) SCD_HOT;
+ void CheckKeyPress(InputData *input, byte flags)
+ {
+     if (flags & 0x1)
+@@ -532,10 +559,32 @@
              }
          }
  
@@ -1395,6 +1521,11 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      }
  }
  
++// PORT32X R1W: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void CheckKeyDown(InputData *input, byte flags) SCD_HOT;
+ void CheckKeyDown(InputData *input, byte flags)
+ {
+     if (flags & 0x1)
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Math.cpp engine/Math.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Math.cpp	2026-08-15 23:48:31.000000000 -0700
 +++ engine/Math.cpp	2026-10-15 21:43:01.365373424 -0700
@@ -1512,7 +1643,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void CalculateTrigAngles();
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Object.cpp engine/Object.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Object.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Object.cpp	2026-10-16 12:34:02.266966069 -0700
++++ engine/Object.cpp	2026-10-16 14:08:49.230866693 -0700
 @@ -4,7 +4,11 @@
  int curObjectType = 0;
  Entity objectEntityList[ENTITY_COUNT];
@@ -1555,20 +1686,35 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              ProcessScript(scriptInfo->subStartup.scriptCodePtr, scriptInfo->subStartup.jumpTablePtr, SUB_SETUP);
          scriptInfo->frameCount = scriptFrameCount - scriptInfo->frameListOffset;
      }
-@@ -55,6 +65,12 @@
+@@ -47,6 +57,8 @@
+     curObjectType = 0;
+ }
+ 
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void ProcessObjects() SCD_HOT;
+ void ProcessObjects()
+ {
+     for (int i = 0; i < DRAWLAYER_COUNT; ++i) drawListEntries[i].listSize = 0;
+@@ -55,6 +67,18 @@
          bool active = false;
          int x = 0, y = 0;
          Entity *entity = &objectEntityList[objectLoop];
 +#if defined(SONICCD32X)
 +        // PORT32X R1T: an empty slot (about 860 of the 1,184 in Palmtree Panic 1) does nothing below - the only
 +        // write, BOUNDS_DESTROY's type = 0, would store the 0 it already holds - so it is skipped at once.
-+        if (entity->type == OBJ_TYPE_BLANKOBJECT)
++        if (entity->type == OBJ_TYPE_BLANKOBJECT) {
++            // PORT32X R1W: and every empty slot after it, in one tight loop - nothing reads objectLoop before the
++            // next live slot, and the for's ++objectLoop lands on it (or on ENTITY_COUNT, as before)
++            int n = objectLoop + 1;
++            while (n < ENTITY_COUNT && objectEntityList[n].type == OBJ_TYPE_BLANKOBJECT) ++n;
++            objectLoop = n - 1;
 +            continue;
++        }
 +#endif
          switch (entity->priority) {
              case PRIORITY_BOUNDS:
                  x      = entity->XPos >> 16;
-@@ -92,9 +108,9 @@
+@@ -92,9 +116,9 @@
          if (active && entity->type > OBJ_TYPE_BLANKOBJECT) {
              ObjectScript *scriptInfo = &objectScriptList[entity->type];
              activePlayer             = 0;
@@ -1580,7 +1726,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  while (activePlayer < activePlayerCount) {
                      if (playerList[activePlayer].objectInteractions)
                          ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
-@@ -103,8 +119,14 @@
+@@ -103,8 +127,14 @@
                  }
              }
  
@@ -1597,7 +1743,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          }
      }
  }
-@@ -119,9 +141,9 @@
+@@ -119,9 +149,9 @@
          if (entity->priority == PRIORITY_ALWAYS && entity->type > OBJ_TYPE_BLANKOBJECT) {
              ObjectScript *scriptInfo = &objectScriptList[entity->type];
              activePlayer             = 0;
@@ -1609,7 +1755,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  while (activePlayer < PLAYER_COUNT) {
                      if (playerList[activePlayer].objectInteractions)
                          ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
-@@ -130,8 +152,14 @@
+@@ -130,8 +160,14 @@
                  }
              }
  
@@ -1666,6 +1812,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  #define RGB888_TO_RGB5551(r, g, b) ((((b) >> 3) << 1) | (((g) >> 3) << 6) | (((r) >> 3) << 11) | 0) // used in mobile vers
  #define RGB888_TO_RGB565(r, g, b)  ((b) >> 3) | (((g) >> 2) << 5) | (((r) >> 3) << 11) // used in pc vers
+diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Player.cpp engine/Player.cpp
+--- RSDKv3-Decompilation-master/RSDKv3/Player.cpp	2026-08-15 23:48:31.000000000 -0700
++++ engine/Player.cpp	2026-10-16 13:53:02.362191150 -0700
+@@ -12,6 +12,8 @@
+ ushort jumpPressBuffer = 0;
+ ushort jumpHoldBuffer  = 0;
+ 
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void ProcessPlayerControl(Player *player) SCD_HOT;
+ void ProcessPlayerControl(Player *player)
+ {
+     switch (player->controlMode) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Reader.cpp engine/Reader.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Reader.cpp	2026-08-15 23:48:31.000000000 -0700
 +++ engine/Reader.cpp	2026-10-15 21:43:01.366058606 -0700
@@ -1937,8 +2095,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              strcpy(scene->name, "_RSDK_SCENE");
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp engine/RetroEngine.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/RetroEngine.hpp	2026-10-15 21:43:01.366620463 -0700
-@@ -4,6 +4,80 @@
++++ engine/RetroEngine.hpp	2026-10-16 14:42:11.757294549 -0700
+@@ -4,6 +4,93 @@
  // Disables POSIX use c++ name blah blah stuff
  #pragma warning(disable : 4996)
  
@@ -2008,6 +2166,19 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +#ifndef SCD32X_DRAWCART
 +#define SCD32X_DRAWCART (0)
 +#endif
++// PORT32X R1V: a function the SH2 runs every frame. On the console (the planes build) its code goes into SDRAM:
++// section .sdtext, copied from the cart at start-up (cd32x/engine/engine_cart.ld, engine_start.cpp) - a cache
++// miss on code costs 11 SH2 cycles there, 87 in the cart. Elsewhere (the PC builds) nothing changes.
++// SCD_HOT_NOINLINE: the same for a helper whose caller stays in the cart (kept out of line, or it would be the cart's)
++#ifndef SCD_HOT
++#if defined(__sh__) && defined(SCD32X_SH2) && defined(SCD_PLANES) && !SCD32X_DRAWCART
++#define SCD_HOT          __attribute__((section(".sdtext")))
++#define SCD_HOT_NOINLINE __attribute__((section(".sdtext"), noinline))
++#else
++#define SCD_HOT
++#define SCD_HOT_NOINLINE
++#endif
++#endif
 +#ifndef SCD_NODRAW_RETURN
 +#define SCD_NODRAW_RETURN() \
 +    do {                    \
@@ -2019,7 +2190,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  // Setting this to true removes (almost) ALL changes from the original code, the trade off is that a playable game cannot be built, it is advised to
  // be set to true only for preservation purposes
  #ifndef RETRO_USE_ORIGINAL_CODE
-@@ -49,13 +123,16 @@
+@@ -49,13 +136,16 @@
  #define RETRO_VITA (7)
  #define RETRO_UWP  (8)
  #define RETRO_LINUX (9)
@@ -2037,7 +2208,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #if defined WINAPI_FAMILY
  #if WINAPI_FAMILY != WINAPI_FAMILY_APP
  #define RETRO_PLATFORM (RETRO_WIN)
-@@ -89,7 +166,12 @@
+@@ -89,7 +179,12 @@
  #define RETRO_PLATFORM (RETRO_WIN) // Default
  #endif
  
@@ -2051,7 +2222,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #define BASE_PATH            "ux0:data/SonicCD/"
  #define DEFAULT_SCREEN_XSIZE 480
  #define DEFAULT_FULLSCREEN   true
-@@ -203,6 +285,8 @@
+@@ -203,6 +298,8 @@
  #define RETRO_GAMEPLATFORMID (UAP_GetRetroGamePlatformId())
  #elif RETRO_PLATFORM == RETRO_LINUX
  #define RETRO_GAMEPLATFORMID (RETRO_STANDARD)
@@ -2060,7 +2231,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #else
  #error Unspecified RETRO_GAMEPLATFORMID
  #endif
-@@ -347,10 +431,21 @@
+@@ -347,10 +444,21 @@
  };
  
  // General Defines
@@ -2083,9 +2254,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  #if RETRO_USING_SDL2
  #include <SDL.h>
  #elif RETRO_USING_SDL1
+@@ -482,7 +590,7 @@
+ #endif
+ 
+     void Init();
+-    void Run();
++    void Run() SCD_HOT; // PORT32X R1W: the main loop - SDRAM on the console
+ 
+     bool LoadGameConfig(const char *filepath);
+ #if RETRO_USE_MOD_LOADER
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene.cpp engine/Scene.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Scene.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Scene.cpp	2026-10-15 21:43:01.366865156 -0700
++++ engine/Scene.cpp	2026-10-16 14:15:18.861745668 -0700
 @@ -8,7 +8,11 @@
      "Bonus Stages",
      "Special Stages",
@@ -2098,8 +2278,13 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  int stageMode = STAGEMODE_LOAD;
  
-@@ -74,12 +78,76 @@
+@@ -72,14 +76,81 @@
+ int bgDeformationData3[DEFORM_COUNT];
+ 
  LineScroll hParallax;
++#if defined(SONICCD32X)
++int scdHDeformAny = 1; // PORT32X R1W: any hParallax.deform[] set (1 until a background is loaded: the general path)
++#endif
  LineScroll vParallax;
  
 +#if SCD32X_CARTDATA
@@ -2177,7 +2362,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  bool drawStageGFXHQ = false;
  
  #if RETRO_USE_MOD_LOADER
-@@ -338,8 +406,67 @@
+@@ -338,8 +409,67 @@
      Engine.frameCount++;
  }
  
@@ -2245,7 +2430,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      StopAllSfx();
      FileInfo infoStore;
      FileInfo info;
-@@ -598,6 +725,12 @@
+@@ -598,6 +728,12 @@
      xScrollB = (playerList[0].XPos >> 16) - SCREEN_CENTERX + SCREEN_XSIZE;
      yScrollA = (playerList[0].YPos >> 16) - SCREEN_SCROLL_UP;
      yScrollB = (playerList[0].YPos >> 16) - SCREEN_SCROLL_UP + SCREEN_YSIZE;
@@ -2258,7 +2443,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  }
  int LoadActFile(const char *ext, int stageID, FileInfo *info)
  {
-@@ -643,6 +776,9 @@
+@@ -643,6 +779,9 @@
  
          FileRead(&stageLayouts[0].xsize, 1);
          FileRead(&stageLayouts[0].ysize, 1);
@@ -2268,7 +2453,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          xBoundary1    = 0;
          newXBoundary1 = 0;
          yBoundary1    = 0;
-@@ -653,7 +789,11 @@
+@@ -653,7 +792,11 @@
          newXBoundary2 = stageLayouts[0].xsize << 7;
          newYBoundary2 = stageLayouts[0].ysize << 7;
  
@@ -2280,7 +2465,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
          byte fileBuffer = 0;
          for (int y = 0; y < stageLayouts[0].ysize; ++y) {
-@@ -728,6 +868,9 @@
+@@ -728,6 +871,9 @@
  }
  void LoadStageBackground()
  {
@@ -2290,7 +2475,22 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      for (int i = 0; i < LAYER_COUNT; ++i) {
          stageLayouts[i].type               = LAYER_NOSCROLL;
          stageLayouts[i].deformationOffset  = 0;
-@@ -788,9 +931,16 @@
+@@ -757,6 +903,14 @@
+ 
+             FileRead(&hParallax.deform[i], 1);
+         }
++#if defined(SONICCD32X)
++        // PORT32X R1W: whether any line-scroll entry deforms (only this load writes the flags; all 256 entries count:
++        // a layer's line may name one past entryCount) - DrawHLineScrollLayer's foreground without the per-line loop
++        scdHDeformAny = 0;
++        for (int i = 0; i < PARALLAX_COUNT; ++i)
++            if (hParallax.deform[i])
++                scdHDeformAny = 1;
++#endif
+ 
+         FileRead(&vParallax.entryCount, 1);
+         for (int i = 0; i < vParallax.entryCount; ++i) {
+@@ -788,9 +942,16 @@
              stageLayouts[i].scrollSpeed = fileBuffer << 10;
              stageLayouts[i].scrollPos   = 0;
  
@@ -2307,7 +2507,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
              // Read Line Scroll
              byte buf[3];
-@@ -831,6 +981,18 @@
+@@ -831,6 +992,18 @@
  }
  void LoadStageChunks()
  {
@@ -2326,7 +2526,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      FileInfo info;
      byte entry[3];
  
-@@ -860,6 +1022,16 @@
+@@ -860,6 +1033,16 @@
  }
  void LoadStageCollisions()
  {
@@ -2343,7 +2543,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      FileInfo info;
      if (LoadStageFile("CollisionMasks.bin", stageListPosition, &info)) {
  
-@@ -1082,6 +1254,7 @@
+@@ -1082,6 +1265,7 @@
              } while (c != 256);
          }
  
@@ -2351,7 +2551,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          ReadGifPictureData(width, height, interlaced, tilesetGFXData, 0);
  
          byte transparent = tilesetGFXData[0];
-@@ -1089,6 +1262,7 @@
+@@ -1089,6 +1273,7 @@
              if (tilesetGFXData[i] == transparent)
                  tilesetGFXData[i] = 0;
          }
@@ -2359,7 +2559,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
          CloseFile();
      }
-@@ -1114,6 +1288,7 @@
+@@ -1114,6 +1299,7 @@
              SetPaletteEntry(-1, c, clr[0], clr[1], clr[2]);
          }
  
@@ -2367,7 +2567,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          byte *gfxData = tilesetGFXData;
          byte buf[3];
          while (true) {
-@@ -1138,6 +1313,7 @@
+@@ -1138,6 +1324,7 @@
              if (tilesetGFXData[i] == transparent)
                  tilesetGFXData[i] = 0;
          }
@@ -2375,9 +2575,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
          CloseFile();
      }
+@@ -1214,6 +1401,8 @@
+     }
+ }
+ 
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++void SetPlayerScreenPosition(Player *player) SCD_HOT;
+ void SetPlayerScreenPosition(Player *player)
+ {
+     int playerXPos = player->XPos >> 16;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Scene.hpp engine/Scene.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Scene.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Scene.hpp	2026-10-15 21:43:01.367169044 -0700
++++ engine/Scene.hpp	2026-10-16 14:15:18.862171052 -0700
 @@ -88,8 +88,16 @@
  };
  
@@ -2407,8 +2616,13 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  extern int stageMode;
  
-@@ -191,12 +203,138 @@
+@@ -189,14 +201,143 @@
+ extern int bgDeformationData3[DEFORM_COUNT];
+ 
  extern LineScroll hParallax;
++#if defined(SONICCD32X)
++extern int scdHDeformAny; // PORT32X R1W
++#endif
  extern LineScroll vParallax;
  
 +#if SCD32X_CARTDATA
@@ -2548,7 +2762,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern bool drawStageGFXHQ;
  
  void InitFirstStage();
-@@ -223,11 +361,31 @@
+@@ -223,11 +364,31 @@
  void LoadStageBackground();
  void LoadStageChunks();
  void LoadStageCollisions();
@@ -2580,7 +2794,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      for (int y = 0; y < TILELAYER_CHUNK_H; ++y) {
          for (int x = 0; x < TILELAYER_CHUNK_W; ++x) {
              int c                           = stageLayouts[layerID].tiles[(x >> 3) + (y >> 3 << 8)] << 6;
-@@ -239,6 +397,8 @@
+@@ -239,6 +400,8 @@
  
  inline void Copy16x16Tile(ushort dest, ushort src)
  {
@@ -2693,7 +2907,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.cpp	2026-10-16 13:16:50.895684036 -0700
++++ engine/Script.cpp	2026-10-16 14:11:28.342832355 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -2825,7 +3039,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      }
  
      for (int f = 0; f < FUNCTION_COUNT; ++f) {
-@@ -2197,8 +2214,52 @@
+@@ -2197,6 +2214,57 @@
  
  }
  
@@ -2837,6 +3051,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +// type through plat_log, so the list can be completed from a real run.
 +static const char *const scdBottomObjects[] = { "HUD" };
 +static char scdReported[OBJECT_COUNT];
++// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++static int scd_screen_y(int y, const SpriteFrame *frame) SCD_HOT;
 +static int scd_screen_y(int y, const SpriteFrame *frame)
 +{
 +    const char *name = typeNames[objectEntityList[objectLoop].type];
@@ -2868,17 +3084,20 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +// load); otherwise, and for anything not translated, the interpreter below runs as before.
 +static int scdNativeGen = 1; // + 1 at every ClearScriptData: the binding is made again
 +static bool scd_native_run(int scriptCodeStart, int jumpTableStart, byte scriptSub);
++static void ProcessScriptInterpreter(int scriptCodeStart, int jumpTableStart, byte scriptSub);
++// R1V: ProcessScript is only the choice; the interpreter (31 KB) is entered for what is not native
++void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub) SCD_HOT;
++void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
++{
++    if (!scd_native_run(scriptCodeStart, jumpTableStart, scriptSub))
++        ProcessScriptInterpreter(scriptCodeStart, jumpTableStart, scriptSub);
++}
++#define ProcessScript ProcessScriptInterpreter
 +#endif
  void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
  {
-+#if SCD_NATIVE_SCRIPTS
-+    if (scd_native_run(scriptCodeStart, jumpTableStart, scriptSub))
-+        return;
-+#endif
      bool running      = true;
-     int scriptCodePtr = scriptCodeStart;
- 
-@@ -2815,6 +2876,41 @@
+@@ -2815,6 +2883,41 @@
                      case VAR_VPARALLAXSCROLLPOS: scriptEng.operands[i] = vParallax.scrollPos[arrayVal]; break;
                      case VAR_3DSCENENOVERTICES: scriptEng.operands[i] = vertexCount; break;
                      case VAR_3DSCENENOFACES: scriptEng.operands[i] = faceCount; break;
@@ -2920,7 +3139,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[arrayVal].x; break;
                      case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[arrayVal].y; break;
                      case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[arrayVal].z; break;
-@@ -2826,12 +2922,36 @@
+@@ -2826,12 +2929,36 @@
                      case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[arrayVal].d; break;
                      case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[arrayVal].flags; break;
                      case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[arrayVal].colour; break;
@@ -2958,7 +3177,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_ENGINELANGUAGE: scriptEng.operands[i] = Engine.language; break;
                      case VAR_OBJECTSPRITESHEET: {
                          scriptEng.operands[i] = objectScriptList[objectEntityList[arrayVal].type].spriteSheetID;
-@@ -3084,6 +3204,9 @@
+@@ -3084,6 +3211,9 @@
              case FUNC_DRAWSPRITESCREENXY:
                  opcodeSize  = 0;
                  spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
@@ -2968,7 +3187,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  DrawSprite(scriptEng.operands[1] + spriteFrame->pivotX, scriptEng.operands[2] + spriteFrame->pivotY, spriteFrame->width,
                             spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY, scriptInfo->spriteSheetID);
                  break;
-@@ -3094,6 +3217,9 @@
+@@ -3094,6 +3224,9 @@
              case FUNC_DRAWNUMBERS: {
                  opcodeSize = 0;
                  int i      = 10;
@@ -2978,7 +3197,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  if (scriptEng.operands[6]) {
                      while (scriptEng.operands[4] > 0) {
                          int frameID = scriptEng.operands[3] % i / (i / 10) + scriptEng.operands[0];
-@@ -3285,12 +3411,18 @@
+@@ -3285,12 +3418,18 @@
              case FUNC_SPRITEFRAME:
                  opcodeSize = 0;
                  if (scriptSub == SUB_SETUP && scriptFrameCount < SPRITEFRAME_COUNT) {
@@ -3003,7 +3222,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      ++scriptFrameCount;
                  }
                  break;
-@@ -3440,6 +3572,9 @@
+@@ -3440,6 +3579,9 @@
              case FUNC_DRAWSPRITESCREENFX:
                  opcodeSize  = 0;
                  spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
@@ -3013,7 +3232,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  switch (scriptEng.operands[1]) {
                      default: break;
                      case FX_SCALE:
-@@ -3771,8 +3906,10 @@
+@@ -3771,8 +3913,10 @@
              case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
              case FUNC_DRAW3DSCENE:
                  opcodeSize = 0;
@@ -3026,7 +3245,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  Draw3DScene(scriptInfo->spriteSheetID);
                  break;
              case FUNC_SETIDENTITYMATRIX:
-@@ -3897,9 +4034,19 @@
+@@ -3897,9 +4041,19 @@
                  }
                  break;
              case FUNC_GETTILELAYERENTRY:
@@ -3046,7 +3265,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
                  break;
              case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
-@@ -3923,18 +4070,39 @@
+@@ -3923,18 +4077,39 @@
                  break;
              case FUNC_ADDDRAWLISTENTITYREF: {
                  opcodeSize                                                                                           = 0;
@@ -3088,7 +3307,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  int index = tiles128x128.tileIndex[scriptEng.operands[6]];
                  switch (scriptEng.operands[3]) {
-@@ -3956,9 +4124,18 @@
+@@ -3956,9 +4131,18 @@
                  Copy16x16Tile(scriptEng.operands[0], scriptEng.operands[1]);
                  break;
              case FUNC_SET16X16TILEINFO: {
@@ -3108,7 +3327,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  switch (scriptEng.operands[3]) {
                      case TILEINFO_INDEX:
-@@ -4021,7 +4198,14 @@
+@@ -4021,7 +4205,14 @@
                  TextMenu *menu = &gameMenu[scriptEng.operands[1]];
                  switch (scriptEng.operands[2]) {
                      case TEXTINFO_TEXTDATA:
@@ -3123,7 +3342,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                          break;
                      case TEXTINFO_TEXTSIZE: scriptEng.operands[0] = menu->entrySize[scriptEng.operands[3]]; break;
                      case TEXTINFO_ROWCOUNT: scriptEng.operands[0] = menu->rowCount; break;
-@@ -4608,7 +4792,16 @@
+@@ -4608,7 +4799,16 @@
                      case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
                      case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
                      case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
@@ -3141,7 +3360,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_TILELAYERTYPE: stageLayouts[arrayVal].type = scriptEng.operands[i]; break;
                      case VAR_TILELAYERANGLE:
                          stageLayouts[arrayVal].angle = scriptEng.operands[i];
-@@ -4636,6 +4829,54 @@
+@@ -4636,6 +4836,54 @@
                      case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
@@ -3196,7 +3415,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
                      case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
                      case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-@@ -4649,12 +4890,34 @@
+@@ -4649,12 +4897,34 @@
                      case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
@@ -3232,18 +3451,22 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                      case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
                      case VAR_OBJECTSPRITESHEET: {
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
-@@ -4704,3 +4967,68 @@
+@@ -4704,3 +4974,107 @@
          }
      }
  }
 +
 +#if SCD_NATIVE_SCRIPTS
++#undef ProcessScript
 +// ---------------------------------------------------------------- PORT32X R1U: native scripts
 +#include "ScriptNative.inc"
 +static int scdNativeBoundGen = 0;
 +static bool scdNativeOk      = false;
 +static unsigned char scdNativeIdx[OBJECT_COUNT][4]; // 1 + index into scdNativeSubs, per type and sub; 0 = interpreted
++// R1V: the bound subs' code in SDRAM (scdNativeSubs is in the cart: a cache miss there costs 87 cycles a call)
++static bool (*scdNativeFn[sizeof(scdNativeSubs) / sizeof(scdNativeSubs[0])])(byte);
 +void scd_native_unbind() { ++scdNativeGen; }
++static void scd_native_bind() __attribute__((noinline)); // R1V: once per stage load - stays in the cart (not in scd_native_run)
 +static void scd_native_bind()
 +{
 +    scdNativeBoundGen = scdNativeGen;
@@ -3277,27 +3500,62 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +                    hi = mid - 1;
 +            }
 +            if (lo < scdNativeSubCount && lo < 255 && scdNativeSubs[lo].codeStart == sub[s]->scriptCodePtr
-+                && scdNativeSubs[lo].jumpTableStart == sub[s]->jumpTablePtr)
++                && scdNativeSubs[lo].jumpTableStart == sub[s]->jumpTablePtr) {
 +                scdNativeIdx[t][s] = (unsigned char)(lo + 1);
++                scdNativeFn[lo]    = scdNativeSubs[lo].fn;
++            }
 +        }
 +    }
 +    plat_log("PORT32X: native scripts on");
 +}
++// R1W: the native sub made from exactly this bytecode (its start and its jump table), -1 if none - for a call that is
++// not the running object's own sub (rare: once in the cart)
++static int scd_native_find(int scriptCodeStart, int jumpTableStart) __attribute__((noinline));
++static int scd_native_find(int scriptCodeStart, int jumpTableStart)
++{
++    int lo = 0, hi = scdNativeSubCount - 1;
++    while (lo <= hi) {
++        int mid = (lo + hi) >> 1;
++        if (scdNativeSubs[mid].codeStart < scriptCodeStart)
++            lo = mid + 1;
++        else
++            hi = mid - 1;
++    }
++    if (lo < scdNativeSubCount && scdNativeSubs[lo].codeStart == scriptCodeStart && scdNativeSubs[lo].jumpTableStart == jumpTableStart)
++        return lo;
++    return -1;
++}
++static bool scd_native_run(int scriptCodeStart, int jumpTableStart, byte scriptSub) SCD_HOT;
 +static bool scd_native_run(int scriptCodeStart, int jumpTableStart, byte scriptSub)
 +{
 +    if (scdNativeBoundGen != scdNativeGen)
 +        scd_native_bind();
 +    if (!scdNativeOk)
 +        return false;
-+    int k = scdNativeIdx[objectEntityList[objectLoop].type][scriptSub & 3];
-+    if (!k)
-+        return false;
-+    const ScdNativeSub *n = &scdNativeSubs[k - 1];
-+    if (n->codeStart != scriptCodeStart || n->jumpTableStart != jumpTableStart)
-+        return false; // not the sub the type's table names (another caller): the interpreter
++    const int type = objectEntityList[objectLoop].type;
++    const int s    = scriptSub & 3;
++    int k          = scdNativeIdx[type][s];
++    bool (*fn)(byte) = nullptr;
++    if (k) {
++        // R1V: the same check without the cart table: sub k was bound because its start is this type's sub pointers
++        // (objectScriptList, set by the stage load before any script runs and not changed after)
++        const ObjectScript *os = &objectScriptList[type];
++        const ScriptPtr *p     = s == 0 ? &os->subMain : s == 1 ? &os->subPlayerInteraction : s == 2 ? &os->subDraw : &os->subStartup;
++        if (p->scriptCodePtr == scriptCodeStart && p->jumpTablePtr == jumpTableStart)
++            fn = scdNativeFn[k - 1];
++    }
++    if (!fn) {
++        // R1W: another sub than the running object's own - ProcessObjects gives an object that changed its type in
++        // its main sub the player sub of the type it had (Palmtree Panic 1: 87,000 cycles in the interpreter). The
++        // native code of exactly that bytecode does what the interpreter would.
++        int n = scd_native_find(scriptCodeStart, jumpTableStart);
++        if (n < 0)
++            return false;
++        fn = scdNativeSubs[n].fn;
++    }
 +    jumpTableStackPos = 0; // as ProcessScript starts
 +    functionStackPos  = 0;
-+    n->fn(scriptSub);
++    fn(scriptSub);
 +    return true;
 +}
 +#endif

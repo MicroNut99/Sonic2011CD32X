@@ -2,7 +2,8 @@
 // loader (cd32x/sh2_engboot.c) jumps here; its stack stays the stack. S7b5: interrupts stay ON (as
 // in Kobo) - Kobo's handlers stay in the loader's SDRAM area, below the engine's data. Each step
 // posts a status code in COMM12 (Kobo's Sub-CPU shows it as STATE:xxxx).
-//   1. copy the initial data from the cart into SDRAM, clear the zeroed arrays
+//   1. copy the initial data from the cart into SDRAM, clear the zeroed arrays; R1V: copy the code that runs
+//      every frame (.sdtext) from the cart into SDRAM
 //   2. run the C++ static constructors (they bind the cart parts: the stage image is already there)
 //   3. the engine's main()
 // Each step shows in the status box (bottom right of the 32X layer).
@@ -38,6 +39,7 @@ __asm__(".text\n"
         "    .align 2\n"
         "1:  .long _scd_exc_show\n");
 extern char scd_data_load[], scd_data_start[], scd_data_end[], scd_bss_start[], scd_bss_end[];
+extern char scd_sdtext_load[], scd_sdtext_start[], scd_sdtext_end[];
 extern void (*scd_init_start[])(void), (*scd_init_end[])(void);
 void scd_engine_entry(void) __attribute__((section(".text.entry"), used));
 }
@@ -46,6 +48,10 @@ void scd_engine_entry(void)
 {
     for (char *s = scd_data_load, *d = scd_data_start; d < scd_data_end;) *d++ = *s++;
     for (char *d = scd_bss_start; d < scd_bss_end;) *d++ = 0;
+    /* R1V: the hot code into SDRAM (nothing in it has run yet); then the cache starts empty - none of its lines
+       can hold what those SDRAM addresses had before the copy */
+    for (char *s = scd_sdtext_load, *d = scd_sdtext_start; d < scd_sdtext_end;) *d++ = *s++;
+    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge + enable the cache (as the loader left it: 01) */
     { /* S7e5: our exception handlers into the SDRAM vector table (Kobo's crt0 stays unchanged) */
         volatile unsigned int *vbr = (volatile unsigned int *)0x06000000;
         vbr[4]  = (unsigned int)(unsigned long)scd_exc_illegal; /* illegal instruction */

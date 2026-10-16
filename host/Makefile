@@ -44,8 +44,9 @@ $(OBJDIR)/plat_host.o: plat_host.cpp $(ENGINE)/plat.hpp | $(OBJDIR)
 $(OBJDIR)/md_check.o: md_check.cpp ../md/md_planes.h ../md/sgb.h $(wildcard $(ENGINE)/*.hpp) | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 # the plane streaming code is C (the 68000 compiles the same file)
-$(OBJDIR)/md_planes.o: ../md/md_planes.c ../md/md_planes.h | $(OBJDIR)
-	$(CC) -std=c99 -O1 -g -Wall $(if $(ASAN),-fsanitize=address,) -c $< -o $@
+# R1W: MD_SGB_RUNS - the record writer's run form, as the SH2 build uses it (SCD32X_SGBTEST checks it)
+$(OBJDIR)/md_planes.o: ../md/md_planes.c ../md/md_planes.h ../md/sgb.h | $(OBJDIR)
+	$(CC) -std=c99 -O1 -g -Wall -DMD_SGB_RUNS $(if $(ASAN),-fsanitize=address,) -c $< -o $@
 $(OBJDIR)/md_record.o: ../md/md_record.c ../md/md_record.h ../md/md_planes.h | $(OBJDIR)
 	$(CC) -std=c99 -O1 -g -Wall $(if $(ASAN),-fsanitize=address,) -c $< -o $@
 # REV R1: the SH2 -> 68000 plane record (C, the SH2 compiles the same file)

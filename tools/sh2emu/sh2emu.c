@@ -86,6 +86,7 @@ static const char *stop_reason = "";
 typedef struct {
     u32 a;
     char *name;
+    char t; /* nm's type letter: T/t/W/w code */
 } Sym;
 static Sym *syms;
 static int nsyms;
@@ -94,12 +95,18 @@ static int sym_cmp(const void *x, const void *y)
     u32 a = ((const Sym *)x)->a, b = ((const Sym *)y)->a;
     return a < b ? -1 : a > b;
 }
-static void add_sym(u32 a, const char *name)
+static void add_sym(u32 a, const char *name, char t)
 {
     syms            = realloc(syms, sizeof(Sym) * (nsyms + 1));
     syms[nsyms].a   = a;
     syms[nsyms].name = strdup(name);
+    syms[nsyms].t   = t;
     nsyms++;
+}
+static int sym_code(int i) /* a function (not a static variable such as "ProcessScript(...)::told") */
+{
+    char t = syms[i].t;
+    return t == 'T' || t == 't' || t == 'W' || t == 'w';
 }
 static void load_engine_syms(const char *path)
 {
@@ -116,7 +123,12 @@ static void load_engine_syms(const char *path)
         if (sscanf(line, "%x %c %n", &a, &t, &pos) >= 2 && pos > 0) {
             char *nm = line + pos;
             nm[strcspn(nm, "\r\n")] = 0;
-            add_sym(a, nm);
+            /* the linker script's section marks (_scd_sdtext_start ...) share an address with a function: not names */
+            size_t L = strlen(nm);
+            if (!strncmp(nm, "scd_", 4) && ((L > 6 && !strcmp(nm + L - 6, "_start")) || (L > 4 && !strcmp(nm + L - 4, "_end")) ||
+                                            (L > 5 && !strcmp(nm + L - 5, "_load"))))
+                continue;
+            add_sym(a, nm, t);
         }
     }
     fclose(f);
@@ -132,7 +144,7 @@ static void load_map_syms(const char *path) /* loader: "0x0000000006000820      
         char nm[512];
         if (sscanf(line, " 0x%llx %511s", &a, nm) == 2 && nm[0] == '_' && a >= 0x06000000ull && a < 0x06002000ull &&
             !strchr(line, '=') && !strstr(line, ".o"))
-            add_sym((u32)a, nm + 1);
+            add_sym((u32)a, nm + 1, 'T');
     }
     fclose(f);
 }
@@ -390,12 +402,28 @@ static int cost_frames;
 static int idle_k = -2;
 static u32 presented_addr, presented_at_loaded, last_presented;
 static u64 eng_busy, *eng_busy_list;
+static int *eng_frame_at; /* the console frame (vertical blank count) each engine frame ended in */
 static int eng_n, eng_cap;
 static u32 *eng_fn_cur, *eng_fn_all; /* per engine frame: cycles by function (nsyms+1 each) */
 static u32 scr_cur[1024], *scr_all;    /* per engine frame: script cycles by type * 4 + event */
 static u32 sdram_read32(u32 a);
+/* -pcprof NAME (up to 8): every instruction of these functions - count, cycles and stalls by kind per address */
+#define PCP_MAX 8
+static const char *pcp_name[PCP_MAX];
+static int pcp_n;
+static struct {
+    u32 lo, hi;
+    u64 *cnt, *cyc, *kind; /* per halfword of the function; kind: PK_N per halfword */
+} pcp[PCP_MAX];
 static void prof_account(u32 pc, u64 c)
 {
+    for (int i = 0; i < pcp_n; ++i)
+        if (pc >= pcp[i].lo && pc < pcp[i].hi) {
+            u32 h = (pc - pcp[i].lo) >> 1;
+            pcp[i].cnt[h]++;
+            pcp[i].cyc[h] += c;
+            for (int k = 0; k < PK_N; ++k) pcp[i].kind[(size_t)h * PK_N + k] += (u64)pen_kind[k];
+        }
     if (!cost)
         cost = calloc((size_t)nsyms + 1, sizeof(Cost));
     if (!(pc >= cost_lo && pc < cost_hi)) {
@@ -417,7 +445,7 @@ static void prof_account(u32 pc, u64 c)
     if (idle_k == -2) {
         idle_k = -1;
         for (int i = 0; i < nsyms; ++i)
-            if (!strncmp(syms[i].name, "plat_present(", 13) && syms[i].a < 0x04000000u && !strstr(syms[i].name, "::"))
+            if (!strncmp(syms[i].name, "plat_present(", 13) && sym_code(i))
                 idle_k = i;
     }
     if (scr_active)
@@ -435,6 +463,7 @@ static void prof_account(u32 pc, u64 c)
                 if (eng_n == eng_cap) {
                     eng_cap       = eng_cap ? eng_cap * 2 : 1024;
                     eng_busy_list = realloc(eng_busy_list, sizeof(u64) * (size_t)eng_cap);
+                    eng_frame_at  = realloc(eng_frame_at, sizeof(int) * (size_t)eng_cap);
                     eng_fn_all    = realloc(eng_fn_all, sizeof(u32) * ((size_t)nsyms + 1) * (size_t)eng_cap);
                     scr_all       = realloc(scr_all, sizeof(u32) * 1024 * (size_t)eng_cap);
                 }
@@ -443,6 +472,7 @@ static void prof_account(u32 pc, u64 c)
                     memcpy(eng_fn_all + (size_t)eng_n * ((size_t)nsyms + 1), eng_fn_cur, sizeof(u32) * ((size_t)nsyms + 1));
                 else
                     memset(eng_fn_all + (size_t)eng_n * ((size_t)nsyms + 1), 0, sizeof(u32) * ((size_t)nsyms + 1));
+                eng_frame_at[eng_n]    = frame_no();
                 eng_busy_list[eng_n++] = eng_busy;
             }
             if (eng_fn_cur)
@@ -499,6 +529,23 @@ static const char *cart_area(u32 off, char *buf) /* what lies at this cart offse
         sprintf(buf, "Genesis plane data (MDG)");
     return buf;
 }
+static void pcp_report(void)
+{
+    double F = cost_frames > 0 ? cost_frames : 1;
+    for (int i = 0; i < pcp_n; ++i) {
+        if (!pcp[i].cnt)
+            continue;
+        printf("\n==================== PC PROFILE %s (%08X-%08X), per frame: count cycles | cart code, cart data, SDRAM "
+               "code, SDRAM data, fb, other ====================\n", pcp_name[i], pcp[i].lo, pcp[i].hi);
+        for (u32 h = 0; h < (pcp[i].hi - pcp[i].lo) >> 1; ++h) {
+            if (!pcp[i].cnt[h])
+                continue;
+            printf("PCP %08X %10.2f %10.1f |", pcp[i].lo + h * 2, pcp[i].cnt[h] / F, pcp[i].cyc[h] / F);
+            for (int k = 0; k < PK_N; ++k) printf(" %8.1f", pcp[i].kind[(size_t)h * PK_N + k] / F);
+            printf("\n");
+        }
+    }
+}
 static void cost_report(void)
 {
     if (!cost || cost_frames <= 0)
@@ -508,7 +555,7 @@ static void cost_report(void)
     memset(&all, 0, sizeof all);
     int idle = -1; /* plat_present: the engine's wait for the vertical blank */
     for (int i = 0; i < nsyms; ++i)
-        if (!strncmp(syms[i].name, "plat_present(", 13) && syms[i].a < 0x04000000u && !strstr(syms[i].name, "::"))
+        if (!strncmp(syms[i].name, "plat_present(", 13) && sym_code(i))
             idle = i;
     for (int i = 0; i <= nsyms; ++i) {
         all.cyc += cost[i].cyc;
@@ -578,6 +625,39 @@ static void cost_report(void)
             }
             free(slow);
             free(mean);
+            /* the slowest engine frames, each with the functions that took most of it */
+            printf("  the slowest engine frames (busy cycles in vertical blanks, the console frame it ended in):\n");
+            int *ord = malloc(sizeof(int) * (size_t)eng_n);
+            for (int f = 0; f < eng_n; ++f) ord[f] = f;
+            for (int a = 0; a < 6 && a < eng_n; ++a) {
+                int b = a;
+                for (int c = a + 1; c < eng_n; ++c)
+                    if (eng_busy_list[ord[c]] > eng_busy_list[ord[b]])
+                        b = c;
+                int t = ord[a];
+                ord[a] = ord[b];
+                ord[b] = t;
+                int f = ord[a];
+                const u32 *row = eng_fn_all + (size_t)f * W;
+                printf("    %.2f  frame %d:", eng_busy_list[f] / vb, eng_frame_at[f]);
+                u32 shown[8];
+                int ns2 = 0;
+                for (int r = 0; r < 8; ++r) {
+                    size_t best = W;
+                    for (size_t k = 0; k < W; ++k) {
+                        int dup = 0;
+                        for (int q = 0; q < ns2; ++q) dup |= shown[q] == (u32)k;
+                        if (!dup && row[k] && (best == W || row[k] > row[best]))
+                            best = k;
+                    }
+                    if (best == W)
+                        break;
+                    shown[ns2++] = (u32)best;
+                    printf(" %.30s %.3f%s", best < (size_t)nsyms ? syms[best].name : "?", row[best] / vb, r < 7 ? "," : "");
+                }
+                printf("\n");
+            }
+            free(ord);
         }
         if (scr_all) { /* the scripts: by object type and event */
             static const char *ev[4] = { "main", "player", "draw", "setup" };
@@ -1049,6 +1129,15 @@ static const u32 ENG_TEXT_LO = 0x02000000;
 static u32 ENG_IMG_HI = 0x0203A1F0, eng_img_end_off = 0x3A1F0; /* the engine image in the cart (code, rodata, data LMA) */
 static u32 eng_text_hi = 0x020358B0;
 static u32 eng_bss_end_off = 0x382E8;  /* the engine's RAM ends here (SDRAM offset) */
+static u32 sdt_lo, sdt_hi;             /* R1V: the engine's code in SDRAM (.sdtext, copied from the cart at start-up) */
+#define STACK_TOP 0x0603F400u          /* the master stack (Kobo's crt0 / the boot loader) */
+#define STACK_RES 0x0603D400u          /* R1W: its reserved 8 KB (engine_cart.ld: the engine's RAM ends below) */
+static int sdt_ran;                    /* code in .sdtext has run: from then on nothing may write there */
+static int in_eng_code(u32 a)          /* the engine's code: in the cart or in SDRAM (either address alias) */
+{
+    u32 p = a & 0x1FFFFFFF;
+    return (p >= ENG_TEXT_LO && p < eng_text_hi) || (sdt_hi && p >= sdt_lo && p < sdt_hi);
+}
 static const u32 LDR_LO = 0x06000000;
 static u32 ldr_text_hi = 0x06000DFC;
 static u32 ldr_bss_lo = 0x0DFC, ldr_bss_hi = 0x0E1C, ldr_sampling_off = 0x0E10;
@@ -1139,8 +1228,10 @@ static void check_data_access(u32 a, int size, int write, u32 v)
             if (!ok || ok >= 2)
                 evlog(ok == 2 ? "W-SAMPLING" : ok == 3 ? "W-VECTOR" : "W-LOADER", "addr=%08X size=%d val=%08X", a, size, v);
         }
-        if (rg == RG_SDRAM && off >= eng_bss_end_off && off < 0x3C400)
-            evlog("W-GAP", "addr=%08X size=%d val=%08X (between the engine's RAM and its stack)", a, size, v);
+        if (rg == RG_SDRAM && sdt_ran && off >= sdt_lo - 0x06000000u && off < sdt_hi - 0x06000000u)
+            evlog("W-SDCODE", "addr=%08X size=%d val=%08X (into the engine's code in SDRAM)", a, size, v);
+        if (rg == RG_SDRAM && off >= eng_bss_end_off && off < STACK_RES - 0x06000000u)
+            evlog("W-GAP", "addr=%08X size=%d val=%08X (between the engine's RAM and its stack's 8 KB)", a, size, v);
     }
     if (!write && engine_started) {
         int undef = 0;
@@ -1338,8 +1429,8 @@ static void onchip_write(u32 off, u32 v, int size)
             cache_purge();
             ccr &= (u8)~0x10;
         }
-        if (cur_pc >= ENG_TEXT_LO && cur_pc < ENG_IMG_HI)
-            evlog("CCR", "cache control = %02X (from cached cart code)", v);
+        if (in_eng_code(cur_pc))
+            evlog("CCR", "cache control = %02X (from engine code)", v);
         return;
     }
     if (off >= 0x100) {
@@ -1821,9 +1912,9 @@ static u16 fetch(u32 a)
         stop("odd fetch");
         return 0x0009;
     }
-    int known = (a >= ENG_TEXT_LO && a < eng_text_hi) || (a >= LDR_LO && a < ldr_text_hi) ||
-                ((a & 0x1FFFFFFF) >= ENG_TEXT_LO && (a & 0x1FFFFFFF) < eng_text_hi) ||
-                ((a & 0x1FFFFFFF) >= LDR_LO && (a & 0x1FFFFFFF) < ldr_text_hi);
+    int known = in_eng_code(a) || ((a & 0x1FFFFFFF) >= LDR_LO && (a & 0x1FFFFFFF) < ldr_text_hi);
+    if (sdt_hi && !sdt_ran && (a & 0x1FFFFFFF) >= sdt_lo && (a & 0x1FFFFFFF) < sdt_hi)
+        sdt_ran = 1;
     if (!known) {
         char b[128];
         printf("[f%5d c%llu] EXEC OUTSIDE CODE at %08X (from %s)\n", frame_no(), (unsigned long long)cycles, a,
@@ -2210,7 +2301,7 @@ static void exec(u16 op, u32 pc)
                     RN += 4;
                     SR = t & 0x3F3;
                     no_int_next = 1;
-                    if (((SR >> 4) & 15) >= 12 && engine_started && pc >= ENG_TEXT_LO && pc < eng_text_hi)
+                    if (((SR >> 4) & 15) >= 12 && engine_started && in_eng_code(pc))
                         evlog("SR-HIGH", "LDC.L sets SR=%03X (interrupt mask %d)", SR, (SR >> 4) & 15);
                     break;
                 case 0x17: GBR = rd32(RN); RN += 4; no_int_next = 1; break;
@@ -2250,7 +2341,7 @@ static void exec(u16 op, u32 pc)
                 case 0x0E:
                     SR = RN & 0x3F3;
                     no_int_next = 1;
-                    if (((SR >> 4) & 15) >= 12 && engine_started && pc >= ENG_TEXT_LO && pc < eng_text_hi)
+                    if (((SR >> 4) & 15) >= 12 && engine_started && in_eng_code(pc))
                         evlog("SR-HIGH", "LDC sets SR=%03X (interrupt mask %d)", SR, (SR >> 4) & 15);
                     break;
                 case 0x1E: GBR = RN; no_int_next = 1; break;
@@ -2446,6 +2537,15 @@ static void parse_layout(void)
                 ENG_IMG_HI      = (u32)(la + n);
                 eng_img_end_off = ENG_IMG_HI - 0x02000000u;
             }
+            else if (sscanf(line, ".sdtext %llx %llx load address %llx", &a, &n, &la) == 3 && a >= 0x06000000ull &&
+                     a < 0x06040000ull && la >= 0x02000000ull && la < 0x02400000ull) {
+                sdt_lo = (u32)a;
+                sdt_hi = (u32)(a + n);
+                if ((u32)(la + n) > ENG_IMG_HI) {
+                    ENG_IMG_HI      = (u32)(la + n);
+                    eng_img_end_off = ENG_IMG_HI - 0x02000000u;
+                }
+            }
             else if (sscanf(line, ".bss %llx %llx", &a, &n) == 2 && a >= 0x06000000ull && a < 0x06040000ull)
                 eng_bss_end_off = (u32)(a + n - 0x06000000ull);
         }
@@ -2472,6 +2572,8 @@ static void parse_layout(void)
     }
     printf("layout: engine code 02000000-%08X, image to %08X, RAM to %08X; loader bss %04X-%04X, sampler flag %04X\n",
            eng_text_hi, ENG_IMG_HI, 0x06000000 + eng_bss_end_off, ldr_bss_lo, ldr_bss_hi, ldr_sampling_off);
+    if (sdt_hi)
+        printf("layout: engine code in SDRAM (.sdtext) %08X-%08X (%u bytes)\n", sdt_lo, sdt_hi, sdt_hi - sdt_lo);
 }
 static void summary(void)
 {
@@ -2563,7 +2665,7 @@ int main(int argc, char **argv)
                    "  -nofifo        no frame-buffer write FIFO model; -fbword N cycles per FIFO word (default 5)\n"
                    "  -profile A B   where the SH2's time goes between frames A and B (per engine frame, by function,\n"
                    "                 by script object type, cart stalls)\n"
-                   "  -callers NAME  with -profile: who calls NAME\n"
+                   "  -callers NAME  with -profile: who calls NAME\n  -pcprof NAME   with -profile: NAME's every instruction (count, cycles, stalls per address; up to 8)\n"
                    "  -cartwait N    cart waits per single access (default 15); -cartrd N, -cartfill N (default 87) set\n"
                    "                 an uncached long read / a cache line directly; -fbread N (default 8); -k68word N (75)\n"
                    "  -novbistop     keep running when line 10 freezes\n");
@@ -2620,6 +2722,12 @@ int main(int argc, char **argv)
             opt_rec_crc_n = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-callers") && i + 1 < argc)
             opt_callers = argv[++i];
+        else if (!strcmp(argv[i], "-pcprof") && i + 1 < argc) {
+            if (pcp_n < PCP_MAX)
+                pcp_name[pcp_n++] = argv[++i];
+            else
+                ++i;
+        }
         else if (!strcmp(argv[i], "-shots") && i + 4 < argc) {
             shots_from   = atoi(argv[++i]);
             shots_to     = atoi(argv[++i]);
@@ -2660,7 +2768,7 @@ int main(int argc, char **argv)
     parse_layout();
     presented_addr = sym_addr("presented");
     for (int i = 0; i < nsyms && !scr_fn; ++i) /* the function (code), not its static variables ("...::told") */
-        if (!strncmp(syms[i].name, "ProcessScript(", 14) && syms[i].a < 0x04000000u && !strstr(syms[i].name, "::"))
+        if (!strncmp(syms[i].name, "ProcessScript(", 14) && sym_code(i))
             scr_fn = syms[i].a;
     scr_loop_addr = sym_addr("objectLoop");
     scr_ents_addr = sym_addr("objectEntityList");
@@ -2676,6 +2784,26 @@ int main(int argc, char **argv)
             callers_count = calloc((size_t)nsyms + 1, sizeof(u64));
         else
             printf("-callers: no function %s\n", opt_callers);
+    }
+    for (int p = 0; p < pcp_n; ++p) { /* -pcprof: the function's address range (to the next code symbol) */
+        int k = -1;
+        size_t L = strlen(pcp_name[p]);
+        for (int i = 0; i < nsyms; ++i)
+            if (sym_code(i) && (!strcmp(syms[i].name, pcp_name[p]) || (!strncmp(syms[i].name, pcp_name[p], L) &&
+                                                                        syms[i].name[L] == '(')))
+                k = i;
+        if (k < 0) {
+            printf("-pcprof: no function %s\n", pcp_name[p]);
+            continue;
+        }
+        pcp[p].lo = syms[k].a;
+        pcp[p].hi = k + 1 < nsyms ? syms[k + 1].a : syms[k].a + 0x1000;
+        if (pcp[p].hi - pcp[p].lo > 0x10000)
+            pcp[p].hi = pcp[p].lo + 0x10000;
+        size_t n = (pcp[p].hi - pcp[p].lo) / 2 + 1;
+        pcp[p].cnt  = calloc(n, sizeof(u64));
+        pcp[p].cyc  = calloc(n, sizeof(u64));
+        pcp[p].kind = calloc(n * PK_N, sizeof(u64));
     }
 
     /* the CD boot table + the loader program (Kobo crt0 + sh2_engboot) */
@@ -2797,9 +2925,9 @@ int main(int argc, char **argv)
             if (R[15] < stack_low) {
                 stack_low = R[15];
             }
-            if (R[15] < 0x0603C400 || R[15] > 0x0603F400) {
+            if (R[15] < STACK_RES || R[15] > STACK_TOP) {
                 if (!(cur_pc >= LDR_LO && cur_pc < ldr_text_hi))
-                    evlog("STACK", "R15=%08X outside the master stack 0603C400-0603F400", R[15]);
+                    evlog("STACK", "R15=%08X outside the master stack's 8 KB %08X-%08X", R[15], STACK_RES, STACK_TOP);
             }
             /* the sampler: COMM12 changes every 30 vblanks once on */
             u16 c12 = COMM(12);
@@ -2833,6 +2961,7 @@ int main(int argc, char **argv)
         int last  = frame_no() < prof_to ? frame_no() : prof_to;
         cost_frames = last - prof_from;
         cost_report();
+        pcp_report();
     }
     return 0;
 }

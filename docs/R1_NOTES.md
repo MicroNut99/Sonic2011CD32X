@@ -155,6 +155,41 @@ from the jump table. The engine runs a sub natively only when the loaded bytecod
 hash over the script code, the jump table and the function table, once per stage load); otherwise it interprets.
 R11A: all 231 object subs and 49 functions native (10,049 instructions, 198 KB of SH2 code in the cart).
 
+**Hot code in SDRAM (R1V).** A cache line of code from the cart costs 87 cycles, from SDRAM 11. After R1U a third of
+the busy time was the cart's code fetches. Functions marked `SCD_HOT` (`engine/RetroEngine.hpp`; `SCD_MD_HOT` in
+`md/`) go into the section `.sdtext`: linked to run in SDRAM, stored in the cart image after `.data`, copied at engine
+start like `.data` (`cd32x/engine/engine_cart.ld`, `engine_start.cpp`), then the cache is purged. In it: the object
+loop, the native-script dispatch, the plane record code, the collision tests the player runs every frame, the player
+control and camera, the native subs listed in `tools/build_native.sh` (`HOT=`: the player, rings, stage set-up...) and
+libgcc's division and shift helpers - about 17 KB. The native dispatch reads a table in SDRAM, not the cart.
+
+**R1W.** Waste the R1V profile showed, each with the same result:
+- `ProcessObjects` skips each run of empty slots in one tight loop (`objectLoop` is read by nothing in between).
+- A script sub that is not the running object's own (an object that changed its type in its main sub still gets the
+  player sub of the type it had: Palmtree Panic 1's crumbling ledge pieces) ran in the interpreter - 87,000 cycles in
+  one frame. Now the native code made from exactly that bytecode runs (found by its start and its jump table).
+- The foreground's line positions: every `linePos` entry is the same number there, so with no line deformed (no
+  `hParallax.deform` flag set at the stage load: `scdHDeformAny`) every line gets that number - no frame-buffer read
+  per line. Only the background reads its 224 scroll bytes.
+- `DrawHLineScrollLayer`'s OpenGL half (never taken on the console) is a function of its own; the half that runs went
+  into SDRAM.
+- The plane rows: the layout and chunk entries read once per chunk / per tile instead of per cell, and each row
+  piece goes into the record in one run (`sgb_write_run`: the same words as the per-word writes - same record CRC).
+- The plane window moves 2 columns past the needed ones instead of re-centring (`MD_SLACK`): the same picture, the
+  new columns a few at a time (records differ from R1V; pictures identical - PC record model and sh2emu screenshots).
+- The master stack's reservation 12 KB → 8 KB (the engine's deepest use is 3.9 KB); the 4 KB went to `.sdtext`.
+- `FlipScreen` no longer computes the PC's idle-dim timer on the console (only the OpenGL / SDL paths draw it).
+
+| sh2emu, Palmtree Panic 1 | R1S | R1T | R1U | R1V | R1W |
+|---|---|---|---|---|---|
+| frames a second | 23-27 | 29.1 | 43.7 | 59.8 | 59.9 |
+| busy per engine frame, mean (vertical blanks) | 1.55 | 1.31 | 0.97 | 0.73 | 0.59 |
+| slowest frame | 2.56 | | 1.28 | 1.09 | 0.83 |
+| frames that fit in one vertical blank | 0% | | 63% | 99% | 100% |
+
+The slowest frames now are the vertical scroll ones (new plane rows: ~300 name words), whose record the 68000 copies
+for up to 0.1 vertical blanks while the SH2 waits (`planes_frame`), and the object loop (0.13).
+
 Speed rounds, one change per disc, every one checked before burning: the PC check (`tools/test_sh2cfg.sh` with
 `REF=`: camera, layer scroll, palettes and every object's state the same as the previous round, frame by frame) and
 sh2emu's `record contents` CRC (the 68000 gets the same records = the same pictures).
@@ -200,3 +235,4 @@ sh2emu's `record contents` CRC (the 68000 gets the same records = the same pictu
 | R1S | **Palmtree Panic 1 on the Genesis planes, scrolling with the engine** (MicroNut99's videos, 16 Oct): palm trees, mountains, checkerboard, the loop with the water behind it, the climb into the clouds - no dots, no junk. Slow: 27-29 engine frames a second (see *Speed*). **Last good disc.** |
 | R1T | **R1S + three engine speed changes, nothing visible changes** (one disc for the three: each alone stays under the console's 30-frame step). (1) `CheckKeyPress` looked up `input.pressButton` by name every frame - a mobile variable Sonic CD does not have: 109 name compares from the cart a frame, for nothing; now searched once per variable list. (2) `ProcessObjects` skips an empty slot at once (~860 of 1,184; the only write it could do, `type = 0`, stores the 0 it holds). (3) `DrawHLineScrollLayer`, no-draw build: only each line's position, written straight into the plane record's table (`plat_layer_lines`), the scroll byte read once, no special-stage name compare per line (it needs `RENDER_HW`); the parallax `%` only for values outside the width. PC check: 3,001 frames the same as R1S. sh2emu: records 1-1000 CRC `CCFAE2B9` = R1S's; busy per engine frame 1.55 → 1.31 vertical blanks; 26.5 → 29.1 frames a second over 44 s of play. Boot stack untouched. |
 | R1U | **R1T + native scripts** (above) **+ the scene image keeps the scripts' last instruction**: `host/cart_build` trimmed every part after its last non-zero element, and the last script's last instruction, `End`, is a 0 - so on the SH2 the end of Attract Mode's setup (run at every stage load) read the jump table's first word (76) as an instruction and went on with garbage (harmless so far: R1R/R1S ran). The host now records how much code the stage uses (`SPOS`) and the image keeps all of it (the native scripts need it too: their hash). PC check: 12,001 frames identical to the interpreter (camera, scroll, palettes, every object's state). sh2emu: records 1-2000 CRC `3235C173` = R1S's; 94 s of play: **43.7 frames a second** (R1S 23.4); a frame 0.97 vertical blanks on average (R1S 1.55), 63% of frames already under one; the stage loads in 1.0 s. Needs the game data rebuilt (the fixed images). Boot stack untouched. |
+| R1V / R1W | (not burned yet - one disc with R1T, R1U and R1W: R1W) R1U + the hot code in SDRAM (R1V) + R1W's changes (*Speed*). PC check: 3,001 frames the same as R1S; PC record model 3,599 frames 0 pixels different; sh2emu: 59.9 frames a second, every engine frame under one vertical blank (slowest 0.83), `VERDICT no problems found`, records 1-2000 CRC `B2BF03A0` (R1W's plane window; the pictures are R1S's: 118 sh2emu screenshots identical to R1U's). Boot stack untouched. |

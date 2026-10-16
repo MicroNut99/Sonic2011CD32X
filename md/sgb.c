@@ -1,5 +1,17 @@
 /* REV R1: see sgb.h */
 #include "sgb.h"
+/* PORT32X R1V: code the SH2 runs every frame - in the engine build it goes into SDRAM (cd32x/engine/engine_cart.ld
+   .sdtext; a code cache miss costs 11 cycles there, 87 in the cart). Not in the other builds (MARS: Kobo's SH2
+   programs; the PC). */
+#if defined(__sh__) && !defined(MARS)
+#define SCD_MD_HOT __attribute__((section(".sdtext")))
+#else
+#define SCD_MD_HOT
+#endif
+void sgb_write(void *ctx, uint16_t addr, uint16_t word) SCD_MD_HOT;
+void sgb_write_run(void *ctx, uint16_t addr, const uint16_t *words, int n) SCD_MD_HOT;
+int sgb_out_end(SgbOut *o, uint16_t vA, uint16_t vB, const int16_t *hsA, const int16_t *hsB, int lines,
+                const uint16_t *cramIdx, const uint16_t *cramCol, int ncram) SCD_MD_HOT;
 
 void sgb_out_begin(SgbOut *o, uint16_t *out, int max)
 {
@@ -40,6 +52,26 @@ void sgb_write(void *ctx, uint16_t addr, uint16_t word)
     o->last = addr;
 }
 
+void sgb_write_run(void *ctx, uint16_t addr, const uint16_t *words, int n)
+{
+    SgbOut *o = (SgbOut *)ctx;
+    int i = 0;
+    if (n <= 0)
+        return;
+    if (o->overflow || !o->cntAt || addr != (uint16_t)(o->last + 2)) {
+        sgb_write(ctx, addr, words[0]); /* the first word opens a group (or does what sgb_write does) */
+        i = 1;
+    }
+    if (o->overflow || o->pos + (n - i) > o->max) { /* no room for the rest: word by word, as the calls would */
+        for (; i < n; i++) sgb_write(ctx, (uint16_t)(addr + 2 * i), words[i]);
+        return;
+    }
+    o->cnt += n - i; /* the rest extend the open group */
+    for (; i < n; i++) o->out[o->pos++] = words[i];
+    o->last = (uint16_t)(addr + 2 * (n - 1));
+}
+
+static int put_runs(SgbOut *o, const int16_t *hs, int lines) SCD_MD_HOT;
 static int put_runs(SgbOut *o, const int16_t *hs, int lines)
 {
     int at = o->pos++, n = 0, y = 0;

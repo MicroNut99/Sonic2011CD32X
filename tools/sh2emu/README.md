@@ -164,9 +164,16 @@ ENGINE FRAMES     568: busy cycles each - mean 594438 (1.55 vertical blanks), me
 | `by function, per frame` | per vertical blank: cycles, instructions, and the stall cycles inside them - waiting for the cart (code or data), SDRAM, the frame buffer. `in SDRAM` = the cycles if the function's code were in SDRAM |
 | `cart code stalls by function, cumulative` | the functions whose code costs the most cart fetches, with their sizes added up: what to move into SDRAM first |
 | `cart data stalls by 4 KB of the cart` | which cart data (engine tables, the stage image's parts by name) the SH2 waits for |
+| the slowest engine frames | (R1W) the six slowest frames, the console frame each ended in, and the functions that took most of each |
 
-`-callers NAME` adds who calls NAME (e.g. `-callers __sdivsi3`: who divides). `-shots A B STEP PREFIX` saves a picture
-every STEP frames from A to B (to compare with a video of the console).
+`-callers NAME` adds who calls NAME (e.g. `-callers __sdivsi3`: who divides). `-pcprof NAME` (up to 8) adds NAME's every
+instruction: per address the count, the cycles and the stalls by kind per frame (`PCP` lines; join them with
+`objdump -d` of `engine.elf` to read the hot loop). `-shots A B STEP PREFIX` saves a picture every STEP frames from A to
+B (to compare with a video of the console, or two builds with each other).
+
+Code in SDRAM (R1V, the engine's `.sdtext` section): sh2emu reads its place from `engine.map`, counts it as engine code,
+and reports any write into it after it started running (`W-SDCODE`, a problem). The stack: the engine's 8 KB
+(0603D400-0603F400, R1W) - below that `STACK` / `W-GAP`.
 
 The bus timing comes from the 32X manual (section 1.12) and was measured against the console on R1S: a single cart read
 waits 15 cycles a word, a cart cache line (8 words in a row) costs 87 cycles, an SDRAM line 11, a frame buffer read 8;
@@ -193,6 +200,7 @@ All options go after the build folder.
 -reccrc N      the record contents CRC over the first N records (default 600)
 -profile A B   where the SH2's time goes between frames A and B (section 4)
 -callers NAME  with -profile: who calls the function NAME, how often a frame
+-pcprof NAME   with -profile: NAME's every instruction - count, cycles, stalls per address (up to 8 functions)
 -cartwait N    cart waits for a single access (default 15); -cartrd N / -cartfill N set the read / line costs directly
 -fbread N      frame buffer read cost (default 8); -k68word N the 68000's cycles per record word (default 75)
 -nofifo        no frame-buffer write FIFO model; -fbword N = SH2 cycles per FIFO word (default 5)
@@ -251,3 +259,8 @@ vertical blanks on average and up to 2.56; about 45% of that is waiting for the 
 ramp's player script (a 128-turn script loop, 0.9 vertical blanks). R1T removed three pieces of pure waste (a variable
 looked up by name every frame, the empty object slots, the scroll loop's per-line work): 1.31 on average, with the same
 record contents CRC as R1S.
+
+**R1U-R1W (speed).** Native scripts (R1U): 0.97. The hot code in SDRAM (R1V): 0.73, 99% of frames in one vertical
+blank. R1W (`-pcprof` on the hot loops, the slowest-frames list): the empty-slot scan, a script sub that fell back to
+the interpreter for 87,000 cycles in one frame, the foreground's line positions without a frame-buffer read per line,
+the plane rows' name lookups and record writes: 0.59 on average, the slowest frame 0.83 - every frame in one.
