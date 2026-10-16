@@ -83,6 +83,7 @@ not come, line 10 tells why:
 |---|---|
 | `5C14` / `5C15` / `5C16` | (R1C) the engine's scene load: the scene in the cart / its image checked / the engine's own stage load running |
 | `58nn` | only with `SCD_SCENE_CHECK=1`: the engine's check of the new scene image, reading at `0x080000 + nn × 64 KB`. R1C died in it (`5C14` → `101`); R1D leaves it out, as OpenJazz REV does |
+| `6nnn` between them, CKPT `8xxx` | (R1E) the sampler's count (line 10 keeps changing while the SH2 takes interrupts); CKPT = the PR sampled with the PC (the caller, coded the same way) |
 | `8xxx` / `7xxx`, changing | (R1C) the PC sampler, on between `5C16` and `5Lnn`: where the SH2 is (`8xxx` = engine code at `0x02000000 + xxx × 16`, look it up in `engine.map`) |
 | `5100` | R11A (list 1, scene 0) loaded by the engine |
 | `5C60` / `5C65` | (R1C) the MDG load started / the MDG in the cart, SH2 command 68 next |

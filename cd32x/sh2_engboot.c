@@ -67,7 +67,7 @@ const char sh2_build_marker[] = "SH2-VS7D"; /* the Sub-CPU looks for "SH2-V" */
    8xxx = engine code at 0x02000000 + (xxx & 0x7FFF) * 16; 7xxx = SDRAM 0x06000000 + (xxx & 0xFFF) * 64.
    Line 10 frozen = the V-blank interrupt itself stopped. In SDRAM (this loader), never in the cart: during a
    scene load Kobo's CMD 46 sets RV and the SH2 cannot read the cart. */
-volatile uint32_t scdLastPC = 0, scdOrigVBI = 0, scdSampling = 0;
+volatile uint32_t scdLastPC = 0, scdOrigVBI = 0, scdSampling = 0, scdLastPR = 0;
 void scd_vbi_sample(void);
 __asm__(".text\n"
         "    .align 2\n"
@@ -78,6 +78,9 @@ __asm__(".text\n"
         "    mov.l @(8,r15),r0\n"   /* the interrupted PC (the CPU pushed PC, then SR) */
         "    mov.l 1f,r1\n"
         "    mov.l r0,@r1\n"
+        "    sts pr,r0\n"            /* R1E: the interrupted code's PR (its caller, inside a leaf) */
+        "    mov.l 3f,r1\n"
+        "    mov.l r0,@r1\n"
         "    mov.l @r15+,r1\n"
         "    mov.l 2f,r0\n"
         "    mov.l @r0,r0\n"         /* Kobo's original V-blank vector (pri_irq) */
@@ -85,20 +88,29 @@ __asm__(".text\n"
         "    mov.l @r15+,r0\n"       /* delay slot: r0 restored; the jump target was read before */
         "    .align 2\n"
         "1:  .long _scdLastPC\n"
-        "2:  .long _scdOrigVBI\n");
+        "2:  .long _scdOrigVBI\n"
+        "3:  .long _scdLastPR\n");
+static uint16_t sample_code(uint32_t pc)
+{
+    if (pc >= 0x02000000u && pc < 0x02080000u)
+        return (uint16_t)(0x8000 | ((pc - 0x02000000u) >> 4));
+    if (pc >= 0x06000000u && pc < 0x06040000u)
+        return (uint16_t)(0x7000 | ((pc - 0x06000000u) >> 6));
+    return 0x6FFF;
+}
 void pri_vbi_handler(void)
 {
     static uint32_t n = 0;
     VBLANK_COUNT++;
     if (scdSampling && ++n >= 30) {
-        uint32_t pc = scdLastPC;
-        n           = 0;
-        if (pc >= 0x02000000u && pc < 0x02080000u)
-            SC_COMM12 = (uint16_t)(0x8000 | ((pc - 0x02000000u) >> 4));
-        else if (pc >= 0x06000000u && pc < 0x06040000u)
-            SC_COMM12 = (uint16_t)(0x7000 | ((pc - 0x06000000u) >> 6));
-        else
-            SC_COMM12 = 0x6FFF;
+        /* R1E: every 30 vertical blanks, in turn: STATE = where the SH2 is (8xxx / 7xxx), then STATE =
+           6nnn, a count of the samples - so line 10 keeps changing while the SH2 takes interrupts, even
+           when it stays in one place. CKPT (COMM8, upper half) = the interrupted code's PR, coded the
+           same way: the caller of the function it is in. */
+        static uint32_t k = 0;
+        n = 0;
+        *(volatile uint16_t *)0x20004028 = sample_code(scdLastPR);
+        SC_COMM12 = (++k & 1) ? sample_code(scdLastPC) : (uint16_t)(0x6000 | ((k >> 1) & 0x7FF));
     }
 }
 void pri_cmd_handler(void) { SC_CMD_CLR = 0; }
