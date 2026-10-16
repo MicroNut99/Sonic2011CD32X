@@ -1,9 +1,9 @@
 # generated / not ours to publish
-engine/
-RSDKv3-Decompilation-master
-gamedata/
+/engine/
+/RSDKv3-Decompilation-master
+/gamedata/
 Sonic_CD/
-runs/
+/runs/
 host/obj*/
 host/soniccd_host*
 host/test_*
