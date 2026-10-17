@@ -98,3 +98,10 @@ Then `tools/sh2emu` (its README): `-f 7000` reaches the switch to Tails (about f
 | Sonic again instead of Tails (`L1S128.IMG NOT FOUND`) | Tails's scene image is not on the disc (`build_game_data.py` without `1:0@1`): the SH2 takes Sonic's |
 | the loading text stays, line 10 `5C61` | no `G1S128.MDG` on the disc (`build_mdg.sh` without `1:0@1`): the game runs, the planes stay off |
 | red `LAYOUT 280` | `L1S128.IMG` is not in the other images' layout (made by another `build_game_data.py` run) |
+
+## Console log
+
+| Disc | Result |
+|---|---|
+| R3A | **Works** (MicroNut99's videos, 16 Oct, 20:09-20:13): Palmtree Panic 1 with Sonic, rings, badniks, item boxes and the HUD as Genesis sprites; at the act's end `L1S004.IMG` not found, `L1S128.IMG` (60 chunks) and `G1S128.MDG` loaded, Tails's title card (score 5800 carried over) and **Tails's act**, shield flickering. Speed from the game's own clock: Sonic's act 0'02"03 -> 0'31"00 in 29.0 s of video, Tails's 1'18"31 -> 1'51"26 in 33.0 s: **59.9 frames a second**. During the switch the Sub-CPU prints `SH2 NEVER EVEN REACHED THIS FILE`: its start-up diagnostic, which sees the last record number still in COMM4 once the planes are off - harmless. Boot stack untouched. |
+
