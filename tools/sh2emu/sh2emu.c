@@ -1905,6 +1905,25 @@ static void write_shot(const char *path)
 static int sub_boot_stage;
 static u64 pad_requests; /* command 48s answered */
 static u64 sfx_plays, music_cmds; /* REV R4 */
+/* REV R4C: the fast command 46 (runs of chunks, checksum answer) and the backup-RAM file (commands 56-59) */
+static u64 load_runs, load_run_chunks, load_singles;
+static int opt_badrun = -1;          /* -badrun N: the Nth run's checksum answer is wrong (the SH2 must load it again) */
+static int opt_oldsub = 0;           /* -oldsub: a Sub-CPU program without the fast command 46 (R4B's): a run's COMM2 is
+                                        taken as one chunk number past the file's end - nothing copied, COMM8 untouched */
+static const char *opt_bram = 0;     /* -bram FILE: the backup RAM's SONICCD32X_ file, kept between runs */
+static u8 bram_buf[512];             /* the Sub-CPU's buffer (BRAM_BYTES) */
+static int bram_file_ok = 0;         /* the file exists in the (modelled) backup RAM */
+static u64 bram_loads, bram_saves, bram_words;
+static u32 sub_load_sum(const u8 *p, u32 longs) /* cd32x/sub_main.c load_sum: big-endian 32-bit words */
+{
+    u32 a = 0, b = 0;
+    while (longs--) {
+        a += (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3];
+        p += 4;
+        b += a;
+    }
+    return a ^ ((b << 13) | (b >> 19));
+}
 static int cdd_status;            /* REV R4: the CD drive's status nibble (COMM14) */
 /* REV R4: the controller (port 1) the 68000 reads in its vertical blank and the Sub-CPU hands the SH2 in command 48's
    answer (SEGA_CTRL_* bits: up 1, down 2, left 4, right 8, B 0x10, C 0x20, A 0x40, start 0x80, Z 0x100, Y 0x200,
@@ -2010,11 +2029,53 @@ static void sub_finish(void)
         set_comm32(8, cur_file < 0 ? 0 : files[cur_file].len);
         SET_COMM(0, 0);
     }
+    else if (cmd == 46 && (COMM(2) & 0xFF00) && !opt_oldsub) {
+        /* REV R4C: the fast command 46 (cd32x/sub_main.c): COMM2 = first chunk | (more) << 8, up to 4 chunks in one
+           read, no read-back; COMM8 = load_sum of the bytes read, COMM12 = 0 (1: nothing read) */
+        int chunk  = COMM(2) & 0xFF, count = ((COMM(2) >> 8) & 0xFF) + 1;
+        u32 length = comm32(8);
+        if (count > 4)
+            count = 4;
+        u32 off = (u32)chunk * 32768;
+        int n   = 0;
+        if (off < length)
+            n = (int)((length - off + 2047) / 2048);
+        if (n > 16 * count)
+            n = 16 * count;
+        u32 coff = (u32)cur_img * 0x20000 + off;
+        static u8 rd[4 * 32768];
+        for (int i = 0; i < n * 2048; ++i) {
+            u32 src = off + i;
+            u8 b    = (cur_file >= 0 && src < files[cur_file].len) ? files[cur_file].data[src] : 0;
+            u32 o   = (coff + i) & (CART_SIZE - 1);
+            rd[i]            = b;
+            cart[o]          = b;
+            cart_def[o]      = 1;
+            cart_wpc[o >> 1] = 0xC0DE0046;
+        }
+        u32 sum = sub_load_sum(rd, (u32)n * 512u);
+        if ((int)load_runs == opt_badrun) {
+            sum ^= 0x5A5A0001u;
+            printf("[f%5d] SUB: CMD 46 run %llu: -badrun - the checksum answer made wrong\n", frame_no(), (unsigned long long)load_runs);
+        }
+        load_runs++;
+        load_run_chunks += (u64)count;
+        rv_active = 0;
+        set_comm32(8, sum);
+        SET_COMM(12, n > 0 ? 0 : 1);
+        SET_COMM(0, 0);
+        if (cur_img == 4)
+            blob_update();
+        if (opt_verbose)
+            printf("[f%5d] SUB: CMD 46 chunks %d-%d -> cart %06X (%d sectors, one read) sum %08X\n", frame_no(), chunk,
+                   chunk + count - 1, coff, n, sum);
+    }
     else if (cmd == 46) {
         int chunk  = COMM(2);
         u32 length = comm32(8);
         u32 off    = (u32)chunk * 32768;
         int n      = 0;
+        load_singles++;
         if (off < length)
             n = (int)((length - off + 2047) / 2048);
         if (n > 16)
@@ -2102,6 +2163,50 @@ static void sub_finish(void)
     else if (cmd == 44) {
         SET_COMM(0, 0);
     }
+    else if (cmd == 56 || cmd == 59) { /* REV R4C: the backup-RAM file SONICCD32X_ (512 bytes): 56 load, 59 save; COMM12 1 ok */
+        int ok = 0;
+        if (cmd == 56) {
+            memset(bram_buf, 0, sizeof bram_buf);
+            if (bram_file_ok)
+                ok = 1;
+            else if (opt_bram) {
+                FILE *f = fopen(opt_bram, "rb");
+                if (f) {
+                    ok = fread(bram_buf, 1, sizeof bram_buf, f) == sizeof bram_buf;
+                    fclose(f);
+                    bram_file_ok = ok;
+                }
+            }
+            bram_loads++;
+        }
+        else {
+            bram_file_ok = 1;
+            ok           = 1;
+            if (opt_bram) {
+                FILE *f = fopen(opt_bram, "wb");
+                ok      = f && fwrite(bram_buf, 1, sizeof bram_buf, f) == sizeof bram_buf;
+                if (f)
+                    fclose(f);
+            }
+            bram_saves++;
+        }
+        printf("[f%5d] SUB: CMD %d %s SONICCD32X_ (512 bytes) -> %s\n", frame_no(), cmd, cmd == 56 ? "load" : "save",
+               ok ? "ok" : cmd == 56 ? "no file" : "FAILED");
+        SET_COMM(12, (u16)ok);
+        SET_COMM(0, 0);
+    }
+    else if (cmd == 57 || cmd == 58) { /* REV R4C: one word of the buffer: COMM2 = index (0-255), COMM8 = the value */
+        int wi = COMM(2) & 255;
+        if (cmd == 58) {
+            u16 v               = COMM(8);
+            bram_buf[wi * 2]     = (u8)(v >> 8);
+            bram_buf[wi * 2 + 1] = (u8)v;
+        }
+        else
+            SET_COMM(8, (u16)(bram_buf[wi * 2] << 8 | bram_buf[wi * 2 + 1]));
+        bram_words++;
+        SET_COMM(0, 0);
+    }
     else if (cmd == 68) {
         int op   = COMM(2) & 0xFF;
         u32 off  = comm32(8);
@@ -2176,6 +2281,8 @@ static void sub_poll(void)
     if (c == 46) {
         lat       = 200000;
         rv_active = 1;
+        if ((COMM(2) & 0xFF00) && !opt_oldsub) /* REV R4C: a run - more data, the same one read (shortened here too) */
+            lat = 120000u * (u64)(((COMM(2) >> 8) & 0xFF) + 1) + 80000u;
     }
     if (c == 38)
         lat = 400000;
@@ -2953,6 +3060,12 @@ static void summary(void)
     if (sfx_plays || music_cmds)
         printf("audio             %llu sound effects played, %llu CD audio commands\n", (unsigned long long)sfx_plays,
                (unsigned long long)music_cmds);
+    if (load_runs || load_singles) /* REV R4C */
+        printf("loading           %llu fast runs (%llu chunks, one CD read each run), %llu chunks one by one (verified by "
+               "the Sub-CPU)\n", (unsigned long long)load_runs, (unsigned long long)load_run_chunks, (unsigned long long)load_singles);
+    if (bram_loads || bram_saves)
+        printf("backup RAM        SONICCD32X_: %llu loads, %llu saves, %llu words exchanged (commands 57 / 58)\n",
+               (unsigned long long)bram_loads, (unsigned long long)bram_saves, (unsigned long long)bram_words);
     int problems = 0;
     for (int sev = 2; sev >= 0; --sev) {
         int any = 0;
@@ -3063,7 +3176,13 @@ int main(int argc, char **argv)
                    "  -callers NAME  with -profile: who calls NAME\n  -pcprof NAME   with -profile: NAME's every instruction (count, cycles, stalls per address; up to 8)\n  -frames A B    with -profile: every engine frame that ends in console frames A..B, with its top functions\n"
                    "  -cartwait N    cart waits per single access (default 15); -cartrd N, -cartfill N (default 87) set\n"
                    "                 an uncached long read / a cache line directly; -fbread N (default 8); -k68word N (75)\n"
-                   "  -novbistop     keep running when line 10 freezes\n");
+                   "  -novbistop     keep running when line 10 freezes\n"
+                   "  -badrun N      (R4C) the Nth fast load run (0 = the first) answers a wrong checksum: the SH2 must\n"
+                   "                 load those chunks again one by one\n"
+                   "  -oldsub        (R4C) a Sub-CPU program without the fast command 46 (R4B's): the SH2 must load\n"
+                   "                 everything the old way\n"
+                   "  -bram FILE     (R4C) the backup RAM's SONICCD32X_ file (512 bytes): read by command 56, written by\n"
+                   "                 command 59 - kept between runs (a reset with the save in place)\n");
             return 0;
         }
         if (argv[i][0] != '-') {
@@ -3170,6 +3289,12 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "-nofifo"))
             opt_fifo = 0;
+        else if (!strcmp(argv[i], "-badrun") && i + 1 < argc) /* REV R4C */
+            opt_badrun = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-oldsub")) /* REV R4C */
+            opt_oldsub = 1;
+        else if (!strcmp(argv[i], "-bram") && i + 1 < argc) /* REV R4C */
+            opt_bram = argv[++i];
         else if (!strcmp(argv[i], "-fbword") && i + 1 < argc)
             opt_fb_word = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-records") && i + 1 < argc)

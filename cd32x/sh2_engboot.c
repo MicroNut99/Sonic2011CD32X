@@ -39,7 +39,7 @@
 #define SCD_SPLASH 1 /* REV R4B: the loading picture (IMAGE.RAW); 0 = the text only, as R1S - R4A */
 #endif
 
-const char sh2_build_marker[] = "SH2-VR4B"; /* the Sub-CPU looks for "SH2-V" (its line 4 shows "SH2-VR4") */
+const char sh2_build_marker[] = "SH2-VR4C"; /* the Sub-CPU looks for "SH2-V" (its line 4 shows "SH2-VR4") */
 
 #define SC_COMM2 (*(volatile uint16_t *)0x20004022)
 #define SC_COMM8_32 (*(volatile uint32_t *)0x20004028)
@@ -260,31 +260,85 @@ static void halt(uint16_t code) /* OpenLara: stays on screen as STATE:5CEx */
     while (1) {
     }
 }
+/* REV R4C - FAST LOAD. The Sub-CPU's command 46 with COMM2 = first chunk | (more chunks) << 8 reads up to CHUNK_RUN
+   chunks in one CD read (one seek for them all instead of one a chunk) and copies them into the cart without reading
+   them back; it answers with a checksum of what it read (COMM8, cd32x/sub_main.c load_sum). This side reads the cart
+   and compares: the same, and the chunks are in; not (or no answer), and they are loaded again one at a time the old
+   way - the Sub-CPU reads each back and compares every byte (COMM2 high byte 0: unchanged since Kobo). A Sub-CPU
+   program without the fast path answers the run as one chunk number past the file's end (nothing copied, COMM8 left
+   alone): the checksum differs and the old way loads it. COMM8 holds the file length again before every command. */
+#define CHUNK_RUN 4 /* the Sub-CPU's CHUNK_RUN_MAX: its 128 KB Word RAM bank */
+static void wait_cmd_long(uint16_t cmd) /* a run takes up to four chunks' time: waited for until it is done (no limit -
+                                           another command written while the Sub-CPU still works would garble both) */
+{
+    MARS_SYS_COMM0 = cmd;
+    while (MARS_SYS_COMM0 != 0 || MARS_SYS_COMM0 != 0) comm_pause(); /* twice: a read during the 68000's write */
+}
+static uint32_t file_cart(uint16_t number) /* where the Sub-CPU's command 38 puts the file in the cart; 1 = not known */
+{
+    if (number == FILE_ENGINE)
+        return 0;
+    if (number == FILE_DATA)
+        return 24 * 0x20000u;
+    if (number >= 0x100 && number < 0x500)
+        return 4 * 0x20000u;
+    if (number >= 0x1100 && number < 0x1500)
+        return 28 * 0x20000u;
+    return 1;
+}
+uint32_t scd_cart_sum(uint32_t at, uint32_t bytes) __attribute__((used, noinline));
+uint32_t scd_cart_sum(uint32_t at, uint32_t bytes) /* the Sub-CPU's load_sum over the cart (big-endian 32-bit words) */
+{
+    const volatile uint32_t *p = (const volatile uint32_t *)(ENGINE_ENTRY + at); /* cached, purged first */
+    uint32_t a = 0, b = 0, n = bytes >> 2;
+    SC_CCR = 0x11;
+    while (n--) {
+        a += *p++;
+        b += a;
+    }
+    return a ^ ((b << 13) | (b >> 19));
+}
 /* the resident load routine (SDRAM): file `number` into its cart place - Kobo's load_pack loop.
    Returns the bad chunk count, -1 = not on the CD. Shows STATE:5Dnn per chunk. Called by this
    loader and by the engine at scene changes. */
 int scd_load_file(uint16_t number, uint32_t *bytes) __attribute__((used, noinline));
 int scd_load_file(uint16_t number, uint32_t *bytes)
 {
-    uint32_t len, nchunks, c;
+    uint32_t len, nchunks, c, base;
     int bad = 0;
     SC_COMM2 = number;
     wait_cmd(CMD_OPEN_FILE);
     len = SC_COMM8_32;
     if ((int32_t)len <= 0)
         return -1;
-    *bytes      = len;
-    SC_COMM8_32 = len;
-    nchunks     = (len + CHUNK_BYTES - 1) >> 15;
-    for (c = 0; c < nchunks; c++) {
-        SC_COMM2  = (uint16_t)c;
-        SC_COMM12 = 0; /* the Sub-CPU replies 0 = chunk verified */
-        wait_cmd(CMD_CHUNK_TO_CART);
-        if (SC_COMM12 != 0)
-            bad++;
-        show_status((uint16_t)(0x5D00 | (c & 0xFF)));
+    *bytes  = len;
+    nchunks = (len + CHUNK_BYTES - 1) >> 15;
+    base    = file_cart(number);
+    for (c = 0; c < nchunks;) {
+        uint32_t k = nchunks - c < CHUNK_RUN ? nchunks - c : CHUNK_RUN, i;
+        int ok = 0;
+        if (k > 1 && base != 1) { /* REV R4C: the run in one CD read, checked here */
+            uint32_t from = c << 15, to = (c + k) << 15;
+            if (to > len)
+                to = len;
+            SC_COMM8_32 = len;
+            SC_COMM2    = (uint16_t)(c | (k - 1) << 8);
+            SC_COMM12   = 0xFFFF;
+            wait_cmd_long(CMD_CHUNK_TO_CART);
+            ok = SC_COMM12 == 0 && SC_COMM8_32 == scd_cart_sum(base + from, (to - from + 2047) & ~2047u);
+        }
+        for (i = 0; !ok && i < k; i++) { /* the old way: chunk by chunk, each verified by the Sub-CPU */
+            SC_COMM8_32 = len;
+            SC_COMM2    = (uint16_t)(c + i);
+            SC_COMM12   = 0; /* the Sub-CPU replies 0 = chunk verified */
+            wait_cmd(CMD_CHUNK_TO_CART);
+            if (SC_COMM12 != 0)
+                bad++;
+        }
+        c += k;
+        show_status((uint16_t)(0x5D00 | ((c - 1) & 0xFF)));
 #if SCD_SPLASH
-        bar_chunk(c + 1, nchunks); /* REV R4B: (at power-on only: splashOn is 0 once the engine runs) */
+        bar_chunk(c, nchunks); /* REV R4B: (at power-on only: splashOn is 0 once the engine runs) */
 #endif
     }
     return bad;
@@ -373,6 +427,8 @@ int main(void)
     BOOT_RECORD[6] = (uint32_t)scd_load_file;      /* the engine loads scenes through this (SDRAM) */
     BOOT_RECORD[5] = FILE_FIRST_SCENE;             /* the scene now in the cart */
     BOOT_RECORD[7] = (uint32_t)&scdSampling;       /* R1C: the engine switches the PC sampler on / off */
+    BOOT_RECORD[8] = (uint32_t)scd_cart_sum;       /* REV R4C: the engine checks its fast loads with it ... */
+    BOOT_RECORD[9] = 0x53554D31;                   /* ... 'SUM1' */
     show_status(0x5C05);
 #if SCD_SPLASH
     splashOn = 0; /* REV R4B: the picture stays shown; the engine's loads (this routine) leave the colours alone */

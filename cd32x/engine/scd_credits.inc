@@ -5,19 +5,18 @@
 //     then repeats;
 //   - OpenJazz's plasma behind them on the 32X (scd_plasma.h, unaltered), colours 160-175 without bit 15: behind the
 //     Genesis picture, seen through its backdrop; drawn every frame into the back buffer, double-buffered;
-//   - the CD player line on plane A rows 25-26.
+//   - the CD player line on plane A rows 25-26 (REV R4C: "TRACK nn" at the left).
 // Keys as the template's: Up / Down plasma faster / slower, X the text (all but the CD line) off / on, B or Z back to the
 // menu; Left / Right choose a track (2 to the disc's last audio track), A play, C stop, Start pause / go on. This port's
 // Sub-CPU has play (command 45, the track repeated) and stop (54) only - no pause, no track count (no new boot-stack
-// commands): pause stops the track and go on plays it again from its start, and the line shows the track number alone
-// (the last track comes from engine/CDTracks.inc); its state is the CD drive's own (the Sub-CPU's heartbeat in COMM14:
-// playing, paused, stopped, tray open ...).
+// commands): pause stops the track and go on plays it again from its start (the last track comes from
+// engine/CDTracks.inc). REV R4C: the first track plays as the screen opens, and the CD line is the track number alone,
+// at the left (MicroNut99).
 // The records go where the 68000 reads them - the start of the frame buffer, the back buffer's line table: at most 250
 // words, and the line table written again after each.
 #define CREDITS_FILE 0x11FE /* G0S254.MDG */
 #define CRDT_MAGIC 0x43524454u
 #define CR_REC_MAX 250
-#define SC_COMM14 (*(volatile unsigned short *)0x2000402E)
 enum { CK_UP = 1, CK_DOWN = 2, CK_LEFT = 4, CK_RIGHT = 8, CK_B = 0x10, CK_C = 0x20, CK_A = 0x40, CK_START = 0x80, CK_Z = 0x100,
        CK_X = 0x400 };
 static const int16_t crZero[SCREEN_YSIZE] = { 0 };
@@ -32,30 +31,19 @@ static void cr_row(SgbOut *o, unsigned short plane, int row, const unsigned shor
     for (int c = 0; c < 40; ++c) sgb_write(o, (uint16_t)(plane + 2 * (row * 64 + c)), names[c]);
 }
 static unsigned short cr_rgb15(const unsigned char *c) { return (unsigned short)((c[2] >> 3) << 10 | (c[1] >> 3) << 5 | (c[0] >> 3)); }
-/* the CD line: "TRACK 05  PLAYING" or why there is none, centred, in the picture's letters (two cells each) */
-static void cr_cd_line(SgbOut *o, unsigned int glyphBase, unsigned int track, unsigned int player, unsigned int drive)
+/* the CD line: "TRACK 05" at the left (REV R4C, MicroNut99: the track number at the far left, no PLAYING / SEEKING /
+   PAUSED / STOPPED - one cell in from the edge, inside what a TV's overscan shows), in the picture's letters (two
+   cells each) */
+#define CR_CD_COL 1
+static void cr_cd_line(SgbOut *o, unsigned int glyphBase, unsigned int track)
 {
     char t[41], *p = t;
     const char *s;
-    switch (drive) { /* the CD drive's status (the Sub-CPU's heartbeat, COMM14 bits 12-15) */
-        case 5: s = "CD AUDIO  TRAY OPEN"; break;
-        case 9: s = "CD AUDIO  READING THE DISC"; break;
-        case 0xB: case 0xC: case 0xD: case 0xE: case 0xF: s = "CD AUDIO  NO DISC"; break;
-        default: s = 0;
-    }
-    if (s)
-        while (*s) *p++ = *s++;
-    else {
-        for (s = "TRACK "; *s;) *p++ = *s++;
-        *p++ = (char)('0' + track / 10 % 10);
-        *p++ = (char)('0' + track % 10);
-        *p++ = ' ';
-        *p++ = ' ';
-        s = drive == 1 ? "PLAYING" : drive == 2 || drive == 3 ? "SEEKING" : drive == 4 || player == 2 ? "PAUSED" : "STOPPED";
-        while (*s) *p++ = *s++;
-    }
+    for (s = "TRACK "; *s;) *p++ = *s++;
+    *p++ = (char)('0' + track / 10 % 10);
+    *p++ = (char)('0' + track % 10);
     *p = 0;
-    int n = (int)(p - t), pre = (40 - n) / 2;
+    int n = (int)(p - t), pre = CR_CD_COL;
     for (int half = 0; half < 2; ++half) {
         unsigned short w[40];
         for (int c = 0; c < 40; ++c) {
@@ -107,7 +95,7 @@ void plat_credits()
     }
     MARS_VDP_DISPMODE = (unsigned short)((MARS_VDP_DISPMODE & 0x8000) | MARS_VDP_MODE_256);
     STATE(0x5C84);
-    unsigned int roll = 0, rows = 0, speed = 8, track = 2, player = 0, redraw = 0, drive = 0xFFFF, held = 0xFFFF;
+    unsigned int roll = 0, rows = 0, speed = 8, track = 2, player = 0, redraw = 0, held = 0xFFFF;
     /* the disc's audio tracks: 2 (track 1 is the data track) to the last one tools/build_audio.py made (the template
        reads the count from the disc; this port knows it from engine/CDTracks.inc) */
     unsigned int lastTrack = 2;
@@ -120,6 +108,9 @@ void plat_credits()
 #endif
     unsigned int lastVb = VBLANK_COUNT;
     bool hide = false, lineDirty = true;
+    /* REV R4C: the music from the start (MicroNut99) - the first track plays as the screen opens */
+    sub_cmd(45, (unsigned short)track);
+    player = 1, creditsMusic = true;
     for (;;) {
         plat_pad(); /* the pad request and answer (padRaw: SEGA_CTRL bits) */
         unsigned int raw     = (padRaw & 0xF000) == 0xF000 ? 0 : padRaw & 0x0FFF;
@@ -166,11 +157,6 @@ void plat_credits()
             sub_cmd(54, 0);
             player = 0, lineDirty = true;
         }
-        unsigned int d = SC_COMM14 >> 12;
-        if (d != drive) {
-            drive     = d;
-            lineDirty = true;
-        }
         plasma_draw(160); /* the back buffer's pixels (its line table after the record) */
         plasma_step((int)speed); /* once a frame drawn, as the template's master SH2 */
         /* the roll: a quarter pixel a vertical blank, upwards (the template's 68000 rolls it in its vertical blank; a
@@ -191,7 +177,7 @@ void plat_credits()
             cr_row(&o, SGB_NAME_B, (int)((r + 28) & 31), hide ? crBlankRow : map + (r % rowsTotal) * 40);
         }
         if (lineDirty) {
-            cr_cd_line(&o, glyphBase, track, player, drive);
+            cr_cd_line(&o, glyphBase, track);
             lineDirty = false;
         }
         int len = sgb_out_end(&o, 0, (uint16_t)(px & 0x3FF), crZero, crZero, SCREEN_YSIZE, 0, 0, 0);

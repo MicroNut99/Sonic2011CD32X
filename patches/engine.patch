@@ -614,7 +614,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      byte type;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Debug.cpp engine/Debug.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Debug.cpp	2026-10-17 03:57:33.596375716 -0700
++++ engine/Debug.cpp	2026-10-17 09:13:50.842030512 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +#include <stdarg.h> // PORT32X: was pulled in by SDL.h
@@ -861,7 +861,44 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "SELECT A PLAYER");
                  SetupTextMenu(&gameMenu[1], 0);
-@@ -480,7 +662,12 @@
+@@ -437,6 +619,28 @@
+ 
+         case DEVMENU_STAGESEL: // Selecting Stage
+         {
++#if defined(SONICCD32X)
++            // REV R4C: one row a press; held, the cursor moves on after half a second, then 5 rows a second. The original
++            // repeated every 9 frames from the first one: a press held 9 frames moved two rows (MicroNut99: "way too fast")
++            if (keyDown.down) {
++                if (gameMenu[1].timer < 0)
++                    gameMenu[1].timer = 0;
++                if (++gameMenu[1].timer >= 30) {
++                    gameMenu[1].timer = 18;
++                    keyPress.down     = true;
++                }
++            }
++            else if (keyDown.up) {
++                if (gameMenu[1].timer > 0)
++                    gameMenu[1].timer = 0;
++                if (--gameMenu[1].timer <= -30) {
++                    gameMenu[1].timer = -18;
++                    keyPress.up       = true;
++                }
++            }
++            else
++                gameMenu[1].timer = 0;
++#else
+             if (keyDown.down) {
+                 gameMenu[1].timer += 1;
+                 if (gameMenu[1].timer > 8) {
+@@ -456,6 +660,7 @@
+                     gameMenu[1].timer = 0;
+                 }
+             }
++#endif
+             if (keyPress.down) {
+                 gameMenu[1].selection1++;
+                 if (gameMenu[1].selection1 - gameMenu[1].visibleRowOffset >= gameMenu[1].visibleRowCount) {
+@@ -480,7 +685,12 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX - 4, 40);
              DrawTextMenu(&gameMenu[1], SCREEN_CENTERX + 100, 64);
              if (keyPress.start || keyPress.A) {
@@ -874,7 +911,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  stageMode         = STAGEMODE_LOAD;
                  Engine.gameMode   = ENGINE_MAINGAME;
                  stageListPosition = gameMenu[1].selection1;
-@@ -511,6 +698,10 @@
+@@ -511,6 +721,10 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 72);
              if (keyPress.start || keyPress.A) {
                  stageMode = DEVMENU_MAIN;
@@ -3410,7 +3447,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.cpp	2026-10-17 04:37:09.848427725 -0700
++++ engine/Script.cpp	2026-10-17 09:16:36.964923477 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -3652,7 +3689,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[arrayVal].x; break;
                      case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[arrayVal].y; break;
                      case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[arrayVal].z; break;
-@@ -2826,12 +2932,36 @@
+@@ -2826,12 +2932,37 @@
                      case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[arrayVal].d; break;
                      case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[arrayVal].flags; break;
                      case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[arrayVal].colour; break;
@@ -3685,12 +3722,13 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +                            scdSaveBlocks |= 1u << (arrayVal >> 8);
 +#endif
 +                        scriptEng.operands[i] = saveRAM[arrayVal];
++                        SCD_SAVE_LOG(arrayVal, scriptEng.operands[i], 0); // REV R4C: the PC check's save log
 +                        break;
 +#endif
                      case VAR_ENGINELANGUAGE: scriptEng.operands[i] = Engine.language; break;
                      case VAR_OBJECTSPRITESHEET: {
                          scriptEng.operands[i] = objectScriptList[objectEntityList[arrayVal].type].spriteSheetID;
-@@ -3084,6 +3214,9 @@
+@@ -3084,6 +3215,9 @@
              case FUNC_DRAWSPRITESCREENXY:
                  opcodeSize  = 0;
                  spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
@@ -3700,7 +3738,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  DrawSprite(scriptEng.operands[1] + spriteFrame->pivotX, scriptEng.operands[2] + spriteFrame->pivotY, spriteFrame->width,
                             spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY, scriptInfo->spriteSheetID);
                  break;
-@@ -3094,6 +3227,9 @@
+@@ -3094,6 +3228,9 @@
              case FUNC_DRAWNUMBERS: {
                  opcodeSize = 0;
                  int i      = 10;
@@ -3710,7 +3748,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  if (scriptEng.operands[6]) {
                      while (scriptEng.operands[4] > 0) {
                          int frameID = scriptEng.operands[3] % i / (i / 10) + scriptEng.operands[0];
-@@ -3285,12 +3421,18 @@
+@@ -3285,12 +3422,18 @@
              case FUNC_SPRITEFRAME:
                  opcodeSize = 0;
                  if (scriptSub == SUB_SETUP && scriptFrameCount < SPRITEFRAME_COUNT) {
@@ -3735,7 +3773,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      ++scriptFrameCount;
                  }
                  break;
-@@ -3440,6 +3582,9 @@
+@@ -3440,6 +3583,9 @@
              case FUNC_DRAWSPRITESCREENFX:
                  opcodeSize  = 0;
                  spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
@@ -3745,7 +3783,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  switch (scriptEng.operands[1]) {
                      default: break;
                      case FX_SCALE:
-@@ -3563,6 +3708,7 @@
+@@ -3563,6 +3709,7 @@
                  opcodeSize            = 0;
                  Entity *newEnt        = &objectEntityList[scriptEng.operands[0]];
                  newEnt->type          = scriptEng.operands[1];
@@ -3753,7 +3791,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  newEnt->propertyValue = scriptEng.operands[2];
                  newEnt->XPos          = scriptEng.operands[3];
                  newEnt->YPos          = scriptEng.operands[4];
-@@ -3633,6 +3779,7 @@
+@@ -3633,6 +3780,7 @@
                      scriptEng.arrayPosition[2] = TEMPENTITY_START;
                  Entity *temp         = &objectEntityList[scriptEng.arrayPosition[2]];
                  temp->type           = scriptEng.operands[0];
@@ -3761,7 +3799,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  temp->propertyValue  = scriptEng.operands[1];
                  temp->XPos           = scriptEng.operands[2];
                  temp->YPos           = scriptEng.operands[3];
-@@ -3771,8 +3918,10 @@
+@@ -3771,8 +3919,10 @@
              case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
              case FUNC_DRAW3DSCENE:
                  opcodeSize = 0;
@@ -3774,7 +3812,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  Draw3DScene(scriptInfo->spriteSheetID);
                  break;
              case FUNC_SETIDENTITYMATRIX:
-@@ -3897,9 +4046,24 @@
+@@ -3897,9 +4047,24 @@
                  }
                  break;
              case FUNC_GETTILELAYERENTRY:
@@ -3799,7 +3837,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
                  break;
              case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
-@@ -3923,18 +4087,39 @@
+@@ -3923,18 +4088,39 @@
                  break;
              case FUNC_ADDDRAWLISTENTITYREF: {
                  opcodeSize                                                                                           = 0;
@@ -3841,7 +3879,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  int index = tiles128x128.tileIndex[scriptEng.operands[6]];
                  switch (scriptEng.operands[3]) {
-@@ -3956,9 +4141,17 @@
+@@ -3956,9 +4142,17 @@
                  Copy16x16Tile(scriptEng.operands[0], scriptEng.operands[1]);
                  break;
              case FUNC_SET16X16TILEINFO: {
@@ -3860,7 +3898,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  switch (scriptEng.operands[3]) {
                      case TILEINFO_INDEX:
-@@ -4021,7 +4214,14 @@
+@@ -4021,7 +4215,14 @@
                  TextMenu *menu = &gameMenu[scriptEng.operands[1]];
                  switch (scriptEng.operands[2]) {
                      case TEXTINFO_TEXTDATA:
@@ -3875,7 +3913,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          break;
                      case TEXTINFO_TEXTSIZE: scriptEng.operands[0] = menu->entrySize[scriptEng.operands[3]]; break;
                      case TEXTINFO_ROWCOUNT: scriptEng.operands[0] = menu->rowCount; break;
-@@ -4115,6 +4315,7 @@
+@@ -4115,6 +4316,7 @@
                      case VAR_OBJECTENTITYNO: break;
                      case VAR_OBJECTTYPE: {
                          objectEntityList[arrayVal].type = scriptEng.operands[i];
@@ -3883,7 +3921,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          break;
                      }
                      case VAR_OBJECTPROPERTYVALUE: {
-@@ -4608,7 +4809,16 @@
+@@ -4608,7 +4810,16 @@
                      case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
                      case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
                      case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
@@ -3901,7 +3939,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_TILELAYERTYPE: stageLayouts[arrayVal].type = scriptEng.operands[i]; break;
                      case VAR_TILELAYERANGLE:
                          stageLayouts[arrayVal].angle = scriptEng.operands[i];
-@@ -4636,6 +4846,54 @@
+@@ -4636,6 +4847,54 @@
                      case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
@@ -3956,7 +3994,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
                      case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
                      case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-@@ -4649,12 +4907,34 @@
+@@ -4649,12 +4908,35 @@
                      case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
@@ -3987,12 +4025,13 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +                            scdSaveBlocks |= 1u << (arrayVal >> 8);
 +#endif
 +                        saveRAM[arrayVal] = scriptEng.operands[i];
++                        SCD_SAVE_LOG(arrayVal, scriptEng.operands[i], 1); // REV R4C: the PC check's save log
 +                        break;
 +#endif
                      case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
                      case VAR_OBJECTSPRITESHEET: {
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
-@@ -4704,3 +4984,165 @@
+@@ -4704,3 +4986,165 @@
          }
      }
  }
@@ -4529,7 +4568,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void LoadTextFile(TextMenu *menu, const char *filePath, byte mapCode);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp engine/Userdata.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Userdata.cpp	2026-10-16 18:29:08.118738804 -0700
++++ engine/Userdata.cpp	2026-10-17 09:26:24.300152325 -0700
 @@ -53,10 +53,30 @@
  
  int globalVariablesCount;
@@ -4561,7 +4600,23 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  Achievement achievements[ACHIEVEMENT_COUNT];
  LeaderboardEntry leaderboards[LEADERBOARD_COUNT];
  
-@@ -182,7 +202,22 @@
+@@ -99,6 +119,15 @@
+ {
+     useSGame = false;
+     char buffer[0x180];
++#if RETRO_PLATFORM == RETRO_SCD32X
++    { // PORT32X REV R4C: the console's backup RAM (MicroNut99's option 2: Sonic CD's own file SONICCD32X_)
++        saveRAM[33] = bgmVolume;
++        saveRAM[34] = sfxVolume;
++        int r       = plat_save_read();
++        if (r >= 0)
++            return r != 0;
++    }
++#endif
+ 
+ #if RETRO_USE_MOD_LOADER
+ #if RETRO_PLATFORM == RETRO_UWP
+@@ -182,7 +211,22 @@
              return false;
          useSGame = true;
      }
@@ -4584,7 +4639,23 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
      fClose(saveFile);
      return true;
-@@ -273,7 +308,20 @@
+@@ -191,6 +235,15 @@
+ bool WriteSaveRAMData()
+ {
+     char buffer[0x180];
++#if RETRO_PLATFORM == RETRO_SCD32X
++    { // PORT32X REV R4C: the console's backup RAM (as ReadSaveRAMData)
++        saveRAM[33] = bgmVolume;
++        saveRAM[34] = sfxVolume;
++        int r       = plat_save_write();
++        if (r >= 0)
++            return r != 0;
++    }
++#endif
+     if (!useSGame) {
+ #if RETRO_USE_MOD_LOADER
+ #if RETRO_PLATFORM == RETRO_UWP
+@@ -273,7 +326,20 @@
  #endif
  #endif
  
@@ -4605,7 +4676,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      fClose(saveFile);
      return true;
  }
-@@ -627,6 +675,25 @@
+@@ -627,6 +693,25 @@
  #endif
      }
  
@@ -4631,7 +4702,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      // Loaded here so it can be disabled
  #if RETRO_PLATFORM == RETRO_WIN && _MSC_VER
      if (Engine.useSteamDir) {
-@@ -733,6 +800,7 @@
+@@ -733,6 +818,7 @@
          WriteUserdata();
      }
  
@@ -4639,7 +4710,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      StrCopy(achievements[0].name, "88 Miles Per Hour");
      StrCopy(achievements[1].name, "Just One Hug is Enough");
      StrCopy(achievements[2].name, "Paradise Found");
-@@ -745,6 +813,7 @@
+@@ -745,6 +831,7 @@
      StrCopy(achievements[9].name, "Dr Eggman Got Served");
      StrCopy(achievements[10].name, "Just In Time");
      StrCopy(achievements[11].name, "Saviour of the Planet");
@@ -4649,8 +4720,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void WriteSettings()
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp engine/Userdata.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Userdata.hpp	2026-10-16 18:29:08.118012618 -0700
-@@ -8,15 +8,44 @@
++++ engine/Userdata.hpp	2026-10-17 09:16:36.966715314 -0700
+@@ -8,15 +8,50 @@
  
  #define MOD_COUNT (0x100)
  
@@ -4675,6 +4746,12 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +#if SCD32X_SMALL
 +void scd_save_outside(int index); // PORT32X S5l
 +#endif
++#if RETRO_PLATFORM == RETRO_SCD32X && !defined(SCD32X_SH2)
++void scd_save_log(int index, int value, int write); // REV R4C: the PC check logs the scripts' save slots (plat_host.cpp)
++#define SCD_SAVE_LOG(index, value, write) scd_save_log(index, value, write)
++#else
++#define SCD_SAVE_LOG(index, value, write) ((void)0)
++#endif
 +#if RETRO_PLATFORM == RETRO_SCD32X
 +extern int scdSaveIndexMax;   // PORT32X S5m: the highest save slot a script indexed (read or write)
 +extern uint scdSaveBlocks;    // PORT32X S5n: bit b = a script indexed a slot in [b*256, b*256+255]
@@ -4697,7 +4774,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      int status;
  };
  
-@@ -26,7 +55,11 @@
+@@ -26,7 +61,11 @@
  
  extern int globalVariablesCount;
  extern int globalVariables[GLOBALVAR_COUNT];
@@ -4771,8 +4848,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
-+++ engine/plat.hpp	2026-10-17 04:37:09.846461895 -0700
-@@ -0,0 +1,104 @@
++++ engine/plat.hpp	2026-10-17 09:26:24.299439891 -0700
+@@ -0,0 +1,109 @@
 +#ifndef PLAT_H
 +#define PLAT_H
 +// PORT32X: the platform layer of the Sega CD32X port.
@@ -4838,6 +4915,11 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +void plat_menu_text(const unsigned short *text, int n, int x, int y, int highlight);
 +// REV R4: the credits screen (the Level Select menu's CREDITS line): runs until the player leaves it (B)
 +void plat_credits();
++// REV R4C: the game's save slots (saveRAM) from / to the console's backup RAM (cd32x/engine/scd_save.h: the file
++// SONICCD32X_). 1 done, 0 no save there / not written, -1 not handled here (the PC check without SCD32X_BRAM: the
++// engine's own SData.bin)
++int plat_save_read();
++int plat_save_write();
 +void *plat_cart_data(int kind);
 +// S7a: a file of the data pack was read up to this position (PC builds: the per-stage mini-pack
 +// builder logs it, SCD32X_FILELOG; the SH2 build does not call it)

@@ -1089,6 +1089,62 @@ void plat_sfx_play(int sfx, int)
     if (sfxQueued < 4)
         sfxQueue[sfxQueued++] = sfxMap[sfx];
 }
+// ---------------------------------------------------------------- REV R4C: the game's saves in the backup RAM
+// MicroNut99's option 2: the Sub-CPU keeps the file SONICCD32X_ (512 bytes) - command 56 reads it into its buffer, 57
+// gives one word of the buffer (COMM2 = index, the answer in COMM8), 58 puts one (COMM8 = the value), 59 writes the
+// buffer back as the file (cd32x/sub_main.c, Kobo's K36 commands; no new command). The words: cd32x/engine/scd_save.h.
+// A save the same as the last one written is not written again (the scripts save at every act's end).
+#include "scd_save.h"
+static unsigned int saveLastSum = 0; /* FNV-1a of the words last read or written (0: none yet) */
+static unsigned int save_fnv(const uint16_t *w)
+{
+    unsigned int h = 0x811C9DC5u;
+    for (int i = 0; i < SCD_SAVE_WORDS; ++i) h = (h ^ w[i]) * 0x01000193u;
+    return h | 1u;
+}
+static void save_settle() /* COMM0 free and the pad's answer taken: COMM8 carries the save's words now */
+{
+    comm_idle();
+    if (padPending)
+        pad_take();
+    musicInFlight = false;
+}
+int plat_save_read()
+{
+    uint16_t w[SCD_SAVE_WORDS];
+    save_settle();
+    SC_COMM12 = 0;
+    sub_cmd(56, 0); /* the file into the Sub-CPU's buffer: COMM12 1 = there */
+    if (SC_COMM12 != 1)
+        return 0;
+    for (int i = 0; i < SCD_SAVE_WORDS; ++i) {
+        sub_cmd(57, (unsigned short)i);
+        w[i] = (uint16_t)(SC_COMM8_32 >> 16);
+    }
+    if (!scd_save_unpack(w, saveRAM))
+        return 0; /* not a save of this version: the game starts a new one */
+    saveLastSum = save_fnv(w);
+    return 1;
+}
+int plat_save_write()
+{
+    uint16_t w[SCD_SAVE_WORDS];
+    scd_save_pack(saveRAM, w);
+    unsigned int h = save_fnv(w);
+    if (h == saveLastSum)
+        return 1; /* the same as the file: nothing to write */
+    save_settle();
+    for (int i = 0; i < SCD_SAVE_WORDS; ++i) {
+        SC_COMM8_32 = (unsigned int)w[i] << 16;
+        sub_cmd(58, (unsigned short)i);
+    }
+    SC_COMM12 = 0;
+    sub_cmd(59, 0); /* the buffer -> the file: COMM12 1 = written */
+    if (SC_COMM12 != 1)
+        return 0;
+    saveLastSum = h;
+    return 1;
+}
 #if SCD_DEMO_PAD
 // REV R1 test disc: the PC check's pad (tools/run_md_check.sh) - after 4 s, every 4 s: spin dash
 // (hold down, press C, release), run right 3 s with one jump - so Sonic moves and the camera scrolls.
@@ -1340,6 +1396,18 @@ static int sd_cmd(unsigned short cmd)
     }
     return -1;
 }
+static int sd_cmd_long(unsigned short cmd) SCD_HOT_NOINLINE; /* REV R4C: a run of chunks - waited for until done (no
+                                                                limit: another command while the Sub-CPU works would
+                                                                garble both); 0 */
+static int sd_cmd_long(unsigned short cmd)
+{
+    SC_COMM0 = cmd;
+    while (SC_COMM0 != 0 || SC_COMM0 != 0) { /* twice: a read during the 68000's write is undefined */
+        for (volatile int k = 0; k < 64; ++k) {
+        } /* Kobo HW6: never hammer a COMM register */
+    }
+    return 0;
+}
 static int sd_open_first(unsigned short number) SCD_HOT_NOINLINE; /* open the file, its chunk 0 into the cart */
 static int sd_open_first(unsigned short number)
 {
@@ -1357,21 +1425,58 @@ static int sd_open_first(unsigned short number)
         return -2;
     return SC_COMM12 != 0;
 }
-static int sd_load_list() SCD_HOT_NOINLINE; /* the listed chunks; the number not verified, -2: no answer */
-static int sd_load_list()
+/* REV R4C - FAST LOAD (as the boot loader's scd_load_file, cd32x/sh2_engboot.c): the listed chunks go in runs - up to
+   SCD_CHUNK_RUN consecutive chunks (a chunk of the old image between two listed ones is taken along: reading 32 KB
+   again costs less than another seek) in one Sub-CPU command 46 with COMM2 = first | (more) << 8: one CD read, no
+   read-back; its answer, a checksum of what it read (COMM8), is compared with the cart here (the loader's
+   scd_cart_sum, SDRAM: boot record [8]). A mismatch: the run again chunk by chunk, the old verified way. Cart code from
+   here (REV R4C, not SDRAM): the SH2 must not touch the cart only WHILE a command 46 runs - sd_cmd (SDRAM) waits for it
+   to finish, and its caller runs on after that. */
+#define SCD_CHUNK_RUN 4 /* the Sub-CPU's CHUNK_RUN_MAX (its 128 KB Word RAM bank) */
+typedef unsigned int (*ScdCartSum)(unsigned int at, unsigned int bytes);
+static int sd_load_one(unsigned int c) /* the old way: one chunk, verified by the Sub-CPU; -2 no answer, 1 bad */
 {
-    int bad     = 0;
     SC_COMM8_32 = loadLen;
-    for (int i = 0; i < loadCount; ++i) {
-        SC_COMM2  = loadList[i];
-        SC_COMM12 = 0;
-        if (sd_cmd(46) < 0)
-            return -2;
-        if (SC_COMM12 != 0)
-            bad++;
-        STATE(0x5D00 | (loadList[i] & 0xFF)); /* as the boot loader: 5Dnn = chunk nn */
+    SC_COMM2    = (unsigned short)c;
+    SC_COMM12   = 0;
+    if (sd_cmd(46) < 0)
+        return -2;
+    return SC_COMM12 != 0;
+}
+static int sd_load_list(unsigned int cartAt) /* the listed chunks of the file at cartAt; the number not verified, -2: no
+                                                answer */
+{
+    int bad                = 0;
+    unsigned int sumBase   = SCD_BOOT_RECORD[8]; /* the loader's scd_cart_sum, [9] 'SUM1' (an R4B loader: neither - the
+                                                    old way only) */
+    ScdCartSum cartSum = (SCD_BOOT_RECORD[9] == 0x53554D31u && sumBase >= 0x06000000u && sumBase < 0x06002000u) ? (ScdCartSum)sumBase
+                                                                                                             : (ScdCartSum)0;
+    for (int i = 0; i < loadCount;) {
+        unsigned int first = loadList[i], last = first;
+        int j = i + 1;
+        while (j < loadCount && loadList[j] <= last + 2u && loadList[j] < first + SCD_CHUNK_RUN) last = loadList[j++];
+        bool ok = false;
+        if (last > first && cartSum) {
+            unsigned int from = first << 15, to = (last + 1) << 15;
+            if (to > loadLen)
+                to = loadLen;
+            SC_COMM8_32 = loadLen;
+            SC_COMM2    = (unsigned short)(first | (last - first) << 8);
+            SC_COMM12   = 0xFFFF;
+            if (sd_cmd_long(46) < 0)
+                return -2;
+            ok = SC_COMM12 == 0 && SC_COMM8_32 == cartSum(cartAt + from, (to - from + 2047u) & ~2047u);
+        }
+        for (unsigned int c = first; !ok && c <= last; ++c) {
+            int r = sd_load_one(c);
+            if (r < 0)
+                return -2;
+            bad += r;
+        }
+        i = j;
+        STATE(0x5D00 | (last & 0xFF)); /* as the boot loader: 5Dnn = chunk nn */
 #if SCD_PLANES
-        splash_chunk((unsigned int)i + 1, (unsigned int)loadCount); /* REV R4B: the loading bar (cart code: the cart is free) */
+        splash_chunk((unsigned int)i, (unsigned int)loadCount); /* REV R4B: the loading bar (cart code: the cart is free) */
 #endif
     }
     return bad;
@@ -1387,7 +1492,7 @@ static int sd_load_whole(unsigned short number, unsigned int *bytes) /* REV R4B:
     unsigned int total = (loadLen + 32767u) >> 15;
     loadCount          = 0;
     for (unsigned int c = 1; c < total && c < SCD_CHUNKS_MAX; ++c) loadList[loadCount++] = (unsigned short)c;
-    int bad = sd_load_list();
+    int bad = sd_load_list(0x380000u); /* (act files only: SGB_CART_OFFSET) */
     *bytes  = loadLen;
     return r + (bad < 0 ? 1 : bad);
 }
@@ -1425,7 +1530,7 @@ static int scene_load(unsigned int file) /* the scene's image into the cart: 0 =
 #if SCD_PLANES
     splash_part(0, 20); /* REV R4B: the loading bar's first part (the act file fills the rest) */
 #endif
-    int bad = sd_load_list();
+    int bad = sd_load_list(0x080000u); /* (the scene image's place: CART_STAGE) */
     if (bad != 0)
         scene_stop(0x5CE2, "BAD LOAD ", file);
     *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */

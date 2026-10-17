@@ -862,6 +862,63 @@ void plat_sprite(int kind, int sheet, int sx, int sy, int w, int h, int x, int y
     md_sprite_draw(kind, sheet, sx, sy, w, h, x, y, dir, rot, px, py);
 }
 void plat_layout_set(int layer, int x, int y) { md_layout_set(layer, x, y); } // REV R4B
+// REV R4C: SCD32X_BRAM=file - the console's backup-RAM save (cd32x/engine/scd_save.h, 512 bytes, big-endian words) in
+// place of the engine's SData.bin: the same packing as the SH2's plat_save_*
+#include "../cd32x/engine/scd_save.h"
+int plat_save_read()
+{
+    const char *p = getenv("SCD32X_BRAM");
+    if (!p || !*p)
+        return -1;
+    FILE *f = fopen(p, "rb");
+    if (!f) {
+        md_log("SAVE read from %s: no file", p);
+        return 0;
+    }
+    unsigned char b[2 * SCD_SAVE_WORDS];
+    size_t n = fread(b, 1, sizeof b, f);
+    fclose(f);
+    if (n != sizeof b)
+        return 0;
+    uint16_t w[SCD_SAVE_WORDS];
+    for (int i = 0; i < SCD_SAVE_WORDS; ++i) w[i] = (uint16_t)(b[2 * i] << 8 | b[2 * i + 1]);
+    bool ok = scd_save_unpack(w, saveRAM);
+    md_log("SAVE read from %s: %s", p, ok ? "ok" : "not a save");
+    return ok ? 1 : 0;
+}
+int plat_save_write()
+{
+    const char *p = getenv("SCD32X_BRAM");
+    if (!p || !*p)
+        return -1;
+    uint16_t w[SCD_SAVE_WORDS];
+    int used = scd_save_pack(saveRAM, w);
+    unsigned char b[2 * SCD_SAVE_WORDS];
+    for (int i = 0; i < SCD_SAVE_WORDS; ++i) b[2 * i] = (unsigned char)(w[i] >> 8), b[2 * i + 1] = (unsigned char)w[i];
+    FILE *f = fopen(p, "wb");
+    if (!f)
+        return 0;
+    fwrite(b, 1, sizeof b, f);
+    fclose(f);
+    md_log("SAVE written to %s: %d of %d words", p, used, SCD_SAVE_WORDS);
+    return 1;
+}
+// REV R4C: SCD32X_SAVELOG=file - every save slot a script reads or writes: frame, list:scene, R/W, slot, value
+void scd_save_log(int index, int value, int write)
+{
+    static FILE *f   = NULL;
+    static bool once = false;
+    if (!once) {
+        once          = true;
+        const char *p = getenv("SCD32X_SAVELOG");
+        if (p && *p)
+            f = fopen(p, "w");
+    }
+    if (f) {
+        fprintf(f, "%u %d:%d %c %d %d\n", frameCount, activeStageList, stageListPosition, write ? 'W' : 'R', index, value);
+        fflush(f);
+    }
+}
 void plat_draw_log(const char *function, int sheet, int pixels)
 {
     static bool on = getenv("SCD32X_DRAWLOG") != NULL;

@@ -168,7 +168,19 @@ void print_diag(char *temp, const char *msg, int x, int y) {
 #define CART_IMG_BASE   0x000000
 #define CART_SLOT       0x20000
 #define CMD_CHUNK_TO_CART 46
-#define CMD_CART_TO_FB    47             
+#define CHUNK_RUN_MAX     4              /* SONIC REV R4C: chunks per fast CMD 46 - this side's 128 KB Word RAM bank */
+#define CMD_CART_TO_FB    47
+/* SONIC REV R4C: the fast CMD 46's checksum of the bytes read (the SH2 computes the same over the cart, as big-endian
+   32-bit words: cd32x/engine/plat_mars.cpp, cd32x/sh2_engboot.c load_sum) */
+static uint32_t load_sum(const uint32_t *p, uint32_t longs)
+{
+    uint32_t a = 0, b = 0;
+    while (longs--) {
+        a += *p++;
+        b += a;
+    }
+    return a ^ ((b << 13) | (b >> 19));
+}
 static int cur_img = 0;
 static int g_nexc = 0;                   
 
@@ -338,6 +350,9 @@ static int pcm_load(void) {
 
 /* =====================================================================================
  * K36 BACKUP RAM (Sega CD internal) - high scores + options, one 128-byte file.
+ *   SONIC REV R4C (MicroNut99's option 2): the file is Sonic CD's own - SONICCD32X_, 512 bytes (8 blocks): the
+ *   engine packs the game's save files, options and time attack records into its 256 words
+ *   (cd32x/engine/plat_mars.cpp, plat_save_*); CMD 57 / 58 reach all 256 words.
  *   BIOS entry _BURAM = 0x5F16: d0 = function, a0/a1 = parameters, carry set = error.
  *   BRMINIT 0 (a0 = 0x640-byte work area, a1 = 12-byte string buffer), BRMREAD 3 (a0 = 11-char
  *   file name, a1 = buffer), BRMWRITE 4 (a0 = name(11) + mode(1: 0 = normal) + blocks(word,
@@ -345,11 +360,11 @@ static int pcm_load(void) {
  *   The SH2 exchanges the 128 bytes one word at a time over COMM (CMD 57 get / 58 put) - no
  *   frame buffer, no Word RAM, only at start-up and after a game.
  * ===================================================================================== */
-#define BRAM_BYTES 128
+#define BRAM_BYTES 512                   /* SONIC REV R4C: 128 (Kobo's) -> 512 */
 static uint8_t bram_work[0x640];
 static uint8_t bram_str[16];
 static uint8_t bram_buf[BRAM_BYTES];
-static const char bram_name[12] = "KOBODELUXE_";
+static const char bram_name[12] = "SONICCD32X_";   /* SONIC REV R4C: Sonic CD's own file (was KOBODELUXE_) */
 static uint8_t bram_param[14];
 static int bram_ready = 0;
 
@@ -721,6 +736,39 @@ int main(void)
             }
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0); 
         }
+        else if (cmd == CMD_CHUNK_TO_CART && (do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 0xFF00)) {
+            /* SONIC REV R4C - FAST LOAD: COMM2 = first chunk | (more chunks) << 8 - up to CHUNK_RUN_MAX chunks of the
+               open file in ONE CD read (one seek instead of one a chunk) into this side's Word RAM bank (128 KB), then
+               into the cart as below, without the read-back: the reply is a checksum of what was read (COMM8, 32-bit,
+               load_sum) and the SH2 checks the cart against it - a mismatch, and it loads those chunks again one at a
+               time the old way (COMM2 high byte 0: the verified path below, unchanged). COMM12 = 0 done, 1 nothing read. */
+            int arg = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
+            int length = do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
+            int chunk = arg & 0xFF, count = ((arg >> 8) & 0xFF) + 1;
+            int off, n = 0, bytes, p;
+            uint32_t coff, sum = 0;
+            if (count > CHUNK_RUN_MAX) count = CHUNK_RUN_MAX;
+            off = chunk * 32768;
+            coff = CART_IMG_BASE + (uint32_t)cur_img * CART_SLOT + (uint32_t)off;
+            if (off < length) n = (length - off + 2047) / 2048;
+            if (n > 16 * count) n = 16 * count;
+            bytes = n * 2048;
+            if (n > 0) {
+                scd_sub_read((void *)0x0C0000, saved_lba + chunk * 16, n);
+                sum = load_sum((const uint32_t *)0x0C0000, (uint32_t)bytes >> 2);
+                switch_banks();
+                for (p = 0; p < bytes; p += 0x4000)
+                    do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, 0x400000 + coff + p, 0x200000 + p,
+                               bytes - p < 0x4000 ? bytes - p : 0x4000);
+                switch_banks();
+            }
+            sprintf(tbuf, "CART I%d C%d-%d @%06lX %s          ", cur_img, chunk, chunk + count - 1,
+                    (unsigned long)(0x400000 + coff), n == 0 ? "EMPTY" : "FAST");
+            print_diag(temp, tbuf, 2, 13);
+            do_md_cmd2(MD_CMD_WRITE_32X_32, 0xA15128, (int)sum);
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, n > 0 ? 0 : 1);
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
+        }
         else if (cmd == CMD_CHUNK_TO_CART) {
             int chunk = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
             int length = do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
@@ -914,9 +962,10 @@ int main(void)
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
         }
         else if (cmd == 57 || cmd == 58) {
-            /* K36 - CMD 57 get / CMD 58 put one word of the 128-byte buffer: COMM2 = word index,
-               COMM8 = value (58: written by the SH2 before the command; 57: our reply). */
-            int wi = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 63;
+            /* K36 - CMD 57 get / CMD 58 put one word of the buffer: COMM2 = word index,
+               COMM8 = value (58: written by the SH2 before the command; 57: our reply).
+               SONIC REV R4C: 256 words (BRAM_BYTES 512) */
+            int wi = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & (BRAM_BYTES / 2 - 1);
             if (cmd == 58) {
                 int v = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15128);
                 bram_buf[wi * 2] = (uint8_t)(v >> 8); bram_buf[wi * 2 + 1] = (uint8_t)v;
