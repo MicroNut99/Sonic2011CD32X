@@ -7,7 +7,7 @@ For each stage the PC host build loads it (a few frames) and writes its PC cart 
 converts that to the SH2 image (big-endian, trimmed) - out/<folder>_<id>.bin. The report
 (out/cart_budget.md) gives each image's size, each act's total over its time periods (A-D: time
 travel must not need the CD), and the parts that are byte-identical in every stage (store once)."""
-import hashlib, os, re, struct, subprocess, sys, tempfile
+import atexit, hashlib, os, re, shutil, struct, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +80,7 @@ def main():
         sys.exit(1)
     gc = sr.parse_gameconfig(sr.Data(data).read("Data/Game/GameConfig.bin"))
     tmp = tempfile.mkdtemp()
+    atexit.register(shutil.rmtree, tmp, True)  # REV R4: removed however the run ends (hundreds of MB)
     jobs = [(cat, pos, folder, sid, data, tmp, outdir, player) for cat in (1, 3, 0) for pos, (folder, sid, name) in enumerate(gc["lists"].get(cat, []))
             if not only or folder.upper() in only]
     with ThreadPoolExecutor(max_workers=jobsN) as pool:

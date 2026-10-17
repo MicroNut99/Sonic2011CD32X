@@ -26,6 +26,9 @@ extern "C" {
 #ifndef SCD_SCENE_CHECK
 #define SCD_SCENE_CHECK 0 /* R1D */
 #endif
+#ifndef SCD_DEVMENU
+#define SCD_DEVMENU 1 /* REV R4: the game starts in the dev menu (engine/Debug.cpp: level select, test switches) */
+#endif
 /* R1C: the loader's PC sampler (sh2_engboot.c, boot record [7] = &scdSampling). On, every 30 vertical
    blanks line 10 shows where the SH2 is: 8xxx = cart code 0x02000000 + xxx * 16, 7xxx = SDRAM. Only on
    while nothing waits for a COMM12 reply (scene loads and SH2 command 68 use COMM12). */
@@ -153,6 +156,8 @@ static char *hex(char *p, unsigned v, int digits)
 // S7b5: time = frames counted by the vertical-blank interrupt (as Kobo: interrupts on)
 unsigned int plat_ticks_ms() { return VBLANK_COUNT * 1000 / 60; }
 static unsigned int presented = 0;
+int scdDemoPad                    = 0; /* REV R4: the dev menu's DEMO PAD switch (engine/plat.hpp) */
+static unsigned int scdDemoFrom   = 0; /* the frame the stage started: the scripted pad starts from it */
 
 #if SCD_PLANES
 // ---------------------------------------------------------------- REV R1: the Genesis planes
@@ -191,8 +196,10 @@ static void sgb_pause()
     for (volatile int k = 0; k < 64; ++k) {
     } /* Kobo HW6: pause between COMM reads */
 }
+static void comm_idle();
 static int sgb_cmd(unsigned short op, unsigned int arg) /* SH2 command 68 -> reply (COMM12) */
 {
+    comm_idle(); /* REV R4: the pad request answered first */
     SC_COMM2    = op;
     SC_COMM8_32 = arg;
     SC_COMM12   = 0xFFFF;
@@ -212,12 +219,16 @@ static void sgb_take_fb() /* Kobo take_fb */
     while ((MARS_SYS_INTMSK & 0x8000) == 0) {
     }
 }
+static bool menuOn = false; /* REV R4: the dev menu's text on plane A (below) */
+static void fb_clear(unsigned int at, int bytes);
 static void planes_off()
 {
-    if (!planesOn)
+    if (!planesOn && !menuOn)
         return;
     planesOn = false;
+    menuOn   = false;
     sgb_cmd(2, 0); /* the listener's own picture back (text, for the loading lines) */
+    SC_COMM4 = 0;  /* REV R4: the last record id - the Sub-CPU took it for a start-up fault ("SH2 NEVER EVEN REACHED") */
 }
 /* REV R3: Tails. A scene played as Tails (the game's character choice: playerListPos 1) has files of its own,
    numbered 128 on: its scene image L<list>S<pos + 128>.IMG (the cart image holds the scene's animation files and
@@ -232,6 +243,7 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
     unsigned int file  = 0x1000 + (((unsigned int)activeStageList + 1) << 8) + (unsigned int)stageListPosition + player_files();
     unsigned int bytes = 0;
     STATE(0x5C60); /* R1C: the MDG load starts */
+    comm_idle();   /* REV R4: the pad request answered first */
     int bad            = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
     if (bad < 0) {
         STATE(0x5C61);
@@ -273,6 +285,27 @@ static bool sgb_shows(int slots, bool front)
         if ((slots >> s & 1) && (s >= tLayerMidPoint) == front)
             return true;
     return false;
+}
+/* the frame's record (built in the frame buffer) to the 68000: give_fb, COMM4 = id; the 68000 copies it and answers
+   COMM6 = id; take_fb. REV R4: shared with the dev menu (inlined into both) */
+static inline __attribute__((always_inline)) void rec_handover()
+{
+    recId = (unsigned short)(recId + 1);
+    if (!recId)
+        recId = 1;
+    sgb_give_fb();
+    SC_COMM4 = recId;
+    unsigned int n = 0;
+    for (; n < 400000u; ++n) { /* the same answer twice: a read during the 68000's write is undefined */
+        if (SC_COMM6 == recId && SC_COMM6 == recId)
+            break;
+        sgb_pause();
+    }
+    sgb_take_fb();
+    if (n >= 400000u) {
+        planes_off();
+        STATE(0x5C64);
+    }
 }
 static void planes_frame() SCD_HOT; /* PORT32X R1V: every frame - SDRAM (RetroEngine.hpp SCD_HOT) */
 static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.cpp sgb_frame) */
@@ -355,25 +388,106 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
         mds_forget(&sprites); /* REV R3: its pattern uploads never reached the VRAM */
         return;
     }
-    /* hand it over: give_fb, COMM4 = id; the 68000 copies it and answers COMM6 = id; take_fb */
-    recId = (unsigned short)(recId + 1);
-    if (!recId)
-        recId = 1;
-    sgb_give_fb();
-    SC_COMM4 = recId;
-    unsigned int n = 0;
-    for (; n < 400000u; ++n) { /* the same answer twice: a read during the 68000's write is undefined */
-        if (SC_COMM6 == recId && SC_COMM6 == recId)
-            break;
-        sgb_pause();
-    }
-    sgb_take_fb();
-    if (n >= 400000u) {
-        planes_off();
-        STATE(0x5C64);
+    rec_handover();
+}
+// ---------------------------------------------------------------- REV R4: the dev menu on plane A
+// The engine's dev menu (engine/Debug.cpp) draws its text entries every frame (plat_menu_text). The SH2 keeps the
+// frame's text as plane A name words (40 x 28) and the words plane A shows, both in the frame buffer's record area after
+// the record (a menu record is small: at most a word per character), and sends what changed as a plane record
+// (md/sgb.h), the act files' way. The font: G0S255.MDG (tools/build_game_data.py - the game's own 8 x 8 font,
+// SystemText.gif, as Genesis cells: character c is cell 1 + c, highlighted 257 + c), loaded into the act file slot
+// and set up by command 68 as an act file. Status codes: 5C70 font load, 5C71 not on the disc, 5C72 its header bad,
+// 5C73 command 68 refused it, 5C74 the menu shows.
+#define MENU_FILE 0x11FF /* G0S255.MDG */
+#define MENU_COLS 40
+#define MENU_ROWS 28
+#define MENU_REC_MAX 3072 /* words: the record, before the two text copies */
+#define MENU_CUR ((volatile unsigned short *)0x24001800)
+#define MENU_SHOWN ((volatile unsigned short *)(0x24001800 + 2 * MENU_COLS * MENU_ROWS))
+static bool menuDrawn = false, menuFailed = false;
+void plat_menu_clear()
+{
+    if (Engine.gameMode != ENGINE_DEVMENU)
+        return;
+    for (int i = 0; i < MENU_COLS * MENU_ROWS; ++i) MENU_CUR[i] = 0;
+    menuDrawn = true;
+}
+void plat_menu_text(const unsigned short *t, int n, int x, int y, int highlight)
+{
+    if (!menuDrawn || y < 0 || (y >> 3) >= MENU_ROWS)
+        return;
+    volatile unsigned short *row = MENU_CUR + (y >> 3) * MENU_COLS;
+    int col                      = (x + 4) >> 3; /* the menus' half-cell positions (centred, right-aligned): the nearest cell */
+    for (int i = 0; i < n; ++i, ++col) {
+        unsigned int c = t[i] & 0xFF;
+        if (col >= 0 && col < MENU_COLS)
+            row[col] = (unsigned short)(c == ' ' ? 0 : 1 + c + (highlight ? 256 : 0));
     }
 }
+static bool menu_on()
+{
+    if (menuFailed)
+        return false;
+    planes_off(); /* a stage's planes (the A + B + C + START way back) */
+    unsigned int bytes = 0;
+    STATE(0x5C70);
+    comm_idle();
+    int bad = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)MENU_FILE, &bytes);
+    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
+    const unsigned char *f                = SGB_FILE;
+    if (bad != 0 || *(const unsigned int *)f != SGB_MAGIC || *(const unsigned short *)(f + 4) != SGB_VERSION ||
+        *(const unsigned int *)(f + 8) != bytes) {
+        STATE(bad < 0 ? 0x5C71 : 0x5C72);
+        menuFailed = true; /* not again every frame: each try reads the disc */
+        return false;
+    }
+    SC_COMM4 = 0;
+    if (sgb_cmd(1, SGB_CART_OFFSET) != 1) {
+        STATE(0x5C73);
+        menuFailed = true;
+        return false;
+    }
+    for (int i = 0; i < MENU_COLS * MENU_ROWS; ++i) MENU_SHOWN[i] = 0; /* command 68 cleared the planes */
+    for (int i = 0; i < SCREEN_YSIZE; ++i) hsA[i] = hsB[i] = 0;
+    menuOn            = true;
+    MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000); /* 32X layer blank: the Genesis shows */
+    STATE(0x5C74);
+    return true;
+}
+static void menu_frame()
+{
+    menuDrawn = false;
+    if (!menuOn && !menu_on())
+        return;
+    SgbOut o;
+    sgb_out_begin(&o, SGB_FB_REC, MENU_REC_MAX);
+    for (int r = 0; r < MENU_ROWS; ++r)
+        for (int c = 0; c < MENU_COLS; ++c) {
+            int i            = r * MENU_COLS + c;
+            unsigned short w = MENU_CUR[i];
+            if (w != MENU_SHOWN[i]) {
+                MENU_SHOWN[i] = w;
+                sgb_write(&o, (uint16_t)(SGB_NAME_A + 2 * (r * 64 + c)), w);
+            }
+        }
+    if (sgb_out_end(&o, 0, 0, hsA, hsB, SCREEN_YSIZE, 0, 0, 0) < 0) {
+        for (int i = 0; i < MENU_COLS * MENU_ROWS; ++i) MENU_SHOWN[i] = 0xFFFF; /* not sent: all of it next frame */
+        return;
+    }
+    rec_handover();
+}
+#else
+void plat_menu_clear() {}
+void plat_menu_text(const unsigned short *, int, int, int, int) {}
 #endif
+bool plat_boot_menu() /* REV R4 */
+{
+#if SCD_PLANES
+    return SCD_DEVMENU != 0;
+#else
+    return false;
+#endif
+}
 #if SCD32X_DRAWCART
 static void draw_show(); // S7e (below)
 #endif
@@ -402,7 +516,9 @@ void plat_present(const unsigned short *, int, int, int)
 #endif
 #else
 #if SCD_PLANES
-    if (planesOn)
+    if (menuDrawn)
+        menu_frame(); /* REV R4: the dev menu drew its text this frame (cart code: the menu needs no speed) */
+    else if (planesOn)
         planes_frame(); /* REV R1 */
 #endif
     unsigned int f = VBLANK_COUNT;
@@ -475,13 +591,178 @@ static void draw_show() /* convert to the 32X's 15-bit colours, line table, show
 #endif
 }
 #endif
+// REV R4: the controller (pad 1). The 68000's vertical-blank handler reads both pads into its comm words (hw_md.s);
+// the Sub-CPU answers SH2 command 48 with pad 1 in COMM8's high word (SEGA_CTRL_* bits, sub_main.c's fast path) -
+// Kobo's pad path, unchanged. One request a frame, answered while the engine runs: each frame takes the answer to
+// the previous frame's request (a frame late, as most Genesis games read their pads). COMM0 is one register: every
+// other command waits for that answer first (comm_idle).
+static bool padPending     = false;
+static unsigned int padNow = 0;
+static unsigned int padRaw = 0xF000; /* REV R4: the answer as it came (SEGA_CTRL_* bits; 0xF000 none) - the credits read X, Z */
+static void pad_take() /* the answer: SEGA_CTRL_* -> the engine's PAD_* (a six-button pad's X, Y, Z as A, B, C) */
+{
+    unsigned int s = SC_COMM8_32 >> 16, p;
+    padPending     = false;
+    padRaw         = s;
+    if ((s & 0xF000) == 0xF000) { /* SEGA_CTRL_NONE: no pad in port 1 */
+        padNow = 0;
+        return;
+    }
+    p = s & 0x0F; /* up, down, left, right */
+    if (s & 0x0440)
+        p |= PAD_A; /* A, X */
+    if (s & 0x0210)
+        p |= PAD_B; /* B, Y */
+    if (s & 0x0120)
+        p |= PAD_C; /* C, Z */
+    if (s & 0x0080)
+        p |= PAD_START;
+    padNow = p;
+}
+static bool comm0_free() { return SC_COMM0 == 0 && SC_COMM0 == 0; } /* twice: a read during the 68000's write is undefined */
+static bool musicInFlight = false; /* REV R4: a music command (45 / 54) sent, not waited for */
+static void comm_idle()                                             /* COMM0 free for another command */
+{
+    for (unsigned int n = 0; n < 2000000u && !comm0_free(); ++n) sgb_pause();
+    if (padPending)
+        pad_take();
+    musicInFlight = false;
+}
+// ---------------------------------------------------------------- REV R4: music and sound effects
+// Music: the game's tracks are CD audio tracks on the disc (tools/build_audio.py: the JP soundtrack and the past
+// tracks, from the game's own files; engine/CDTracks.inc maps each file name - US names to the same tracks - to its
+// track number and length). The Sub-CPU plays a track over and over (command 45) and stops (54); a track the game does
+// not loop (the act's end, game over) is stopped after its length. The commands go out in the pad request's place,
+// not waited for: no frame waits for the CD drive.
+// Sound effects: the Sega CD's PCM chip, from the Sub-CPU (Kobo's path: KOBOSFX.BIN loaded once by command 53; an effect
+// number in the upper byte of the pad request plays it). engine/SFXBank.inc maps the game's effect file names to the
+// bank's numbers; each effect's PCM step comes from its sample rate and the chip's own clock (32,552 Hz at step 0x800),
+// so it plays at the game's pitch. One effect a frame; up to 4 wait.
+#if __has_include("../../engine/CDTracks.inc")
+struct ScdTrack {
+    const char *name;
+    unsigned char track;
+    unsigned short seconds;
+};
+#include "../../engine/CDTracks.inc" /* scdTracks[], scdTrackCount (tools/build_audio.py; game data - not published) */
+#define SCD_HAVE_TRACKS 1
+#else
+#define SCD_HAVE_TRACKS 0
+#endif
+#if __has_include("../../engine/SFXBank.inc")
+struct ScdSfx {
+    const char *name;
+    unsigned char id;
+};
+#include "../../engine/SFXBank.inc" /* scdSfxBank[], scdSfxBankCount */
+#define SCD_HAVE_SFX 1
+#else
+#define SCD_HAVE_SFX 0
+#endif
+static void sub_cmd(unsigned short cmd, unsigned short arg) /* a Sub-CPU command, waited for (45 play, 54 stop, 53 ...) */
+{
+    comm_idle();
+    SC_COMM2 = arg;
+    SC_COMM0 = cmd;
+    for (unsigned int n = 0; n < 4000000u && !comm0_free(); ++n) sgb_pause();
+}
+static bool creditsMusic = false;                 /* a track the credits screen started may still play */
+static unsigned short musicCmd = 0, musicArg = 0; /* the music command to send (0 none) */
+static unsigned char musicTrack = 0;              /* the track playing (0 none) */
+static unsigned int musicStopAt = 0;              /* the vertical blank a track the game does not loop ends at (0: loops) */
+static unsigned char sfxMap[0x100];               /* the engine's effect number -> the bank's (0: none) */
+static unsigned char sfxQueue[4], sfxQueued = 0;
+static bool sfxBankLoaded = false;
+static bool name_is(const char *a, const char *b) /* the same name, any case */
+{
+    for (;; ++a, ++b) {
+        char x = *a, y = *b;
+        if (x >= 'a' && x <= 'z')
+            x = (char)(x - 32);
+        if (y >= 'a' && y <= 'z')
+            y = (char)(y - 32);
+        if (x == '\\')
+            x = '/';
+        if (y == '\\')
+            y = '/';
+        if (x != y)
+            return false;
+        if (!x)
+            return true;
+    }
+}
+static void music_send(unsigned short cmd, unsigned short arg) /* the latest wins (a stop after a play: nothing plays) */
+{
+    musicCmd = cmd;
+    musicArg = arg;
+}
+void plat_music_play(const char *name, int loop, unsigned int)
+{
+#if SCD_HAVE_TRACKS
+    for (int i = 0; i < scdTrackCount; ++i)
+        if (name_is(name, scdTracks[i].name)) {
+            music_send(45, scdTracks[i].track);
+            musicTrack  = scdTracks[i].track;
+            musicStopAt = loop ? 0 : (VBLANK_COUNT + 60u * scdTracks[i].seconds + 30u) | 1u;
+            return;
+        }
+#endif
+    plat_music_stop(); /* a track the disc does not have: silence */
+}
+void plat_music_stop()
+{
+    if (musicTrack || musicCmd == 45) {
+        music_send(54, 0);
+        musicTrack  = 0;
+        musicStopAt = 0;
+    }
+}
+void plat_sfx_loaded(int sfx, const char *name, int, int, int, int) /* the engine loaded effect number sfx (its file name) */
+{
+    if (sfx < 0 || sfx >= 0x100)
+        return;
+    sfxMap[sfx] = 0;
+#if SCD_HAVE_SFX
+    for (int i = 0; i < scdSfxBankCount; ++i)
+        if (name_is(name, scdSfxBank[i].name)) {
+            sfxMap[sfx] = scdSfxBank[i].id;
+            break;
+        }
+#endif
+}
+static void audio_before_load() /* REV R4: a scene load reads the CD - the drive stops playing; the effects' bank, once */
+{
+    musicCmd = 0;
+    if (musicTrack || musicInFlight || creditsMusic) {
+        sub_cmd(54, 0);
+        musicTrack = 0, musicStopAt = 0, creditsMusic = false;
+    }
+    if (!sfxBankLoaded) {
+        SC_COMM12 = 0;
+        sub_cmd(53, 0); /* KOBOSFX.BIN -> the PCM chip; COMM12 = the number of effects */
+        sfxBankLoaded = SC_COMM12 > 0 && SC_COMM12 < 32;
+        STATE(sfxBankLoaded ? 0x5C18 : 0x5C19); /* line 10: the effects are in (5C18) / not on the disc (5C19) */
+    }
+    sfxQueued = 0;
+}
+void plat_sfx_play(int sfx, int)
+{
+    if (sfx < 0 || sfx >= 0x100 || !sfxMap[sfx] || !sfxBankLoaded)
+        return;
+    for (int i = 0; i < sfxQueued; ++i)
+        if (sfxQueue[i] == sfxMap[sfx])
+            return; /* already waiting */
+    if (sfxQueued < 4)
+        sfxQueue[sfxQueued++] = sfxMap[sfx];
+}
 #if SCD_DEMO_PAD
 // REV R1 test disc: the PC check's pad (tools/run_md_check.sh) - after 4 s, every 4 s: spin dash
-// (hold down, press C, release), run right 3 s with one jump - so Sonic moves and the camera scrolls
-unsigned int plat_pad() SCD_HOT; /* R1W: SDRAM */
-unsigned int plat_pad()
+// (hold down, press C, release), run right 3 s with one jump - so Sonic moves and the camera scrolls.
+// REV R4: it plays only while the dev menu's DEMO PAD switch is on (scdDemoPad), from the stage's start, until a
+// button is pressed on the controller.
+static unsigned int demo_pad()
 {
-    unsigned int ms = presented * 1000 / 60;
+    unsigned int ms = (presented - scdDemoFrom) * 1000 / 60;
     if (ms < 4000)
         return 0;
     unsigned int t = (ms - 4000) % 4000;
@@ -493,13 +774,50 @@ unsigned int plat_pad()
     if (t < 3900) return PAD_RIGHT;
     return 0;
 }
-#else
-unsigned int plat_pad() { return 0; }
 #endif
-void plat_music_play(const char *, int, unsigned int) {}
-void plat_music_stop() {}
-void plat_sfx_play(int, int) {}
-void plat_sfx_loaded(int, const char *, int, int, int, int) {}
+unsigned int plat_pad() SCD_HOT; /* R1W: SDRAM */
+unsigned int plat_pad()
+{
+    if (padPending && comm0_free())
+        pad_take();
+    if (musicInFlight && comm0_free())
+        musicInFlight = false;
+    if (musicStopAt && (int)(VBLANK_COUNT - musicStopAt) >= 0) /* REV R4: a track the game does not loop has ended */
+        plat_music_stop();
+    if (!padPending && !musicInFlight && comm0_free()) {
+        if (musicCmd) { /* REV R4: a music command in the request's place this frame */
+            SC_COMM2      = musicArg;
+            SC_COMM0      = musicCmd;
+            musicCmd      = 0;
+            musicInFlight = true;
+        }
+        else {
+            unsigned int fx = 0;
+            if (sfxQueued) { /* REV R4: the next sound effect in the request's upper byte */
+                fx = sfxQueue[0];
+                for (int i = 1; i < sfxQueued; ++i) sfxQueue[i - 1] = sfxQueue[i];
+                sfxQueued--;
+            }
+            SC_COMM0   = (unsigned short)(48 | fx << 8);
+            padPending = true;
+        }
+    }
+#if SCD_PLANES && SCD_DEVMENU
+    if ((padNow & (PAD_A | PAD_B | PAD_C | PAD_START)) == (PAD_A | PAD_B | PAD_C | PAD_START) && Engine.gameMode == ENGINE_MAINGAME)
+        Engine.gameMode = ENGINE_INITDEVMENU; /* REV R4: A + B + C + START - back to the dev menu */
+#endif
+#if SCD_DEMO_PAD
+    static unsigned int padHeld = 0; /* the buttons held last frame */
+    unsigned int pressed        = padNow & ~padHeld;
+    padHeld                     = padNow;
+    if (scdDemoPad && Engine.gameMode == ENGINE_MAINGAME) {
+        if (!pressed)
+            return demo_pad();
+        scdDemoPad = 0; /* a button pressed in a stage: the controller from now on (the menu's own presses do not count) */
+    }
+#endif
+    return padNow;
+}
 #if SCD_PLANES
 // REV R1: each drawn layer slot's scroll (DrawHLineScrollLayer) - layer 0 (the foreground) for
 // plane A, the first other layer for plane B (two background layers at once: no record)
@@ -591,6 +909,28 @@ void *plat_cart_data(int kind)
         plat_fatal("CART IMG BAD");
     return (void *)(img + h[3 + 5 * kind]);
 }
+// REV R4: the scene's own scripts as native code: the image's part 18, when it has one (engine/Script.cpp binds it if
+// it was linked against this engine and made from this bytecode)
+const void *plat_native_blob()
+{
+    const unsigned int *h = (const unsigned int *)CART_STAGE;
+    if (h[0] != 0x53434342u || h[1] != 2 || h[2] <= SCD_CART_NATIVE || h[3 + 5 * SCD_CART_NATIVE + 1] == 0)
+        return (const void *)0;
+    return CART_STAGE + h[3 + 5 * SCD_CART_NATIVE];
+}
+unsigned int plat_engine_sum() /* FNV-1a over the engine image's 32-bit words (its length: the boot record), once */
+{
+    static unsigned int sum = 0;
+    static bool done        = false;
+    if (!done) {
+        const unsigned int *p = (const unsigned int *)0x02000000;
+        unsigned int n = SCD_BOOT_RECORD[1] / 4, h = 0x811C9DC5u;
+        for (unsigned int i = 0; i < n; ++i) h = (h ^ p[i]) * 0x01000193u;
+        sum  = h;
+        done = true;
+    }
+    return sum;
+}
 // S7d: the scene's cart image. Every scene image has the same part offsets (tools/build_game_data.py)
 // - the engine bound them at start-up - so a scene change only replaces the contents at 0x080000.
 // The load itself runs in the boot loader's resident routine in SDRAM (Kobo's CMD 46 copies with RV
@@ -634,15 +974,100 @@ static unsigned int scene_file() /* the disc file of the scene the engine is abo
 #endif
     return file;
 }
+/* REV R4: a scene change loads only the chunks of the new image that differ from the image in the cart. Every image's
+   header has two CRCs for each of its 32 KB chunks ("SCHK" after the part table, tools/build_game_data.py): the SH2
+   keeps the cart image's list, loads the new image's chunk 0 (its header), compares, and loads only the chunks whose
+   CRCs differ - Sonic's and Tails's Palmtree Panic 1 differ in 7 of 34 besides the header (R4A's images; another zone:
+   about 24). The loads run in SDRAM (SCD_HOT): while the
+   Sub-CPU's command 46 writes the cart through the 68000, which holds the cart meanwhile, the SH2 must not read the
+   cart - neither code nor data - so the chunk list is in SDRAM too. The same commands as the boot loader's resident
+   routine (sh2_engboot.c scd_load_file), which loads whole files (the act files still go through it). */
+#define SCD_CHUNKS_MAX 96
+#define SCHK_MAGIC 0x5343484Bu /* "SCHK" */
+/* the cart image's CRCs, kept while chunk 0 is replaced: in the frame buffer's record area (no plane records while a
+   scene loads; after the dev menu's two text copies) - 768 bytes of SDRAM spared */
+#define oldHash ((volatile unsigned int *)0x24002C00)
+static unsigned short loadList[SCD_CHUNKS_MAX];
+static int loadCount;
+static unsigned int loadLen;
+static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE; /* COMM0 = cmd, until the Sub-CPU is done; -1: no answer */
+static int sd_cmd(unsigned short cmd)
+{
+    SC_COMM0 = cmd;
+    for (unsigned int n = 0; n < 800000u; ++n) {
+        if (SC_COMM0 == 0 && SC_COMM0 == 0) /* twice: a read during the 68000's write is undefined */
+            return 0;
+        for (volatile int k = 0; k < 64; ++k) {
+        } /* Kobo HW6: never hammer a COMM register */
+    }
+    return -1;
+}
+static int sd_open_first(unsigned short number) SCD_HOT_NOINLINE; /* open the file, its chunk 0 into the cart */
+static int sd_open_first(unsigned short number)
+{
+    SC_COMM2 = number;
+    if (sd_cmd(38) < 0)
+        return -2;
+    unsigned int len = SC_COMM8_32;
+    if ((int)len <= 0)
+        return -1; /* not on the disc: nothing copied */
+    loadLen     = len;
+    SC_COMM8_32 = len;
+    SC_COMM2    = 0;
+    SC_COMM12   = 0; /* the Sub-CPU replies 0 = chunk verified */
+    if (sd_cmd(46) < 0)
+        return -2;
+    return SC_COMM12 != 0;
+}
+static int sd_load_list() SCD_HOT_NOINLINE; /* the listed chunks; the number not verified, -2: no answer */
+static int sd_load_list()
+{
+    int bad     = 0;
+    SC_COMM8_32 = loadLen;
+    for (int i = 0; i < loadCount; ++i) {
+        SC_COMM2  = loadList[i];
+        SC_COMM12 = 0;
+        if (sd_cmd(46) < 0)
+            return -2;
+        if (SC_COMM12 != 0)
+            bad++;
+        STATE(0x5D00 | (loadList[i] & 0xFF)); /* as the boot loader: 5Dnn = chunk nn */
+    }
+    return bad;
+}
 static int scene_load(unsigned int file) /* the scene's image into the cart: 0 = there, -1 = not on the disc */
 {
     if (file == SCD_BOOT_RECORD[5])
         return 0; /* in the cart already */
-    unsigned int bytes = 0;
-    int bad = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
-    if (bad < 0)
+    comm_idle(); /* REV R4: the pad request answered first */
+    /* 1. the cart image's chunk CRCs, before chunk 0 is replaced (uncached: 0x22...) */
+    const volatile unsigned int *h = (const volatile unsigned int *)0x22080000;
+    unsigned int np = h[2], oldN = 0;
+    if (h[0] == 0x53434342u && h[1] == 2 && np > 0 && np < 64 && h[3 + 5 * np] == SCHK_MAGIC && h[4 + 5 * np] <= SCD_CHUNKS_MAX) {
+        oldN = h[4 + 5 * np];
+        for (unsigned int i = 0; i < 2 * oldN; ++i) oldHash[i] = h[5 + 5 * np + i];
+    }
+    /* 2. the new image's header */
+    int r = sd_open_first((unsigned short)file);
+    if (r == -1)
         return -1; /* the Sub-CPU found no such file: nothing was copied, the cart holds the last image */
-    if (bad > 0)
+    if (r != 0)
+        scene_stop(0x5CE2, "BAD LOAD ", file);
+    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
+    /* 3. the chunks whose CRCs differ (all of them if either header has no list) */
+    unsigned int total = (loadLen + 32767u) >> 15, newN = 0;
+    np = h[2];
+    if (np > 0 && np < 64 && h[3 + 5 * np] == SCHK_MAGIC && h[4 + 5 * np] == total)
+        newN = total;
+    loadCount = 0;
+    for (unsigned int c = 1; c < total && c < SCD_CHUNKS_MAX; ++c) {
+        bool same = c < newN && c < oldN && h[5 + 5 * np + 2 * c] == oldHash[2 * c] && h[6 + 5 * np + 2 * c] == oldHash[2 * c + 1];
+        if (!same)
+            loadList[loadCount++] = (unsigned short)c;
+    }
+    STATE(0x5E00 | (loadCount & 0xFF)); /* REV R4: line 10 5Enn = nn chunks to load */
+    int bad = sd_load_list();
+    if (bad != 0)
         scene_stop(0x5CE2, "BAD LOAD ", file);
     *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
     SCD_BOOT_RECORD[5] = file;
@@ -657,17 +1082,44 @@ static int scene_load(unsigned int file) /* the scene's image into the cart: 0 =
        whole-image check, never run from the cart before, is where R1C's SH2 died (5C14 -> 101).
        SCD_SCENE_CHECK=1 puts it back (line 10 58nn while it reads). */
     STATE(0x5C15); /* R1C: its image checked (R1D: not checked) */
-    const unsigned int *h = (const unsigned int *)CART_STAGE;
     for (int k = 0; k < (int)h[2] && k < 32; ++k)
         if (h[3 + 5 * k] != firstOffsets[k])
             scene_stop(0x5CE9, "LAYOUT ", file); /* not the fixed layout */
     return 0;
 }
-void plat_stage_loading()
+#if SCD_PLANES
+#include "scd_plasma.h"    /* REV R4: OpenJazz's plasma (GPL-2.0), for the credits */
+#include "scd_credits.inc" /* REV R4: the credits screen (plat_credits) */
+#else
+void plat_credits() {}
+#endif
+#if SCD_PLANES && SCD_DEVMENU
+static char *note_put(char *d, const char *t, char *end)
+{
+    while (*t && d < end) *d++ = *t++;
+    return d;
+}
+static void menu_note_missing(unsigned int file) /* REV R4: the dev menu's two lines - the file, the stage's name */
+{
+    char *d = scdMenuNote[0], *end = scdMenuNote[0] + SCD_MENU_NOTE - 1;
+    char nm[12] = { 'L', (char)('0' + (((file >> 8) - 1) & 7)), 'S', (char)('0' + (file & 0xFF) / 100),
+                    (char)('0' + (file & 0xFF) / 10 % 10), (char)('0' + (file & 0xFF) % 10), '.', 'I', 'M', 'G', 0 };
+    d  = note_put(d, "NOT ON THE DISC: ", end);
+    d  = note_put(d, nm, end);
+    *d = 0;
+    d  = scdMenuNote[1], end = scdMenuNote[1] + SCD_MENU_NOTE - 1;
+    if (activeStageList >= 0 && activeStageList < STAGELIST_MAX && stageListPosition >= 0 && stageListPosition < 0x100)
+        d = note_put(d, stageList[activeStageList][stageListPosition].name, end);
+    *d = 0;
+}
+#endif
+bool plat_stage_loading()
 {
 #if SCD_PLANES
     planes_off(); /* REV R1: the loading lines need the Genesis text again */
+    menuDrawn = false;
 #endif
+    audio_before_load(); /* REV R4 */
     const unsigned int *h = (const unsigned int *)CART_STAGE;
     if (!haveOffsets) { /* the layout the engine bound at start-up (the first scene, loaded by the loader) */
         for (int k = 0; k < (int)h[2] && k < 32; ++k) firstOffsets[k] = h[3 + 5 * k];
@@ -676,7 +1128,17 @@ void plat_stage_loading()
     STATE(0x5C13);
     unsigned int file = scene_file();
     int bad           = scene_load(file);
-#if defined(SCD32X_START_LIST)
+#if SCD_PLANES && SCD_DEVMENU
+    if (bad < 0) {
+        /* REV R4: the scene is not on the disc (the title screen, a special stage, a scene not built): the dev menu, with
+           the file and the stage's name - the engine loads nothing (Scene.cpp LoadStageFiles) */
+        menu_note_missing(file);
+        STATE(0x5C17);
+        Engine.gameMode = ENGINE_INITDEVMENU;
+        return false;
+    }
+    scdMenuNote[0][0] = scdMenuNote[1][0] = 0;
+#elif defined(SCD32X_START_LIST)
     if (bad < 0) {
         /* REV R3: the scene is not on the disc - the act's end (R1X stopped here: NO SCENE 204), a time warp or a
            special stage. The start scene again, with the other character: Sonic, then Tails, then Sonic... The
@@ -698,7 +1160,9 @@ void plat_stage_loading()
     if (bad < 0)
         scene_stop(0x5CE8, "NO SCENE ", file); /* the scene's .IMG is not on the disc */
     STATE(0x5C16); /* R1C: the engine's own stage load runs from here (until 5Lnn) */
+    comm_idle();   /* REV R4: the pad answer taken now - the sampler writes COMM8 (CKPT) from here on */
     scd_sampling(1);
+    return true;
 }
 void plat_stage_loaded() /* line 10: STATE:5Lnn = list L, scene nn (5000 = the title) */
 {
@@ -709,6 +1173,7 @@ void plat_stage_loaded() /* line 10: STATE:5Lnn = list L, scene nn (5000 = the t
         }
     } /* a sample posted just now must not overwrite the code below */
     STATE(0x5000 | ((unsigned int)activeStageList << 8) | ((unsigned int)stageListPosition & 0xFF));
+    scdDemoFrom = presented; /* REV R4: the scripted pad from the stage's start */
 #if SCD_PLANES
     planes_load(); /* REV R1: the scene's Genesis planes (a failure leaves its 5C6x code on line 10) */
 #endif
@@ -753,9 +1218,12 @@ unsigned char *plat_layout_pool(int *size)
 #define SCD_FB_ELSEWHERE 1
 #endif
 #ifndef SCD_FB_ELSEWHERE
+#define SCD_FB_LINE_BYTES 1024 /* REV R4: the no-draw build's one-line buffer at the pool's end (the pool: 81 KB) */
 unsigned char *plat_fb_data(int kind, int size)
 {
     static bool cleared = false;
+    if (kind == SCD_FB_LINE)
+        return size <= SCD_FB_LINE_BYTES ? (unsigned char *)(SCD_FB_POOL_AT + SCD_FB_POOL_BYTES - SCD_FB_LINE_BYTES) : (unsigned char *)0;
     if (kind != SCD_FB_MENUS || size > SCD_FB_MENUS_BYTES)
         return (unsigned char *)0;
     if (!cleared) {
@@ -766,7 +1234,7 @@ unsigned char *plat_fb_data(int kind, int size)
 }
 unsigned char *plat_layout_pool(int *size)
 {
-    *size = SCD_FB_POOL_BYTES;
+    *size = SCD_FB_POOL_BYTES - SCD_FB_LINE_BYTES; /* stages_report.md: regular and special stages use 24 KB at most */
     return (unsigned char *)SCD_FB_POOL_AT;
 }
 #endif
@@ -786,11 +1254,21 @@ ScdMemFile *scd_fopen(const char *path, const char *mode)
         if (c != ".rsdk"[i])
             return NULL; /* only the data pack exists; settings / saves fall back to defaults */
     }
+    /* REV R4: the scene image's own pack (part 17): every scene carries the files the SH2 reads in it - one shared pack
+       (SCDDATA.PAK, 512 KB at cart 0x300000) cannot hold every stage's. The engine opens the pack for every file it
+       loads, so after a scene change it reads the new scene's. */
+    const unsigned int *h = (const unsigned int *)CART_STAGE;
+    const unsigned char *pack = CART_PACK;
+    long packSize             = (long)SCD_BOOT_RECORD[2]; /* S7d: SCDDATA.PAK's length (an image without part 17) */
+    if (h[2] > SCD_CART_DATAPACK && h[3 + 5 * SCD_CART_DATAPACK + 1] > 0) {
+        pack     = CART_STAGE + h[3 + 5 * SCD_CART_DATAPACK];
+        packSize = (long)h[3 + 5 * SCD_CART_DATAPACK + 1];
+    }
     for (int i = 0; i < 4; ++i)
         if (!memUsed[i]) {
             memUsed[i]       = true;
-            memFiles[i].data = CART_PACK;
-            memFiles[i].size = (long)SCD_BOOT_RECORD[2]; /* S7d: SCDDATA.PAK's length */
+            memFiles[i].data = pack;
+            memFiles[i].size = packSize;
             memFiles[i].pos  = 0;
             return &memFiles[i];
         }

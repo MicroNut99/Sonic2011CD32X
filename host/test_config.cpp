@@ -30,7 +30,14 @@ void plat_layer_end(int) {}
 int *plat_layer_lines(int) { return 0; }
 void *plat_cart_data(int) { return calloc(1, 0x110000); }
 void plat_stage_loaded() {}
-void plat_stage_loading() {}
+bool plat_stage_loading() { return true; }
+int scdDemoPad = 0; // REV R4
+bool plat_boot_menu() { return false; }
+void plat_menu_clear() {}
+void plat_menu_text(const unsigned short *, int, int, int, int) {}
+const void *plat_native_blob() { return 0; } // REV R4: the PC builds bind the engine's part only
+unsigned int plat_engine_sum() { return 0; }
+void plat_credits() {}
 void plat_file_read(const char *, int) {}
 void plat_draw_log(const char *, int, int) {}
 void plat_sprite(int, int, int, int, int, int, int, int, int, int, int, int) {} // REV R3

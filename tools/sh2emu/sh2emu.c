@@ -272,6 +272,17 @@ static struct {
 } cstack[CSD];
 static int csp;
 static const char *opt_callers; /* -callers NAME: who calls NAME, while profiling */
+/* REV R4: -set SYMBOL=VALUE: the engine variable SYMBOL (32 bits) set to VALUE when the engine reaches its first stage
+   set-up (5C16: its data and zeroed arrays are ready) - e.g. -set scdDemoPad=1, the dev menu's DEMO PAD switch */
+#define MAX_SETS 16
+static const char *opt_set_name[MAX_SETS];
+static u32 opt_set_value[MAX_SETS];
+static int opt_nsets;
+static const char *opt_xsyms[8]; /* REV R4: -syms: more names to load */
+static int opt_nxsyms;
+static const char *opt_peek[8]; /* REV R4: -peek NAME[:size]: an SDRAM variable's value at each stage load and the end */
+static int opt_peek_size[8], opt_npeek;
+static void print_peeks(const char *when);
 static u32 callers_addr;
 static u64 *callers_count;
 static int prof_active_c; /* prof_active, for the call stack (declared before it) */
@@ -496,9 +507,9 @@ static int cost_cmp(const void *a, const void *b)
 }
 static const char *cart_area(u32 off, char *buf) /* what lies at this cart offset (cd32x/engine/plat_mars.cpp layout) */
 {
-    static const char *part[17] = { "scriptcode", "jumptable", "chunks", "collision", "scriptframes", "animframes",
+    static const char *part[19] = { "scriptcode", "jumptable", "chunks", "collision", "scriptframes", "animframes",
                                     "animlist", "arctan", "stagelist", "typenames", "globalnames", "animfiles", "font",
-                                    "trig", "gfxdata", "tilegfx", "blend" };
+                                    "trig", "gfxdata", "tilegfx", "blend", "datapack", "native scripts" };
     if (off < 0x080000) {
         u32 a = 0x02000000u + off;
         if (a < eng_text_hi) {
@@ -509,11 +520,11 @@ static const char *cart_area(u32 off, char *buf) /* what lies at this cart offse
             sprintf(buf, "engine constants / data image");
         return buf;
     }
-    if (off < 0x180000) {
+    if (off < 0x300000) { /* the scene slot (cd32x/engine/plat_mars.cpp CART_STAGE - CART_PACK) */
         const u8 *h = cart + 0x080000;
         u32 n = (u32)h[8] << 24 | (u32)h[9] << 16 | (u32)h[10] << 8 | h[11];
         if (h[0] == 'S' && h[1] == 'C' && h[2] == 'C' && h[3] == 'B')
-            for (u32 k = 0; k < n && k < 17; ++k) {
+            for (u32 k = 0; k < n && k < 19; ++k) {
                 const u8 *e = h + 12 + 20 * k;
                 u32 o = (u32)e[0] << 24 | (u32)e[1] << 16 | (u32)e[2] << 8 | e[3];
                 u32 l = (u32)e[4] << 24 | (u32)e[5] << 16 | (u32)e[6] << 8 | e[7];
@@ -526,7 +537,7 @@ static const char *cart_area(u32 off, char *buf) /* what lies at this cart offse
         return buf;
     }
     if (off < 0x380000)
-        sprintf(buf, "stage data pack");
+        sprintf(buf, "data pack (SCDDATA.PAK)");
     else
         sprintf(buf, "Genesis plane data (MDG)");
     return buf;
@@ -858,7 +869,8 @@ static u64 rec_sent;
 static u16 intmsk_lo;   /* interrupt enables (byte 0x4001) */
 static int fm = 0;      /* FM: 1 = the SH2 owns the VDP */
 static int vint_pending, cmdint_pending;
-static int fs_bit;      /* frame buffer select */
+static int fs_bit;      /* frame buffer select: the buffer the SH2 and the 68000 reach (the other one is shown) */
+static int fs_req = -1; /* REV R4: a swap asked for, done at the next vertical blank */
 static int rv_active;   /* the 68000 holds the cart (Kobo CMD 46 copy) */
 static u16 last_state = 0xFFFF;
 static u64 vbi_count;
@@ -1128,7 +1140,7 @@ static void bus_write(u32 p, u32 v, int size)
                 o &= 0xFF;
                 vdpreg[o] = b;
                 if (o == 0x0B)
-                    fs_bit = b & 1;
+                    fs_req = b & 1; /* REV R4: the swap happens at the next vertical blank (FS reads the old value until then) */
                 break;
             case RG_CRAM:
                 cram[o & 0x1FF] = b;
@@ -1185,10 +1197,11 @@ static u32 sdt_lo, sdt_hi;             /* R1V: the engine's code in SDRAM (.sdte
 #define STACK_TOP 0x0603F400u          /* the master stack (Kobo's crt0 / the boot loader) */
 #define STACK_RES 0x0603D400u          /* R1W: its reserved 8 KB (engine_cart.ld: the engine's RAM ends below) */
 static int sdt_ran;                    /* code in .sdtext has run: from then on nothing may write there */
+static u32 blob_lo, blob_hi;           /* REV R4: the scene image's native scripts (part 18) in the cart, 0 if none */
 static int in_eng_code(u32 a)          /* the engine's code: in the cart or in SDRAM (either address alias) */
 {
     u32 p = a & 0x1FFFFFFF;
-    return (p >= ENG_TEXT_LO && p < eng_text_hi) || (sdt_hi && p >= sdt_lo && p < sdt_hi);
+    return (p >= ENG_TEXT_LO && p < eng_text_hi) || (sdt_hi && p >= sdt_lo && p < sdt_hi) || (p >= blob_lo && p < blob_hi);
 }
 static const u32 LDR_LO = 0x06000000;
 static u32 ldr_text_hi = 0x06000DFC;
@@ -1205,8 +1218,19 @@ static u32 sdram_read32(u32 a)
 }
 static void note_state(u16 v)
 {
-    if (v == 0x5C16 && ms_setup < 0)
+    if (v == 0x5C16 && ms_setup < 0) {
         ms_setup = frame_no();
+        for (int i = 0; i < opt_nsets; ++i) { /* -set */
+            u32 a = sym_addr(opt_set_name[i]), o = (a - 0x06000000u) & (SDRAM_SIZE - 1);
+            if (a < 0x06000000u || a >= 0x06040000u) {
+                printf("[f%5d] -set %s: no such engine variable in SDRAM\n", frame_no(), opt_set_name[i]);
+                continue;
+            }
+            sdram[o] = (u8)(opt_set_value[i] >> 24), sdram[o + 1] = (u8)(opt_set_value[i] >> 16);
+            sdram[o + 2] = (u8)(opt_set_value[i] >> 8), sdram[o + 3] = (u8)opt_set_value[i];
+            printf("[f%5d] -set %s (%08X) = %u\n", frame_no(), opt_set_name[i], a, opt_set_value[i]);
+        }
+    }
     if ((v & 0xF000) == 0x5000 && (v & 0x0F00) < 0x0C00 && ms_loaded < 0 && ms_setup >= 0) {
         ms_loaded      = frame_no();
         ms_loaded_code = v;
@@ -1238,6 +1262,8 @@ static void check_data_access(u32 a, int size, int write, u32 v)
                         printf("[f%5d] STATE %04X  CKPT %04X  (PC %08X)\n", frame_no(), (u16)v, COMM(8), cur_pc);
                     last_state = (u16)v;
                     note_state((u16)v);
+                    if (opt_npeek && ((u16)v >> 12) == 5 && (((u16)v >> 8) & 0xF) < 4) /* 5Lnn: a stage loaded */
+                        print_peeks("stage loaded");
                 }
             }
         }
@@ -1836,6 +1862,25 @@ static void write_shot(const char *path)
             line[x * 3 + 0] = (u8)(((g >> 9) & 7) * 36);
             line[x * 3 + 1] = (u8)(((g >> 5) & 7) * 36);
             line[x * 3 + 2] = (u8)(((g >> 1) & 7) * 36);
+            /* REV R4: the 32X layer (the shown frame buffer, the other one): 256-colour or direct-colour mode, its line
+               table; a colour 0x0000 is see-through; in front of the Genesis picture when the priority bit (0x4101 bit 7)
+               and the colour's bit 15 differ, else behind it - seen where the Genesis shows its backdrop */
+            int mode = vdpreg[1] & 3, pri = (vdpreg[1] >> 7) & 1;
+            if (mode == 1 || mode == 2) {
+                const u8 *sf = fb[fs_bit ^ 1];
+                u32 lt = rd_be16(sf + 2 * y);
+                u16 col;
+                if (mode == 1)
+                    col = rd_be16(cram + 2 * sf[(lt * 2 + (u32)x) & (FB_SIZE - 1)]);
+                else
+                    col = rd_be16(sf + (((lt + (u32)x) * 2) & (FB_SIZE - 1)));
+                int md_opaque = c != 0;
+                if ((col & 0x7FFF) != 0 && ((pri ^ (col >> 15)) || !md_opaque)) {
+                    line[x * 3 + 0] = (u8)(((col >> 10) & 31) * 255 / 31); /* BGR file order: blue */
+                    line[x * 3 + 1] = (u8)(((col >> 5) & 31) * 255 / 31);
+                    line[x * 3 + 2] = (u8)((col & 31) * 255 / 31);
+                }
+            }
         }
         fwrite(line, 1, row, f);
     }
@@ -1843,11 +1888,79 @@ static void write_shot(const char *path)
     printf("[f%5d] the Genesis picture (planes and sprites model) -> %s\n", frame_no(), path);
 }
 static int sub_boot_stage;
+static u64 pad_requests; /* command 48s answered */
+static u64 sfx_plays, music_cmds; /* REV R4 */
+static int cdd_status;            /* REV R4: the CD drive's status nibble (COMM14) */
+/* REV R4: the controller (port 1) the 68000 reads in its vertical blank and the Sub-CPU hands the SH2 in command 48's
+   answer (SEGA_CTRL_* bits: up 1, down 2, left 4, right 8, B 0x10, C 0x20, A 0x40, start 0x80, Z 0x100, Y 0x200,
+   X 0x400). -pad "FRAME:BUTTONS,...": from FRAME on these buttons are held (letters U D L R A B C S X Y Z, '-' none);
+   "FRAME:demo" = from FRAME the PC check's pad (spin dash, run right, one jump, every 4 s). No -pad: nothing pressed. */
+#define MAX_PAD 1024
+static int pad_frame[MAX_PAD], npad;
+static u16 pad_bits[MAX_PAD]; /* 0xFFFF = the demo pattern */
+static void pad_parse(const char *s)
+{
+    while (*s && npad < MAX_PAD) {
+        char *e;
+        int f = (int)strtol(s, &e, 10);
+        if (*e != ':')
+            break;
+        s       = e + 1;
+        u16 b   = 0;
+        if (!strncmp(s, "demo", 4)) {
+            b = 0xFFFF;
+            s += 4;
+        }
+        else
+            for (; *s && *s != ','; ++s) {
+                const char *k = strchr("UDLRBCASZYX", *s);
+                if (k)
+                    b |= (u16)(1u << (k - "UDLRBCASZYX"));
+            }
+        pad_frame[npad] = f;
+        pad_bits[npad]  = b;
+        npad++;
+        while (*s && *s != ',') ++s;
+        if (*s == ',')
+            ++s;
+    }
+}
+static u16 pad_now(void)
+{
+    int f = frame_no(), i, k = -1;
+    for (i = 0; i < npad && pad_frame[i] <= f; ++i) k = i;
+    if (k < 0)
+        return 0;
+    if (pad_bits[k] != 0xFFFF)
+        return pad_bits[k];
+    unsigned ms = (unsigned)(f - pad_frame[k]) * 1000u / 60u, t;
+    if (ms < 4000)
+        return 0;
+    t = (ms - 4000) % 4000;
+    return t < 150 ? 2 : t < 300 ? 2 | 0x20 : t < 900 ? 2 : t < 2400 ? 8 : t < 2700 ? 8 | 0x20 : t < 3900 ? 8 : 0;
+}
 static u32 comm32(int n) { return ((u32)COMM(n) << 16) | COMM(n + 2); }
 static void set_comm32(int n, u32 v)
 {
     SET_COMM(n, v >> 16);
     SET_COMM(n + 2, v & 0xFFFF);
+}
+static void blob_update(void) /* REV R4: where the scene image (cart 0x080000) has its native scripts - code from now on */
+{
+    const u8 *h = cart + 0x080000;
+    u32 lo = 0, hi = 0;
+    if (h[0] == 'S' && h[1] == 'C' && h[2] == 'C' && h[3] == 'B' && rd_be32(h + 8) > 18) {
+        u32 o = rd_be32(h + 12 + 20 * 18), l = rd_be32(h + 16 + 20 * 18);
+        if (l && o + l <= 0x280000) {
+            lo = 0x02080000u + o;
+            hi = lo + l;
+        }
+    }
+    if (lo != blob_lo || hi != blob_hi) {
+        blob_lo = lo, blob_hi = hi;
+        if (lo)
+            printf("[f%5d] scene image: native scripts at %08X-%08X\n", frame_no(), lo, hi);
+    }
 }
 static void sub_finish(void)
 {
@@ -1901,14 +2014,41 @@ static void sub_finish(void)
         rv_active = 0;
         SET_COMM(12, 0);
         SET_COMM(0, 0);
+        if (cur_img == 4)
+            blob_update();
         if (opt_verbose)
             printf("[f%5d] SUB: CMD 46 chunk %d -> cart %06X (%d sectors)\n", frame_no(), chunk, coff, n);
     }
     else if (cmd == 48 || (cmd & 0xFF) == 48) {
-        set_comm32(8, (u32)(frame_no() & 0xFFFF));
+        static u16 last = 0xFFFF;
+        u16 pad = pad_now();
+        if (cmd >> 8) { /* REV R4: a sound effect in the request's upper byte (the Sub-CPU's pcm_play) */
+            sfx_plays++;
+            if (sfx_plays <= 40)
+                printf("[f%5d] SUB: sound effect %d (PCM chip)\n", frame_no(), cmd >> 8);
+        }
+        if (pad != last && npad)
+            printf("[f%5d] PAD %04X (command 48's answer)\n", frame_no(), pad);
+        last = pad;
+        pad_requests++;
+        set_comm32(8, ((u32)pad << 16) | (u32)(frame_no() & 0xFFFF));
         SET_COMM(0, 0);
     }
-    else if (cmd == 52 || cmd == 44 || cmd == 54 || cmd == 45) {
+    else if (cmd == 45 || cmd == 54) { /* REV R4: CD audio: play a track (repeated) / stop - the drive's status nibble */
+        cdd_status = cmd == 45 ? 1 : 0;
+        music_cmds++;
+        printf("[f%5d] SUB: CMD %d %s%d\n", frame_no(), cmd, cmd == 45 ? "play track " : "stop", cmd == 45 ? COMM(2) : 0);
+        SET_COMM(0, 0);
+    }
+    else if (cmd == 53) { /* REV R4: KOBOSFX.BIN -> the PCM chip; COMM12 = the number of effects */
+        int k = find_file("KOBOSFX.BIN"), n = 0;
+        if (k >= 0 && files[k].len >= 8 && !memcmp(files[k].data, "KSFX", 4))
+            n = files[k].data[4] << 8 | files[k].data[5];
+        printf("[f%5d] SUB: CMD 53 load KOBOSFX.BIN -> %d effects\n", frame_no(), n);
+        SET_COMM(12, (u16)n);
+        SET_COMM(0, 0);
+    }
+    else if (cmd == 52 || cmd == 44) {
         SET_COMM(0, 0);
     }
     else if (cmd == 68) {
@@ -1916,9 +2056,13 @@ static void sub_finish(void)
         u32 off  = comm32(8);
         int ok   = 0;
         if (op == 1) {
+            /* REV R4: the Sub-CPU's own checks (cd32x/sub_main.c, SGB_CMD): an act file it would refuse is refused here */
             u32 o = off & (CART_SIZE - 1);
-            u32 magic = (u32)cart[o] << 24 | cart[o + 1] << 16 | cart[o + 2] << 8 | cart[o + 3];
-            if (magic == 0x53434D47u) {
+            const u8 *m = &cart[o];
+            u32 magic = rd_be32(m), size = rd_be32(m + 8), oCell = rd_be32(m + 12), oZero = rd_be32(m + 28), oCram = rd_be32(m + 32);
+            int ver = rd_be16(m + 4), cells = rd_be16(m + 6);
+            if (!(off & 1) && magic == 0x53434D47u && ver == 1 && cells > 0 && cells <= 1536 && (off & 0xFFFFF) + size <= 0x100000 &&
+                oCell < size && oZero < size && oCram < size) {
                 ok        = 1;
                 planes_on = 1;
                 if (ms_planes < 0)
@@ -1986,6 +2130,10 @@ static void sub_poll(void)
 }
 static void frame_tick(void)
 {
+    if (fs_req >= 0) { /* REV R4: the frame buffer swap, in vertical blank */
+        fs_bit = fs_req;
+        fs_req = -1;
+    }
     /* the 68000's vertical-blank heartbeat in COMM6 (Kobo HW7), off while the planes run */
     if (!sgb_on)
         SET_COMM(6, (u16)(COMM(6) + 1));
@@ -1998,15 +2146,36 @@ static void frame_tick(void)
         snprintf(path, sizeof path, "%s_%05d.bmp", shots_prefix, frame_no());
         write_shot(path);
     }
-    /* the Sub-CPU heartbeat in COMM14 */
+    /* the Sub-CPU heartbeat in COMM14: bits 12-15 the CD drive's status (REV R4: 1 playing after command 45, 0 stopped) */
     if ((frame_no() & 7) == 0)
-        SET_COMM(14, (u16)(0x4000 | ((frame_no() >> 3) & 0xFFF)));
+        SET_COMM(14, (u16)(cdd_status << 12 | ((frame_no() >> 3) & 0xFFF)));
 }
 
 /* ------------------------------------------------------------------ the interpreter */
 static void exec(u16 op, u32 pc);
+static u32 plat_log_addr; /* REV R4: the engine's plat_log (a no-op on the console): its notes printed */
+static u8 sdram_byte(u32 a);
+static void note_plat_log(void)
+{
+    static int shown;
+    char t[96];
+    int n = 0;
+    for (u32 p = R[4]; n < 95; ++p, ++n) {
+        u32 q = p & 0x1FFFFFFF;
+        u8 c  = q >= 0x06000000u && q < 0x06000000u + SDRAM_SIZE ? sdram[(q - 0x06000000u) & (SDRAM_SIZE - 1)]
+                : q < CART_SIZE + 0x02000000u && q >= 0x02000000u ? cart[(q - 0x02000000u) & (CART_SIZE - 1)] : 0;
+        if (!c)
+            break;
+        t[n] = (char)c;
+    }
+    t[n] = 0;
+    if (++shown <= 200)
+        printf("[f%5d] ENGINE LOG: %s\n", frame_no(), t);
+}
 static u16 fetch(u32 a)
 {
+    if (plat_log_addr && (a & 0x1FFFFFFF) == plat_log_addr)
+        note_plat_log();
     if (a & 1) {
         printf("odd fetch %08X\n", a);
         stop("odd fetch");
@@ -2711,6 +2880,11 @@ static void summary(void)
     if (rec_crc_count)
         printf("record contents   records 1-%u: CRC %08X (the same for the same picture sequence, at any speed)\n",
                rec_crc_count, ~rec_crc);
+    if (pad_requests)
+        printf("controller        %llu pad requests (command 48) answered\n", (unsigned long long)pad_requests);
+    if (sfx_plays || music_cmds)
+        printf("audio             %llu sound effects played, %llu CD audio commands\n", (unsigned long long)sfx_plays,
+               (unsigned long long)music_cmds);
     int problems = 0;
     for (int sev = 2; sev >= 0; --sev) {
         int any = 0;
@@ -2725,10 +2899,28 @@ static void summary(void)
                    kinds[i].first_frame, symname(kinds[i].first_pc, b));
             if (sev == 2)
                 problems++;
+            /* REV R4: where most of the warnings and problems happen (the places with the highest counts, up to 4) */
+            int shown = 0;
+            for (int pass = 0; sev > 0 && pass < 4 && shown < 4; ++pass) {
+                int best = -1;
+                for (int k = 0; k < nlogkeys; ++k)
+                    if (!strcmp(logkeys[k].kind, kinds[i].kind) && logkeys[k].count > 0 &&
+                        (best < 0 || logkeys[k].count > logkeys[best].count))
+                        best = k;
+                if (best < 0 || (u64)logkeys[best].count == kinds[i].count)
+                    break; /* one place only: the line above says it */
+                printf("              x%-8d at %s\n", logkeys[best].count, symname(logkeys[best].pc, b));
+                logkeys[best].count = -logkeys[best].count; /* (shown) */
+                shown++;
+            }
+            for (int k = 0; k < nlogkeys; ++k)
+                if (logkeys[k].count < 0)
+                    logkeys[k].count = -logkeys[k].count;
         }
     }
     if (stopped && strcmp(stop_reason, "frame limit"))
         problems++;
+    print_peeks("end");
     printf("VERDICT           %s\n", problems ? "PROBLEMS FOUND - do not burn yet" : "no problems found");
 }
 static u64 last_vbi_cycle;
@@ -2741,6 +2933,20 @@ static void fill_garbage(u8 *p, u32 n, u32 *seed)
         }
         else
             p[i] = 0;
+    }
+}
+static void print_peeks(const char *when) /* REV R4: -peek - read straight from SDRAM (no bus time, no cache) */
+{
+    for (int i = 0; i < opt_npeek; ++i) {
+        u32 a = sym_addr(opt_peek[i]), v = 0;
+        int n = opt_peek_size[i] == 1 || opt_peek_size[i] == 2 ? opt_peek_size[i] : 4;
+        if (!a || (a & 0x1FFFFFFF) < 0x06000000u || (a & 0x1FFFFFFF) >= 0x06000000u + SDRAM_SIZE) {
+            printf("[f%5d] peek %s: no SDRAM variable of that name\n", frame_no(), opt_peek[i]);
+            continue;
+        }
+        u32 o = (a & 0x1FFFFFFF) - 0x06000000u;
+        for (int k = 0; k < n; ++k) v = v << 8 | sdram[(o + (u32)k) & (SDRAM_SIZE - 1)];
+        printf("[f%5d] peek (%s) %s = %08X\n", frame_no(), when, opt_peek[i], v);
     }
 }
 int main(int argc, char **argv)
@@ -2761,6 +2967,12 @@ int main(int argc, char **argv)
                    "  -shot FRAME FILE.bmp   the Genesis picture at FRAME (planes and sprites: records into a VDP model), up to 64\n"
                    "  -shots A B STEP PREFIX a picture every STEP frames from A to B (PREFIX_<frame>.bmp)\n"
                    "  -records N     print the first N plane records (default 3)\n"
+                   "  -pad SCRIPT    the controller: \"FRAME:BUTTONS,...\" (U D L R A B C S X Y Z, '-' none; FRAME:demo = the\n"
+                   "                 scripted spin dash / run right from FRAME on)\n"
+                   "  -set NAME=V    the engine variable NAME (32 bits) = V at the first stage set-up (e.g. scdDemoPad=1)\n"
+                   "  -peek NAME[:N] print the engine variable NAME (N = 1, 2 or 4 bytes) at each stage load and at the end\n"
+                   "  -syms FILE     more function names (nm -n -C), e.g. a scene's native scripts: game_data/native/\n"
+                   "                 scene_<list>_<pos>.syms (tools/build_game_data.py --native); up to 8\n"
                    "  -reccrc N      CRC of the first N records' contents (default 600): the same pictures at any speed\n"
                    "  -nofifo        no frame-buffer write FIFO model; -fbword N cycles per FIFO word (default 5)\n"
                    "  -profile A B   where the SH2's time goes between frames A and B (per engine frame, by function,\n"
@@ -2820,6 +3032,23 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "-reccrc") && i + 1 < argc)
             opt_rec_crc_n = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-pad") && i + 1 < argc)
+            pad_parse(argv[++i]);
+        else if (!strcmp(argv[i], "-peek") && i + 1 < argc && opt_npeek < 8) {
+            char *c = strchr(argv[++i], ':');
+            opt_peek_size[opt_npeek] = c ? atoi(c + 1) : 4;
+            if (c)
+                *c = 0;
+            opt_peek[opt_npeek++] = argv[i];
+        }
+        else if (!strcmp(argv[i], "-syms") && i + 1 < argc && opt_nxsyms < 8) /* REV R4: more names (nm), e.g. a scene's */
+            opt_xsyms[opt_nxsyms++] = argv[++i];                              /* native scripts (game_data/native/) */
+        else if (!strcmp(argv[i], "-set") && i + 1 < argc && strchr(argv[i + 1], '=') && opt_nsets < MAX_SETS) {
+            char *e = strchr(argv[++i], '=');
+            *e                         = 0;
+            opt_set_name[opt_nsets]    = argv[i];
+            opt_set_value[opt_nsets++] = (u32)strtoul(e + 1, 0, 0);
+        }
         else if (!strcmp(argv[i], "-callers") && i + 1 < argc)
             opt_callers = argv[++i];
         else if (!strcmp(argv[i], "-frames") && i + 2 < argc) {
@@ -2868,9 +3097,12 @@ int main(int argc, char **argv)
     load_engine_syms(path);
     sprintf(path, "%s/sh2.map", opt_dir);
     load_map_syms(path);
+    for (int i = 0; i < opt_nxsyms; ++i)
+        load_engine_syms(opt_xsyms[i]);
     qsort(syms, nsyms, sizeof(Sym), sym_cmp);
     parse_layout();
     presented_addr = sym_addr("presented");
+    plat_log_addr  = sym_addr("plat_log(char const*)") & 0x1FFFFFFF;
     for (int i = 0; i < nsyms && !scr_fn; ++i) /* the function (code), not its static variables ("...::told") */
         if (!strncmp(syms[i].name, "ProcessScript(", 14) && sym_code(i))
             scr_fn = syms[i].a;

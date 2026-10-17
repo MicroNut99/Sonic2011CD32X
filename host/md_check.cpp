@@ -17,6 +17,7 @@ extern "C" {
 #include "../md/md_sprites.c" // REV R3: compiled here (no Makefile change)
 }
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <functional>
 #include <map>
@@ -148,6 +149,61 @@ bool pack_lines(std::vector<std::set<int>> sets, std::vector<std::set<int>> &out
         }
         if (best.empty() || lines.size() < best.size())
             best = lines;
+    }
+    if (best.size() > 4) {
+        // REV R4: more than 4 lines from the greedy packing (Quartz Quadrant 1 / 2 past: 46 colours, 38 cell colour sets) -
+        // a local search for 4 lines of at most 15: each set on one line, moves that shrink the colours over 15 are
+        // taken, others now and then (simulated annealing, fixed seed: the same result every run)
+        const int L = 4, n = (int)keep.size();
+        std::vector<int> on(n);
+        std::vector<std::array<int, 256>> cnt(L);
+        for (auto &c : cnt) c.fill(0);
+        std::array<int, L> size{};
+        auto add = [&](int i, int l, int d) {
+            for (int c : keep[i]) {
+                int &k = cnt[l][c & 255];
+                if (d > 0 && k++ == 0)
+                    size[l]++;
+                if (d < 0 && --k == 0)
+                    size[l]--;
+            }
+        };
+        auto over = [&](int l) { return size[l] > 15 ? size[l] - 15 : 0; };
+        unsigned r = 12345u;
+        auto rnd = [&](unsigned m) {
+            r = r * 1103515245u + 12345u;
+            return (r >> 8) % m;
+        };
+        for (int i = 0; i < n; ++i) {
+            on[i] = (int)rnd(L);
+            add(i, on[i], 1);
+        }
+        int cur = 0;
+        for (int l = 0; l < L; ++l) cur += over(l);
+        double temp = 2.0;
+        for (int it = 0; it < 2000000 && cur > 0 && n > 0; ++it) {
+            int i = (int)rnd((unsigned)n), a = on[i], b = (int)rnd(L);
+            if (a == b)
+                continue;
+            int before = over(a) + over(b);
+            add(i, a, -1);
+            add(i, b, 1);
+            int d = over(a) + over(b) - before;
+            if (d <= 0 || (double)rnd(1u << 20) / (1u << 20) < std::exp(-d / temp)) {
+                on[i] = b;
+                cur += d;
+            }
+            else {
+                add(i, b, -1);
+                add(i, a, 1);
+            }
+            temp = std::max(0.05, temp * 0.99999);
+        }
+        if (cur == 0) {
+            best.assign(L, std::set<int>());
+            for (int i = 0; i < n; ++i) best[on[i]].insert(keep[i].begin(), keep[i].end());
+            best.erase(std::remove_if(best.begin(), best.end(), [](const std::set<int> &x) { return x.empty(); }), best.end());
+        }
     }
     out = best;
     return best.size() <= 4;

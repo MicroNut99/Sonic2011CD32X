@@ -29,7 +29,9 @@ This uses the PC's own gcc, not the Sega toolchain. Build it again only when `sh
 
 ## 2. Run it on every build, before burning
 
-Build the disc as usual (`make ... ENGINE=1`). That leaves everything sh2emu needs in `cd32x/build_engine`. Then:
+Build the disc as usual (`make ... ENGINE=1`). That leaves everything sh2emu needs in `cd32x/build_engine`. Then, for
+R1-R3 builds (**R4 builds: the command with `-pad` below** - without a controller an R4 build stays in its menu, and
+the summary says `stage loaded no`: nothing of the game was checked):
 
 ```bash
 cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
@@ -54,6 +56,27 @@ about 4 seconds later, so frame 1300 is further into the act.
 R3 builds: Sonic's act ends at about frame 5400 and the results end at about 6080; then the SH2 looks for the next
 act (`L1S004.IMG NOT FOUND`), loads Tails's files and starts the act again as Tails (title card at about frame 6300).
 `-f 7000` covers the switch; after Tails's results (about frame 14090) Sonic's act comes back (`-f 16500`).
+
+**R4 builds boot into the Level Select menu** (at about frame 270), and nothing plays until a button is pressed. Give
+the run a controller with `-pad`: this one switches DEMO PAD on (Down, Down, A), goes back up to START GAME (Up, Up)
+and presses Start - Palmtree Panic 1 loads at about frame 770 and the scripted pad plays it. **This is the R4 check
+before burning**; the second line prints the summary (`stage loaded yes (STATE 5100 ...)`, `VERDICT`):
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 5000 -pad "600:D,610:-,620:D,630:-,640:A,650:-,660:U,670:-,680:U,690:-,700:S,710:-" > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+```
+
+Add `-profile 1000 5000 -syms /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/game_data/native/scene_1_0.syms`
+for where the time goes (section 4): the profile is printed after the summary, so read it with the `sed` line above or
+in the file, not with `tail`.
+
+A stage from `STAGE SELECT`: `D`, `D`, `A` (DEMO PAD on), `U` (to `STAGE SELECT`), `A` (the player list), `D` for Tails,
+`A` (the stage lists), `D` (`REGULAR`), `A`, then one `D` per act down the list - held 4 frames, released 6 (held
+longer than 8 frames, the menu repeats it) - and `S`. Each key as `FRAME:KEY,FRAME:-`, e.g. Collision Chaos 2 present
+(the 15th act, 14 `D`s) as Sonic:
+`-f 3000 -pad "600:D,610:-,620:D,630:-,640:A,650:-,660:U,670:-,680:A,690:-,700:A,710:-,720:D,730:-,740:A,750:-,760:D,764:-,770:D,774:-,780:D,784:-,790:D,794:-,800:D,804:-,810:D,814:-,820:D,824:-,830:D,834:-,840:D,844:-,850:D,854:-,860:D,864:-,870:D,874:-,880:D,884:-,890:D,894:-,900:S,910:-"`
 
 The build folder must hold:
 
@@ -91,14 +114,16 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `engine started` | the loader loaded the engine, the data pack and the first scene, and jumped to the engine |
 | `stage set-up 5C16` | the engine began loading its first stage (line 10 `5C16` on the console) |
 | `stage loaded` | the stage finished loading (`5Lnn`: list L, scene nn; `5100` = Palmtree Panic 1) |
-| `planes on (CMD 68)` | the SH2 asked for the Genesis planes and the Sub-CPU accepted |
+| `planes on (CMD 68)` | the SH2 asked for the Genesis planes and the Sub-CPU accepted (R4: the first is the Level Select menu's) |
 | `game speed` | engine frames per second of play, after the stage loaded. The game is made for 60; R1S: 26-29 |
 | `plane records` | records the SH2 sent, the 68000 took, and the VDP got. `INCLUDING A JUNK RECORD` = COMM4 held a value when the planes came on, and the 68000 took it as a record: a dot in every blank cell (R1G, R1R). Listed as the problem `JUNK-RECORD` |
 | `record contents` | a CRC of the first 600 records (option `-reccrc N`). It depends only on the pictures, not on the speed: a speed change that keeps this CRC keeps every picture the same |
+| `controller` | (R4) the pad requests (command 48) the Sub-CPU answered - one a frame |
+| `audio` | (R4) sound effects played (command 48's upper byte; the first 40 are listed as `SUB: sound effect N`) and CD audio commands (45 play, 54 stop: `SUB: CMD 45 play track N`) |
 | `frame-buffer FIFO` | (only when it happens) words the SH2 wrote to the frame buffer that were still in the 32X's 4-word write FIFO when it gave the frame buffer to the 68000. The 32X does not guarantee them |
 | `line 10 now` | what line 10 would show at the end |
-| `PROBLEMS` | **do not burn.** Each kind of problem is listed with how many times it happened and where it happened first (the function and the offset into it) |
-| `warnings` | reads of memory nothing has written; worth a look, not a reason to stop |
+| `PROBLEMS` | **do not burn.** Each kind of problem is listed with how many times it happened and where it happened first (the function and the offset into it); R4: and the places with the most, under it |
+| `warnings` | reads of memory nothing has written; worth a look, not a reason to stop. About 116 in `scd_fopen` / `LoadFile` at start-up are normal (local variables read before they are set, in code the console has always run); millions are not (R4: the foreground's line scroll entries) |
 | `information` | normal register traffic, and the engine's expected writes into the loader's area (`W-SAMPLING`: the sampler switch, `W-VECTOR`: its exception handlers, `W-BOOTREC` (R3): the number of the scene image now in the cart, after a scene change), listed for reference |
 | `VERDICT` | `no problems found` = safe to burn as far as the SH2 and the plane records go |
 
@@ -108,7 +133,12 @@ The earlier part of the log lists, as they happen:
 
 - the **STATE lines**, which are what line 10 shows on the console;
 - the Sub-CPU's file opens;
-- the **event lines**.
+- the **event lines**;
+- (R4) `scene image: native scripts at A-B`: the scene image in the cart carries its scripts as native code (part 18)
+  there - from then on that range is code, like the engine's;
+- (R4) `ENGINE LOG: ...`: the engine's own notes (`plat_log`, which prints nothing on the console), e.g. `native scripts
+  on (the engine's and the scene's)` when a scene's scripts run as native code;
+- (R4) `peek (stage loaded) NAME = V`: option `-peek`.
 
 This event line is from R1Q:
 
@@ -203,6 +233,13 @@ All options go after the build folder.
 -shot FRAME FILE.bmp    save the Genesis picture (planes model) at that frame; up to 64
 -shots A B STEP PREFIX  a picture every STEP frames from A to B: PREFIX_<frame>.bmp
 -records N     print the first N plane records the 68000 model applies (default 3)
+-pad SCRIPT    (R4) the controller: "FRAME:BUTTONS,..." - U D L R A B C S X Y Z (S = Start), "-" = none;
+               FRAME:demo = the scripted pad (spin dash, run right) from that frame on
+-set NAME=V    (R4) the engine variable NAME (32 bits) = V when the first stage set-up starts (5C16)
+-peek NAME[:N] (R4) print the engine variable NAME (N = 1, 2 or 4 bytes) at each stage load and at the end, e.g.
+               -peek scdBlob (not 0: the scene's native scripts are in use) -peek stageListPosition
+-syms FILE     (R4) more function names, `nm -n -C` format: a scene's native scripts are named in
+               game_data/native/scene_<list>_<pos>.syms (tools/build_game_data.py --native); up to 8
 -reccrc N      the record contents CRC over the first N records (default 600)
 -profile A B   where the SH2's time goes between frames A and B (section 4)
 -callers NAME  with -profile: who calls the function NAME, how often a frame
@@ -237,8 +274,9 @@ cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
   an id while the SH2 still holds the frame buffer, the console reads undefined data; the model then uses what the
   console copied on R1H (`REC 0004 0004 0006 ...`). The VDP model draws the two planes, their scroll, the colours and
   (R3) the sprites: the sprite table at `0xF800`, the links, 20 sprites and 320 dots a line, the flips and the
-  priority bits (high before low; sprite, plane A, plane B). It has no window, no sprite masking, no shadow /
-  highlight and no 32X layer. The 68000's copy takes 75 SH2 cycles a word, and it does not take a record while its
+  priority bits (high before low; sprite, plane A, plane B), and (R4) the 32X layer of the credits screen (the
+  256-colour mode through its line table; colours without bit 15 behind the Genesis picture). It has no window, no
+  sprite masking and no shadow / highlight. The 68000's copy takes 75 SH2 cycles a word, and it does not take a record while its
   vertical blank handler runs (`-k68word`).
 - **Loading speed.** The Sub-CPU answers at once. On the console a 32 KB chunk takes about a second, so the loading
   part of the timeline is much shorter here.
@@ -280,3 +318,19 @@ found`. Its profile found the slowest frame (1.13 vertical blanks) in the sprite
 had to make room, it evicted the least recently used one at a time and searched again after each. It now evicts one
 run of neighbouring sets in one pass: the slowest frame 1.03, the same pictures (PC model: identical pixels), and 6%
 fewer pattern uploads.
+
+**R4 (every act, native scripts per scene).** Each scene image now carries its own scripts as native code, so sh2emu
+treats the image's part 18 as code (it stopped with `EXEC OUTSIDE CODE` at first). Runs through the Level Select menu
+(`-pad`, `-peek scdBlob`, `-syms`) and the build of every scene's blob found three things before any disc; after the fixes, every act as Sonic and as
+Tails - 140 runs - `no problems found`:
+
+- 1.4 million `R-UNDEF` a run in the acts with line deformation (Collision Chaos, Tidal Tempest ...): the foreground's
+  line scroll entries, in the layout pool in the frame buffer, were never cleared - the original's are a static
+  array of zeros. On the console: whatever the frame buffer held there - the foreground could take another line's
+  deformation. Cleared when the act's layout loads.
+- Stardust Speedway at 30-36 frames a second: its spotlights' scripts ran in the interpreter (the 3D buffer variables
+  share one case in the interpreter, which reads the variable's number from the bytecode; the translator now puts in
+  the number it knows), and so did every sub that calls a function by a variable number (every function of the
+  scene is translated now). 59-60 after.
+- The blobs of Collision Chaos 2 and 3 and Metallic Madness 3 did not link: a static flag inside the instruction
+  `Set16x16TileInfo` is data, and a blob in the cart has none. The flag is a global of the engine now.

@@ -46,7 +46,8 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | Genesis planes streamed by the 68000 from SH2-made records | S3c / S4b: 60 fps in **Fusion** (a standalone 68000 program). Not yet run on the console. |
 | The 2011 engine on the SH2 from the cart | proven on the console in rounds S5–S7 (title scene starts; 30 fps with drawing off) |
 | R1: the engine drives the planes (records through the frame buffer, the listener copies them in vblank) | **On the console (R1X): Palmtree Panic 1 on the Genesis planes at 60 frames a second** (measured on MicroNut99's video, 16 Oct), the whole act to its end. R1S was 27-29; the speed rounds R1T-R1X: native scripts, hot code in SDRAM, ... [docs/R1_NOTES.md](docs/R1_NOTES.md) (*Speed*). |
-| R3: the sprites, and Tails | **In sh2emu and the PC model**: Sonic, Tails, rings, badniks and the HUD as Genesis sprites at 59.9 frames a second; the act as Sonic, then as Tails, then as Sonic again - next: the console. [docs/R3_NOTES.md](docs/R3_NOTES.md) |
+| R3: the sprites, and Tails | **On the console (R3A)**: Sonic, Tails, rings, badniks and the HUD as Genesis sprites at 59.9 frames a second; the act as Sonic, then as Tails. [docs/R3_NOTES.md](docs/R3_NOTES.md) |
+| R4: the whole game's acts, the controller, the Level Select menu, music and sound | **In sh2emu**: all 70 regular acts (every round, all four time periods), as Sonic and as Tails, with the controller, CD audio music and PCM sound effects, each scene's scripts as native code: 58-60 frames a second (Collision Chaos 2 past: 52) - next: the console. [docs/R4_NOTES.md](docs/R4_NOTES.md) |
 
 ## Rounds
 
@@ -56,8 +57,8 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | R1 | The level on the Genesis planes, driven by the engine: the act's Genesis file (`G<list>S<pos>.MDG`) in the cart; each frame the SH2 streams both planes from the engine's own layer scroll (`md_planes.c`, proven in S3a) into a record; the listener copies it into the VDP in vertical blank. 32X layer off, scripted pad. [docs/R1_NOTES.md](docs/R1_NOTES.md) |
 | R2 | Animated tiles as pattern rewrites (R5xD, R6x, R8x need it – see R0); layout changes (broken walls, moved blocks). |
 | R3 | The sprites as Genesis hardware sprites, through the plane record: Sonic, rings, badniks, HUD, title card, results. Tails playable: his own scene image and act file; the act restarts with the other character. [docs/R3_NOTES.md](docs/R3_NOTES.md) |
-| R4 | Water (palette per line), palette effects, the 22 acts that differ in R0. |
-| later | The pad (the scripted pad plays so far), special stages (32X, rotating floor), menus, music (CD audio) and sound effects, time travel without loading (all four periods of an act fit the cart together – S2), 32X effects (rotation, scaling, translucency). |
+| R4 | Every regular act as Sonic and as Tails, the controller, the Level Select menu (stage select, demo pad and debug mode switches, credits), music as CD audio tracks, sound effects on the PCM chip, each scene image with its own data pack and native scripts, scene changes that load only the chunks that differ. [docs/R4_NOTES.md](docs/R4_NOTES.md) |
+| later | Water (palette per line: the 68000's line interrupt), animated tiles (R2's list), the 22 acts that differ in R0, special stages (32X, rotating floor), the title and story screens, the stages' own sound effects, time travel without loading (all four periods of an act fit the cart together – S2), 32X effects (rotation, scaling, translucency). |
 
 ## Command numbers
 
@@ -79,7 +80,7 @@ SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 6800
 ```
 
 The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
-the disc's steps are in [docs/R3_NOTES.md](docs/R3_NOTES.md) (R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
+the disc's steps are in [docs/R4_NOTES.md](docs/R4_NOTES.md) (R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
 
 ## Checking a build before burning: tools/sh2emu
 
@@ -91,6 +92,9 @@ ends with a verdict: burn only on `no problems found`. How to build it, run it a
 ## Credits
 
 - Sonic CD © SEGA. The 2011 remaster by Christian Whitehead.
-- RSDKv3 decompilation by the RSDKModding team (its own licence, `RSDKv3-Decompilation-master/LICENSE.md`).
+- RSDKv3 decompilation by Rubberduckycooly and st×tic (its own licence, `RSDKv3-Decompilation-master/LICENSE.md`).
+- The credits screen's plasma (R4): OpenJazz's, © 2010 Alireza Nejati, GPL-2.0, as MicroNut99's
+  Sonic32XPlus1-RealHardware draws it – see *Licences* in [docs/R4_NOTES.md](docs/R4_NOTES.md).
+- The CD32X framework: Victor Luchits (viciious); Sega CD and 32X code: Chilly Willy.
 - Boot stack: the Kobo / OpenLara CD32X framework (`KOBO_CD32X_BOOT_PROCESS.md`, `cd32x/kobo/README.md`
   and `cd32x/kobo/LICENSE.md` name its authors and licence).

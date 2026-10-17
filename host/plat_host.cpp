@@ -324,10 +324,12 @@ void plat_layer_end(int slot)
 unsigned int plat_ticks_ms() { return frameCount * 1000 / 60; }
 
 static void draw_log_frame(); // S7e (below)
+static void menu_log(); // REV R4
 void plat_present(const unsigned short *frame, int width, int height, int pitch)
 {
     draw_log_frame(); // S7e
     hostInit();
+    menu_log();
     md_check_frame();
     if (frameCount % saveEvery == 0) {
         if (crcLog) {
@@ -364,6 +366,22 @@ void plat_present(const unsigned short *frame, int width, int height, int pitch)
 #endif
 }
 
+// REV R4: the dev menu's DEMO PAD switch (engine/plat.hpp) - as the console: the scripted pad from each stage's start
+int scdDemoPad = 0;
+static unsigned int stageStartMs = 0;
+static unsigned int demo_pattern(unsigned int ms)
+{
+    if (ms < 4000)
+        return 0;
+    unsigned int t = (ms - 4000) % 4000;
+    if (t < 150) return PAD_DOWN;
+    if (t < 300) return PAD_DOWN | PAD_C;
+    if (t < 900) return PAD_DOWN;
+    if (t < 2400) return PAD_RIGHT;
+    if (t < 2700) return PAD_RIGHT | PAD_C;
+    if (t < 3900) return PAD_RIGHT;
+    return 0;
+}
 unsigned int plat_pad()
 {
     hostInit();
@@ -386,7 +404,62 @@ unsigned int plat_pad()
         return 0;
     }
     for (int i = 0; i < padSteps && padScript[i].ms <= now; i++) pad = padScript[i].pad;
+    static unsigned int held = 0;
+    unsigned int pressed     = pad & ~held;
+    held                     = pad;
+    if (scdDemoPad && Engine.gameMode == ENGINE_MAINGAME) { // REV R4: the DEMO PAD switch, until a button is pressed in a stage
+        if (!pressed)
+            return demo_pattern(now - stageStartMs);
+        scdDemoPad = 0;
+    }
+    if ((pad & (PAD_A | PAD_B | PAD_C | PAD_START)) == (PAD_A | PAD_B | PAD_C | PAD_START) && Engine.gameMode == ENGINE_MAINGAME &&
+        plat_boot_menu())
+        Engine.gameMode = ENGINE_INITDEVMENU; // REV R4: A + B + C + START - back to the dev menu, as the console
     return pad;
+}
+
+// REV R4: the dev menu. SCD32X_DEVMENU=1: the run starts in it (as the console). Its text goes into the event log
+// whenever a row changes ("MENU rr |text|", highlighted characters in lower case).
+bool plat_boot_menu()
+{
+    const char *v = getenv("SCD32X_DEVMENU");
+    return v && *v && *v != '0';
+}
+const void *plat_native_blob() { return 0; } // REV R4: the PC builds bind the engine's part only
+unsigned int plat_engine_sum() { return 0; }
+void plat_credits() { ev("CREDITS (the console's credits screen: cd32x/engine/scd_credits.inc)"); } // REV R4
+static char menuCur[28][41], menuShown[28][41];
+static bool menuDrawn = false;
+void plat_menu_clear()
+{
+    if (Engine.gameMode != ENGINE_DEVMENU)
+        return;
+    hostInit();
+    memset(menuCur, ' ', sizeof(menuCur));
+    for (int r = 0; r < 28; ++r) menuCur[r][40] = 0;
+    menuDrawn = true;
+}
+void plat_menu_text(const unsigned short *t, int n, int x, int y, int highlight)
+{
+    if (!menuDrawn || y < 0 || (y >> 3) >= 28)
+        return;
+    int col = (x + 4) >> 3; // as the console: the nearest cell
+    for (int i = 0; i < n; ++i, ++col) {
+        int c = t[i] & 0xFF;
+        if (col >= 0 && col < 40)
+            menuCur[y >> 3][col] = (char)(c < 32 || c > 126 ? '?' : highlight && c >= 'A' && c <= 'Z' ? c + 32 : c);
+    }
+}
+static void menu_log() // the frame's menu text: the rows that changed
+{
+    if (!menuDrawn)
+        return;
+    menuDrawn = false;
+    for (int r = 0; r < 28; ++r)
+        if (strcmp(menuCur[r], menuShown[r])) {
+            strcpy(menuShown[r], menuCur[r]);
+            ev("MENU %02d |%s|", r, menuCur[r]);
+        }
 }
 
 void plat_music_play(const char *fileName, int loop, unsigned int loopPoint)
@@ -497,7 +570,7 @@ void *plat_cart_data(int kind)
 }
 // S5g: one image per stage load, as on the console (one per stage). The SH2 configuration reads
 // image <n> before the n-th stage load; the normal build writes image <n> after it.
-void plat_stage_loading()
+bool plat_stage_loading()
 {
     { // REV R3: SCD32X_PLAYER=n - the run starts with player n (0 Sonic, 1 Tails), as the game's character choice
         static int forced = -2;
@@ -538,9 +611,11 @@ void plat_stage_loading()
     const char *in = getenv("SCD32X_CARTIMG_IN");
     if (in && *in && !cart_read(in, cartLoads))
         ev("PORT32X: no cart image for stage load %d (kept the previous one)", cartLoads);
+    return true;
 }
 void plat_stage_loaded()
 {
+    stageStartMs = plat_ticks_ms(); // REV R4: the DEMO PAD switch's pad from here
     const char *out = getenv("SCD32X_CARTIMG_OUT");
     int n           = cartLoads++;
     if (!out || !*out)

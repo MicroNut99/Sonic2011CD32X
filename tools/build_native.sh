@@ -18,5 +18,6 @@ $CXX -E -P -std=c++17 -DSONICCD32X -DSCD32X_SH2 -DSCD_PLANES=1 -DSCD_AOT_EXTRACT
 # frame by object type and event" and the cart code stall ranking); names as the game names its object types
 # R1X: and the shared instruction functions the frame's scripts call most (op:FUNC_...)
 HOT=${SCD_HOT_SCRIPTS:-StageSetup:player,Ring:player,PlayerObject:draw,PlayerObject:main,Ring:draw,StageSetup:main,PaletteAnimation:main,HUD:draw,op:FUNC_PLAYEROBJECTCOLLISION,op:FUNC_DRAWNUMBERS,op:FUNC_DRAWSPRITE,op:FUNC_DRAWSPRITESCREENXY}
-python3 tools/scd_aot.py --data "$DATA" --ii engine/Script_aot.ii --scene "$SCENE" --out engine/ScriptNative.inc --hot "$HOT"
+python3 tools/scd_aot.py --data "$DATA" --ii engine/Script_aot.ii --scene "$SCENE" --out engine/ScriptNative.inc --hot "$HOT" \
+    --part global --ops engine/ScriptNative.ops   # REV R4: the global scripts only (the scenes carry their own: build_game_data.py --native)
 rm -f engine/Script_aot.ii

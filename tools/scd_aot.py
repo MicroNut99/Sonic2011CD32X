@@ -42,8 +42,15 @@ def engine_tables(script_cpp):
     i = src.index("enum ScrVariable {")
     j = src.index("};", i)
     venum = re.findall(r"\b(VAR_[A-Z0-9_]+)\b", src[i:j])
+    # REV R4: how many of them are numbered the same in every build (before the first #if inside the enum)
+    k = src.find("#", i, j)
+    global VENUM_FIXED
+    VENUM_FIXED = len(re.findall(r"\b(VAR_[A-Z0-9_]+)\b", src[i:k if k >= 0 else j]))
     assert len(fenum) >= len(funcs), (len(fenum), len(funcs))
     return funcs, fenum, venum
+
+
+VENUM_FIXED = 0
 
 
 # ------------------------------------------------------------------ the game data
@@ -292,10 +299,20 @@ OUTLINE_TOKENS = 60
 
 
 class Gen:
-    def __init__(self, scene, funcs, fenum, venum, ex):
+    def __init__(self, scene, funcs, fenum, venum, ex, part="all", ng=0, engine_ops=()):
         self.scene, self.funcs, self.fenum, self.venum, self.ex = scene, funcs, fenum, venum, ex
         self.problems = {}
         self.outlined = {}  # instruction name -> the shared function's text
+        # REV R4: part "global" (the engine's: the global scripts, function numbers < ng) or "stage" (a scene image's
+        # blob: the rest; the global functions and the shared instructions the engine has are called there)
+        self.part, self.ng, self.engine_ops = part, ng, set(engine_ops)
+        self.extern_ops = set()
+
+    def fcall(self, n):
+        """REV R4: the C++ function that runs script function n"""
+        if self.part == "stage" and n < self.ng:
+            return "scdNativeGlobalF[%d]" % n
+        return "scdn_F%d" % n
 
     def outline(self, op):
         """the shared function's name for this instruction, or None to copy its code into the sub"""
@@ -304,6 +321,9 @@ class Gen:
         if len(b) < OUTLINE_TOKENS:
             return None
         name = "scdop_" + fname
+        if self.part == "stage" and fname in self.engine_ops:
+            self.extern_ops.add(fname)  # REV R4: the engine's copy (SDRAM if it is hot)
+            return name
         if fname not in self.outlined:
             self.outlined[fname] = "\n".join([
                 "static int %s(int opcodeSize, byte scriptSub)" % name, "{",
@@ -339,10 +359,31 @@ class Gen:
             body = table.get("default", ["break", ";"])  # the interpreter's default: nothing
         else:
             body = table[name]
+        body = self.known_var(body, v)
         if any(t in cpp.CONTROL_LOCALS for t in body):
             raise Untranslatable("variable %s needs the interpreter's position" % name)
         return "{ const int i = %d; int arrayVal = %s; (void)i; (void)arrayVal; do { %s } while (0); }" % (
             i, self.array_val(mode, a, b), cpp.join(body))
+
+    def known_var(self, body, v):
+        """REV R4: cases the interpreter shares between variables (the port's 3D buffers, Script.cpp S5i) find out which
+        one from the bytecode - scriptCode[scriptCodePtr - 1]; here it is known: that number, and the variables'
+        names as numbers (the enum is Script.cpp's own) - the compiler keeps the one case"""
+        pat = ["scriptCode", "[", "scriptCodePtr", "-", "1", "]"]
+        if "scriptCodePtr" not in body:
+            return body
+        out, k = [], 0
+        while k < len(body):
+            if body[k:k + len(pat)] == pat:
+                out.append(str(v))
+                k += len(pat)
+            else:
+                out.append(body[k])
+                k += 1
+        venum = {n: i for i, n in enumerate(self.venum[:VENUM_FIXED])}
+        if v >= VENUM_FIXED or any(t.startswith("VAR_") and t not in venum for t in out):
+            return body  # (a variable whose number depends on the build: left to the interpreter)
+        return [str(venum[t]) if t in venum else t for t in out]
 
     def reads(self, op):
         out = []
@@ -423,7 +464,7 @@ class Gen:
                 code.append("goto L%d;" % (start + J(st[-1] + 3)))
             elif f == F["FUNC_CALLFUNCTION"]:
                 if op.args[0][0] == "int":
-                    code.append("if (scdn_F%d(scriptSub)) return true;" % op.args[0][1])
+                    code.append("if (%s(scriptSub)) return true;" % self.fcall(op.args[0][1]))
                 else:
                     code.append("if (scdn_call(scriptSub)) return true;")
                 if op.next != nxt:
@@ -458,22 +499,45 @@ class Gen:
         return "\n".join(lines), calls, len(order)
 
 
-def code_hash(scene):
-    """the same hash the engine computes at a stage load (scd_native_hash): FNV-1a over the 32-bit words"""
+def code_hash(scene, part="all", g=0, gj=0, ng=0):
+    """the same hash the engine computes at a stage load (scd_native_bind): FNV-1a over the 32-bit words.
+    REV R4: part "global" - the global scripts' code, jump table and functions (the first g, gj, ng); "stage" - the rest
+    and the whole scene's counts"""
     h = 0x811C9DC5
 
     def mix(v):
         nonlocal h
         h = ((h ^ (v & 0xFFFFFFFF)) * 0x01000193) & 0xFFFFFFFF
 
-    for v in scene.code:
+    if part == "all":
+        for v in scene.code:
+            mix(v)
+        for v in scene.jt:
+            mix(v)
+        for c, j in zip(scene.fcode, scene.fjt):
+            mix(c)
+            mix(j)
+        return h
+    lo_c, hi_c = (0, g) if part == "global" else (g, len(scene.code))
+    lo_j, hi_j = (0, gj) if part == "global" else (gj, len(scene.jt))
+    lo_f, hi_f = (0, ng) if part == "global" else (ng, len(scene.fcode))
+    for v in scene.code[lo_c:hi_c]:
         mix(v)
-    for v in scene.jt:
+    for v in scene.jt[lo_j:hi_j]:
         mix(v)
-    for c, j in zip(scene.fcode, scene.fjt):
+    for c, j in zip(scene.fcode[lo_f:hi_f], scene.fjt[lo_f:hi_f]):
         mix(c)
         mix(j)
+    for v in ((g, gj, ng) if part == "global" else (len(scene.code), len(scene.jt), len(scene.fcode))):
+        mix(v)
     return h
+
+
+def global_part(data):
+    """REV R4: (code words, jump table words, functions) of the global scripts (GS000) - the same in every stage that
+    loads them (they load first: tools check it, the engine hashes it)"""
+    c, j, cp, jp, fc, fj = load_bytecode(data.read("Data/Scripts/ByteCode/GS000.bin"))
+    return len(c), len(j), len(fc)
 
 
 def main():
@@ -486,6 +550,12 @@ def main():
     ap.add_argument("--only", default="", help="TYPE:SUB,... (type names as the game names them, sub = main/player/draw/setup)")
     ap.add_argument("--hot", default="", help="R1V: TYPE:SUB,... and F<n>,... whose code goes into SDRAM on the console "
                     "(SCD_HOT: the ones that run every frame)")
+    ap.add_argument("--part", default="all", choices=("all", "global", "stage"),
+                    help="REV R4: global = the global scripts only (into the engine: engine/ScriptNative.inc), stage = "
+                    "the scene's own (a blob for its image: tools/build_game_data.py --native), all = everything (R1-R3)")
+    ap.add_argument("--ops", default="", help="REV R4: the engine's list (global: written; stage: read) - "
+                    "the global part's sizes, its native functions and shared instructions")
+    ap.add_argument("--engine-sum", default="0", help="REV R4 (stage): the engine image's checksum the blob is for")
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args()
     funcs, fenum, venum = engine_tables(a.script_cpp)
@@ -495,11 +565,35 @@ def main():
     data = sr.Data(a.data)
     lst, pos = (int(x) for x in a.scene.split(":"))
     scene = Scene(data, lst, pos)
-    gen = Gen(scene, funcs, fenum, venum, ex)
+    part = a.part
+    g = gj = ng = 0
+    engine_ops, engine_fns = set(), set()
+    gsz = global_part(data)
+    gc_ok = scene.code[:gsz[0]] == load_bytecode(data.read("Data/Scripts/ByteCode/GS000.bin"))[0] and len(scene.fcode) >= gsz[2]
+    if part == "global":
+        if not gc_ok:
+            sys.exit("--part global: scene %s does not start with the global scripts" % a.scene)
+        g, gj, ng = gsz
+    elif part == "stage":
+        if not a.ops or not os.path.exists(a.ops):
+            sys.exit("--part stage needs --ops (engine/ScriptNative.ops, written by --part global)")
+        for line in open(a.ops):
+            w = line.split()
+            if w and w[0] == "global":
+                eg, egj, eng = int(w[1]), int(w[2]), int(w[3])
+            elif w and w[0] == "op":
+                engine_ops.add(w[1])
+            elif w and w[0] == "fn":
+                engine_fns.add(int(w[1]))
+        if gc_ok and (eg, egj, eng) == gsz:
+            g, gj, ng = gsz  # the scene runs the global scripts: the engine has those
+        else:
+            engine_ops, engine_fns = set(), set()  # a scene of its own (special stages, menus): all of it here
+    gen = Gen(scene, funcs, fenum, venum, ex, part, ng, engine_ops)
     only = set()
     for item in filter(None, a.only.split(",")):
-        t, s = item.rsplit(":", 1)
-        only.add((t.strip().replace(" ", ""), s.strip()))
+        t, s_ = item.rsplit(":", 1)
+        only.add((t.strip().replace(" ", ""), s_.strip()))
     hot_subs, hot_funcs, hot_ops = set(), set(), set()
     for item in filter(None, (x.strip() for x in a.hot.split(","))):
         if re.fullmatch(r"F\d+", item):
@@ -507,24 +601,43 @@ def main():
         elif item.startswith("op:"):  # R1X: a shared instruction function, e.g. op:FUNC_DRAWSPRITESCREENXY
             hot_ops.add(item)
         else:
-            t, s = item.rsplit(":", 1)
-            hot_subs.add((t.strip().replace(" ", ""), s.strip()))
+            t, s_ = item.rsplit(":", 1)
+            hot_subs.add((t.strip().replace(" ", ""), s_.strip()))
+    if part == "stage":
+        hot_subs, hot_funcs, hot_ops = set(), set(), set()  # REV R4: no SDRAM for a blob
 
     out_subs, out_funcs, done_funcs, skipped = [], {}, {}, []
     count_ops = 0
+    nf = len(scene.fcode)
+
+    def in_part(n):
+        """function n is this part's to translate"""
+        if part == "global":
+            return n < ng
+        if part == "stage":
+            return n >= ng
+        return True
+
+    def real(m):
+        return 0 <= scene.fcode[m] < len(scene.code)  # not an unused slot ("no script")
 
     def want_function(n):
         """translate function n and everything it calls; False if any of it cannot be (-1: all functions)"""
         if n == -1:
             ok = True
-            for m in range(len(scene.fcode)):
-                if scene.fcode[m] < 0 or scene.fcode[m] >= len(scene.code):
-                    continue  # an unused slot ("no script")
-                ok = want_function(m) and ok
+            for m in range(nf):
+                if real(m):
+                    ok = want_function(m) and ok
             done_funcs[-1] = ok
             return ok
         if n in done_funcs:
             return done_funcs[n]
+        if part == "stage" and n < ng:  # the engine's: native there, or not
+            done_funcs[n] = n in engine_fns
+            return done_funcs[n]
+        if part == "global" and n >= ng:  # a stage's function: the engine calls the blob's (scd_native_stage_fn)
+            done_funcs[n] = True
+            return True
         done_funcs[n] = True  # recursion: assume yes, corrected below
         try:
             text, calls, nops = gen.sub("scdn_F%d" % n, scene.fcode[n], scene.fjt[n], True)
@@ -537,15 +650,17 @@ def main():
                 done_funcs[n] = False
                 skipped.append(("function %d" % n, "calls function %d (not translatable)" % c))
                 return False
-        out_funcs[n] = (text, nops)
+        out_funcs[n] = (text, nops, -1 in calls)
         return True
 
     for t in sorted(scene.subs):
         name = scene.names[t] if t < len(scene.names) else "type%d" % t
-        for s, (cp, jp) in enumerate(scene.subs[t]):
+        for s_, (cp, jp) in enumerate(scene.subs[t]):
             if cp >= len(scene.code) or cp < 0:
                 continue  # no such sub (the "no script" index)
-            if only and (name.replace(" ", ""), SUBS[s]) not in only:
+            if part == "global" and cp >= g or part == "stage" and cp < g:
+                continue  # REV R4: the other part's
+            if only and (name.replace(" ", ""), SUBS[s_]) not in only:
                 continue
             cname = "scdn_S%d" % cp
             if any(x[1] == cname for x in out_subs):
@@ -553,62 +668,127 @@ def main():
             try:
                 text, calls, nops = gen.sub(cname, cp, jp, False)
             except (Untranslatable, ValueError) as e:
-                skipped.append(("%s %s" % (name, SUBS[s]), str(e)))
+                skipped.append(("%s %s" % (name, SUBS[s_]), str(e)))
                 continue
             if not all(want_function(c) for c in calls):
-                skipped.append(("%s %s" % (name, SUBS[s]), "calls a function that cannot be translated"))
+                skipped.append(("%s %s" % (name, SUBS[s_]), "calls a function that cannot be translated"))
                 continue
-            out_subs.append((cp, cname, jp, text, name, SUBS[s], nops))
+            out_subs.append((cp, cname, jp, text, name, SUBS[s_], nops, -1 in calls))
             count_ops += nops
+    if part == "stage":
+        # REV R4: every function of the scene, called by a sub or not - a variable call (the global scripts' too:
+        # CallFunction(object.state) ...) may reach any of them, and is native only when they all are (allFuncs)
+        for n in range(ng, nf):
+            if real(n):
+                want_function(n)
     # functions that ended up not translatable after a sub took them: drop the subs that call them
     bad = {n for n, ok in done_funcs.items() if not ok}
     if bad:
         keep = []
         for item in out_subs:
-            if any(("scdn_F%d(" % n) in item[3] for n in bad if n >= 0) or (-1 in bad and "scdn_call(" in item[3]):
+            if any(("scdn_F%d(" % n) in item[3] or ("scdNativeGlobalF[%d]" % n) in item[3] for n in bad if n >= 0) or \
+                    (-1 in bad and "scdn_call(" in item[3]):
                 skipped.append(("%s %s" % (item[4], item[5]), "calls a function that cannot be translated"))
             else:
                 keep.append(item)
         out_subs = keep
-    h = code_hash(scene)
+        for n in [n for n in out_funcs if any(("scdn_F%d(" % b) in out_funcs[n][0] for b in bad if b >= 0)]:
+            del out_funcs[n]
+    h = code_hash(scene, part, g, gj, ng)
+    var_call = done_funcs.get(-1) is True
+    stage_funcs_all = all(n in out_funcs for n in range(ng, nf) if real(n)) if part == "stage" else True
     with open(a.out, "w") as f:
         w = f.write
-        w("// PORT32X R1U: native scripts for scene %d:%d (%s) - generated by tools/scd_aot.py from the game's data.\n"
+        what = {"all": "", "global": " - the global scripts (REV R4: the engine's part)",
+                "stage": " - the scene's own scripts (REV R4: its image's blob)"}[part]
+        w("// PORT32X R1U: native scripts for scene %d:%d (%s)%s - generated by tools/scd_aot.py from the game's data.\n"
           "// Do not edit, do not publish (made from the game's bytecode). %d object subs, %d functions.\n" % (
-              lst, pos, scene.label, len(out_subs), len(out_funcs)))
+              lst, pos, scene.label, what, len(out_subs), len(out_funcs)))
+        if part == "stage":
+            w('#include "RetroEngine.hpp"\n')
+            w("extern \"C\" bool (*const scdNativeGlobalF[])(byte); // the engine's global functions (ScriptNative.inc)\n")
+            for name in sorted(gen.extern_ops):
+                w("extern \"C\" int scdop_%s(int opcodeSize, byte scriptSub); // the engine's\n" % name)
+            w("extern \"C\" bool scd_native_stage_fn(int n, byte scriptSub);\n")
+        if part == "global":  # REV R4: the shared instructions with C names - the blobs call them
+            for name in sorted(gen.outlined):
+                w("extern \"C\" int scdop_%s(int opcodeSize, byte scriptSub)%s;\n" % (
+                    name, " SCD_HOT" if ("op:" + name) in hot_ops else ""))
+                w(gen.outlined[name].replace("static int scdop_%s(" % name, "extern \"C\" int scdop_%s(" % name) + "\n")
+            w("extern \"C\" bool scd_native_stage_fn(int n, byte scriptSub); // Script.cpp: a stage's function (its blob)\n")
         w("namespace {\n")
         for n in sorted(out_funcs):
             w("static bool scdn_F%d(byte scriptSub)%s;\n" % (n, " SCD_HOT" if n in hot_funcs else ""))
-        for cp, cname, jp, text, name, sub, nops in out_subs:  # R1V: the ones that run every frame into SDRAM
+        for cp, cname, jp, text, name, sub, nops, vc in out_subs:  # R1V: the ones that run every frame into SDRAM
             if (name.replace(" ", ""), sub) in hot_subs:
                 w("static bool %s(byte scriptSub) SCD_HOT; // %s, %s\n" % (cname, name, sub))
-        if done_funcs.get(-1):
+        if var_call:
             # CallFunction with a variable: the interpreter takes scriptFunctionList[n] - every function is native
             w("static bool scdn_call(byte scriptSub)\n{\n    switch (scriptEng.operands[0]) {\n")
-            for n in sorted(out_funcs):
-                w("        case %d: return scdn_F%d(scriptSub);\n" % (n, n))
-            w("        default: return true; /* no such function: the interpreter would run garbage - stop */\n    }\n}\n")
-        for name in sorted(gen.outlined):  # R1X: the shared instruction functions
-            w("\n// instruction %s (shared)\n" % name + gen.outlined[name].replace(
-                "static int scdop_%s(int opcodeSize, byte scriptSub)" % name,
-                "static int scdop_%s(int opcodeSize, byte scriptSub)%s;\nstatic int scdop_%s(int opcodeSize, byte scriptSub)" % (
-                    name, " SCD_HOT" if ("op:" + name) in hot_ops else "", name)) + "\n")
+            for n in range(nf):
+                if not real(n):
+                    continue
+                if part == "global" and n >= ng:
+                    continue
+                if n in out_funcs or part == "stage" and n < ng:
+                    w("        case %d: return %s(scriptSub);\n" % (n, gen.fcall(n)))
+            if part == "global":
+                w("        default: return scd_native_stage_fn(scriptEng.operands[0], scriptSub); /* a stage's (its blob) */\n    }\n}\n")
+            else:
+                w("        default: return true; /* no such function: the interpreter would run garbage - stop */\n    }\n}\n")
+        if part != "global":
+            for name in sorted(gen.outlined):  # R1X: the shared instruction functions
+                w("\n// instruction %s (shared)\n" % name + gen.outlined[name].replace(
+                    "static int scdop_%s(int opcodeSize, byte scriptSub)" % name,
+                    "static int scdop_%s(int opcodeSize, byte scriptSub)%s;\nstatic int scdop_%s(int opcodeSize, byte scriptSub)" % (
+                        name, " SCD_HOT" if ("op:" + name) in hot_ops else "", name)) + "\n")
         for n in sorted(out_funcs):
             w("\n" + out_funcs[n][0] + "\n")
-        for cp, cname, jp, text, name, sub, nops in out_subs:
+        for cp, cname, jp, text, name, sub, nops, vc in out_subs:
             w("\n// %s, %s: %d instructions\n" % (name, sub, nops) + text + "\n")
-        w("struct ScdNativeSub {\n    int codeStart, jumpTableStart;\n    bool (*fn)(byte);\n};\n")
-        w("const ScdNativeSub scdNativeSubs[] = {\n")
-        for cp, cname, jp, text, name, sub, nops in sorted(out_subs):
-            w("    { %d, %d, %s },\n" % (cp, jp, cname))
-        w("    { 0x7FFFFFFF, 0, nullptr }\n};\n")
-        w("const int scdNativeSubCount = %d;\n" % len(out_subs))
-        w("const unsigned int scdNativeHash = 0x%08Xu;\n" % h)
-        w("const int scdNativeCodeCount = %d, scdNativeJumpCount = %d, scdNativeFuncCount = %d;\n" % (
-            len(scene.code), len(scene.jt), len(scene.fcode)))
-        w("} // namespace\n")
-    print("%s: scene %s, %d object subs + %d functions native (%d instructions), %d left to the interpreter, hash %08X" % (
-        a.out, scene.label, len(out_subs), len(out_funcs), count_ops + sum(v[1] for v in out_funcs.values()), len(skipped), h))
+        subs_name = "scdNativeSubs" if part != "stage" else "blobSubs"
+        w("const ScdNativeSub %s[] = {\n" % subs_name)
+        for cp, cname, jp, text, name, sub, nops, vc in sorted(out_subs):
+            w("    { %d, %d, %s, %d },\n" % (cp, jp, cname, 1 if vc else 0))
+        w("    { 0x7FFFFFFF, 0, nullptr, 0 }\n};\n")
+        if part != "stage":
+            w("const int scdNativeSubCount = %d;\n" % len(out_subs))
+            w("const unsigned int scdNativeHash = 0x%08Xu;\n" % h)
+            if part == "global":
+                w("const int scdNativeCodeCount = %d, scdNativeJumpCount = %d, scdNativeFuncCount = %d;\n" % (g, gj, ng))
+            else:
+                w("const int scdNativeCodeCount = %d, scdNativeJumpCount = %d, scdNativeFuncCount = %d;\n" % (
+                    len(scene.code), len(scene.jt), len(scene.fcode)))
+            w("} // namespace\n")
+            if part == "global":
+                w("extern \"C\" bool (*const scdNativeGlobalF[%d])(byte) = {\n" % max(1, ng))
+                for n in range(ng):
+                    w("    %s,\n" % (("scdn_F%d" % n) if n in out_funcs else "nullptr"))
+                w("};\n")
+                # REV R4: the shared instructions the blobs call - listed, so the engine's link keeps them all
+                w("extern \"C\" int (*const scdNativeOps[])(int, byte) = {\n")
+                for name in sorted(gen.outlined):
+                    w("    scdop_%s,\n" % name)
+                w("    nullptr\n};\n")
+        else:
+            w("bool (*const blobFuncs[%d])(byte) = {\n" % max(1, nf))
+            for n in range(nf):
+                w("    %s,\n" % (("scdn_F%d" % n) if n >= ng and n in out_funcs else "nullptr"))
+            w("};\n} // namespace\n")
+            w("extern \"C\" const ScdNativeBlob scdNativeBlob __attribute__((section(\".blob_header\"), used)) = {\n")
+            w("    0x5343444Eu, 1, %su, 0x%08Xu, %d, %d, %d, %d, %d, %d, %d, blobSubs, blobFuncs, %d\n};\n" % (
+                a.engine_sum, h, g, gj, ng, len(scene.code), len(scene.jt), nf, len(out_subs), 1 if stage_funcs_all else 0))
+    if part == "global" and a.ops:
+        with open(a.ops, "w") as f:
+            f.write("global %d %d %d\n" % (g, gj, ng))
+            for name in sorted(gen.outlined):
+                f.write("op %s\n" % name)
+            for n in sorted(out_funcs):
+                f.write("fn %d\n" % n)
+            f.write("hash %08X\n" % h)
+    print("%s: scene %s%s, %d object subs + %d functions native (%d instructions), %d left to the interpreter, hash %08X" % (
+        a.out, scene.label, "" if part == "all" else " (%s part)" % part, len(out_subs), len(out_funcs),
+        count_ops + sum(v[1] for v in out_funcs.values()), len(skipped), h))
     if a.report:
         for what, why in skipped:
             print("  interpreted: %-40s %s" % (what, why))

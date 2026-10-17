@@ -118,7 +118,13 @@ class Pack:
 
 
 def write_pack(path, files):
-    """files: {"Data/Game/X.bin": bytes}. Used by the self-test only."""
+    """files: {"Data/Game/X.bin": bytes}."""
+    with open(path, "wb") as f:
+        f.write(pack_bytes(files))
+
+
+def pack_bytes(files):
+    """REV R4: the pack write_pack writes, as bytes (a scene image carries its scene's pack)."""
     dirs = {}
     for name in sorted(files):
         d, f = name.rsplit("/", 1)
@@ -136,8 +142,7 @@ def write_pack(path, files):
         db = d.encode("latin-1")
         table += bytes([len(db)]) + bytes(c ^ (~len(db) & 0xFF) for c in db) + struct.pack("<I", off)
     header = 6 + len(table)
-    with open(path, "wb") as f:
-        f.write(struct.pack("<IH", header, len(order)) + table + body)
+    return struct.pack("<IH", header, len(order)) + table + body
 
 
 def gif_size(data):

@@ -11,7 +11,7 @@ Per stage, three runs of the host builds:
   3. SH2 configuration on the MINI-PACK built from that log (each file cut after its last byte read,
      re-encrypted for its new size): its camera log must equal run 1's
 Output: out/<folder>_<id>.rsdk and out/stage_packs.md (per stage: files, KB, identical?)."""
-import os, re, subprocess, sys, tempfile
+import atexit, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -94,6 +94,7 @@ def main():
     subprocess.run(["make", "-s", "-C", os.path.join(ROOT, "host"), "SH2CFG=1", "ASAN=1"], check=True)
     gc = sr.parse_gameconfig(sr.Data(data).read("Data/Game/GameConfig.bin"))
     tmp = tempfile.mkdtemp()
+    atexit.register(shutil.rmtree, tmp, True)  # REV R4: removed however the run ends (hundreds of MB)
     jobs = [(cat, pos, folder, sid, data, frames, tmp, outdir, player) for cat in (1, 3, 0) for pos, (folder, sid, name) in enumerate(gc["lists"].get(cat, []))
             if not only or folder.upper() in only]
     print(f"{len(jobs)} stages, {jobsN} at a time", flush=True)
