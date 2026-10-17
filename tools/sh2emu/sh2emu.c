@@ -240,7 +240,8 @@ static void count_kind(const char *kind)
 /* 2 = a problem (on hardware this can hang or corrupt), 1 = a warning, 0 = information */
 static int kind_severity(const char *k)
 {
-    static const char *info[] = { "W-COMM", "W-SYSREG", "W-VDP", "W-SAMPLING", "CCR", "VBR", "W-VECTOR", "W-BOOTREC", 0 };
+    /* REV R4C: DIVU - the engine's 32X picture mode divides with the on-chip divider (no interrupt handler uses it) */
+    static const char *info[] = { "W-COMM", "W-SYSREG", "W-VDP", "W-SAMPLING", "CCR", "VBR", "W-VECTOR", "W-BOOTREC", "DIVU", 0 };
     static const char *warn[] = { "R-UNDEF", 0 };
     for (int i = 0; info[i]; ++i)
         if (!strcmp(k, info[i]))
@@ -1492,11 +1493,18 @@ static void mem_write(u32 a, u32 v, int size)
 
 /* ------------------------------------------------------------------ on-chip modules */
 static u32 divu_dvsr, divu_dvdntl, divu_dvdnth;
+static u64 divu_done; /* REV R4C: the cycle the division running ends (SH7604 manual: 39 cycles); a read of its result
+                         before that waits */
 static u32 onchip_read(u32 off, int size)
 {
     u32 v = 0;
     if (off >= 0x100) { /* 0xFFFFFF00+ : DIVU, DMAC, BSC */
         u32 o = off - 0x100;
+        if (o == 0x04 || o == 0x10 || o == 0x14) {
+            u64 now = now_cycles();
+            if (divu_done > now)
+                bus_penalty += (int)(divu_done - now);
+        }
         if (o == 0x00)
             v = divu_dvsr;
         else if (o == 0x04 || o == 0x14)
@@ -1534,6 +1542,7 @@ static void onchip_write(u32 off, u32 v, int size)
             s32 d = (s32)divu_dvsr, n = (s32)v;
             if (d)
                 divu_dvdntl = (u32)(n / d), divu_dvdnth = (u32)(n % d);
+            divu_done = now_cycles() + 39;
             evlog("DIVU", "32/32 %d / %d", n, d);
         }
         else if (o == 0x10 && size == 4)
@@ -1543,6 +1552,7 @@ static void onchip_write(u32 off, u32 v, int size)
             s32 d = (s32)divu_dvsr;
             if (d)
                 divu_dvdntl = (u32)(n / d), divu_dvdnth = (u32)(n % d);
+            divu_done = now_cycles() + 39;
             evlog("DIVU", "64/32");
         }
         else

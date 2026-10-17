@@ -26,7 +26,7 @@ int main(void)
         int bands = 1 + R(6), bandX[8], bandSpeed[8], lineBand[240];
         for (t = 0; t < wch * hch; t++) layout[t] = (uint16_t)R(512);
         L.chunks = chunks; L.quads = quads; L.layout = layout; L.layoutStride = wch;
-        L.wChunks = wch; L.hChunks = hch; L.showBack = (uint8_t)(test % 4 != 1); L.showFront = (uint8_t)(test % 4 != 2);
+        L.wChunks = wch; L.hChunks = hch; L.showBack = (uint8_t)(test % 4 != 1); L.showFront = (uint8_t)(test % 4 != 2); L.tileMap = 0;
         md_plane_reset(&P);
         for (t = 0; t < lines; t++) lineBand[t] = (t * bands) / lines;
         int camX = R(W), camY = R(H);

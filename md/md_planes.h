@@ -30,6 +30,8 @@ typedef struct {
     int layoutStride;
     int wChunks, hChunks;    /* layer size in 128-pixel chunks */
     uint8_t showBack, showFront; /* which tiles this plane shows (the engine's slots decide) */
+    const uint16_t *tileMap; /* REV R4C: 1024 entries - the tile whose cells tile t shows (the act's animated tiles:
+                                Copy16x16Tile); 0 = every tile its own */
 } MdLayer;
 
 typedef struct {
@@ -57,4 +59,13 @@ void md_plane_update(MdPlane *p, const MdLayer *L, uint16_t nameBase, int tileYP
 /* REV R4B: the layout entry of chunk (chunkX, chunkY) changed (a script's SetTileLayerEntry): the chunk's cells that
    the plane's rows hold now are written again (rows written later read the new layout themselves). */
 void md_plane_chunk(MdPlane *p, const MdLayer *L, uint16_t nameBase, int chunkX, int chunkY, MdWriteFn write, void *ctx);
+
+/* REV R4C: the act's animated tiles (the scripts' Copy16x16Tile; L->tileMap). md_plane_refresh: the tiles of tileBits
+   (1024 bits, bit t of byte t >> 3 = tile t) show other cells now - their cells that the plane's rows hold are written
+   again; chunkBits (512 bits): the chunks that can hold such a tile (0: any). Rows written later read the map
+   themselves. md_tile_copy: Copy16x16Tile(dest, src) on the map (map[dest] = map[src], tileBits gets dest) - not when
+   map[src] is a tile without cells (shown: 1024 bits, 0 = every tile has them; dest then keeps its picture). 1: changed */
+void md_plane_refresh(MdPlane *p, const MdLayer *L, uint16_t nameBase, const uint8_t *chunkBits, const uint8_t *tileBits, MdWriteFn write,
+                      void *ctx);
+int md_tile_copy(uint16_t *map, uint8_t *tileBits, const uint8_t *shown, int dest, int src);
 #endif

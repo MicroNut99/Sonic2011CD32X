@@ -924,7 +924,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  AddTextMenuEntry(&gameMenu[0], " ");
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.cpp	2026-10-16 21:21:49.597823658 -0700
++++ engine/Drawing.cpp	2026-10-17 10:29:36.007621368 -0700
 @@ -15,9 +15,15 @@
  // it rather than remove it outright.
  #define DONT_USE_VIEW_ANGLE (1)
@@ -977,7 +977,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +    static bool told = false;
 +    if (!told) {
 +        told = true;
-+        plat_log("PORT32X: a draw list is full (256) - an entry was dropped");
++        plat_log("PORT32X: a draw list is full (128) - an entry was dropped");
 +    }
 +}
 +#endif
@@ -1098,15 +1098,16 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      for (int y = 0; y < 0x100; y++) {
          for (int x = 0; x < 0x20; x++) {
              blendLookupTable[x + (0x20 * y)]    = y * x >> 8;
-@@ -1179,6 +1239,7 @@
+@@ -1179,6 +1239,8 @@
  
  void ClearScreen(byte index)
  {
++    SCD_PM(scd_pm_clear(index)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          ushort colour       = activePalette[index];
          ushort *framebuffer = Engine.frameBuffer;
-@@ -1306,6 +1367,9 @@
+@@ -1306,6 +1368,9 @@
  
  void UpdateHardwareTextures()
  {
@@ -1116,7 +1117,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      SetActivePalette(0, 0, SCREEN_YSIZE);
      UpdateTextureBufferWithTiles();
      UpdateTextureBufferWithSortedSprites();
-@@ -1517,6 +1581,9 @@
+@@ -1517,6 +1582,9 @@
  
  void SetupPolygonLists()
  {
@@ -1126,7 +1127,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      int vID = 0;
      for (int i = 0; i < VERTEX_COUNT; i++) {
          gfxPolyListIndex[vID++] = (i << 2) + 0;
-@@ -1542,6 +1609,9 @@
+@@ -1542,6 +1610,9 @@
  
  void UpdateTextureBufferWithTiles()
  {
@@ -1136,7 +1137,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      int tileIndex = 0;
      if (texBufferMode == 0) {
          // regular 1024 set of tiles
-@@ -1676,6 +1746,9 @@
+@@ -1676,6 +1747,9 @@
  }
  void UpdateTextureBufferWithSortedSprites()
  {
@@ -1146,7 +1147,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      byte sortedSurfaceCount = 0;
      byte sortedSurfaceList[SURFACE_COUNT];
  
-@@ -1854,6 +1927,9 @@
+@@ -1854,6 +1928,9 @@
  }
  void UpdateTextureBufferWithSprites()
  {
@@ -1156,7 +1157,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      for (int i = 0; i < SURFACE_COUNT; ++i) {
          if (gfxSurface[i].texStartY + gfxSurface[i].height <= HW_TEXTURE_SIZE && gfxSurface[i].texStartX > -1) {
              int gfxPos = gfxSurface[i].dataPosition;
-@@ -1874,8 +1950,12 @@
+@@ -1874,8 +1951,12 @@
      }
  }
  
@@ -1169,7 +1170,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      int size = drawListEntries[Layer].listSize;
      for (int i = 0; i < size; ++i) {
          objectLoop = drawListEntries[Layer].entityRefs[i];
-@@ -1888,11 +1968,13 @@
+@@ -1888,11 +1969,13 @@
  
          if (type) {
              activePlayer = 0;
@@ -1184,7 +1185,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void DrawStageGFX()
  {
      waterDrawPos = waterLevel - yScrollOffset;
-@@ -2037,6 +2119,7 @@
+@@ -2037,6 +2120,7 @@
  #if !RETRO_USE_ORIGINAL_CODE
  void DrawDebugOverlays()
  {
@@ -1192,7 +1193,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (showHitboxes) {
          for (int i = 0; i < debugHitboxCount; ++i) {
              DebugHitboxInfo *info = &debugHitboxList[i];
-@@ -2127,8 +2210,92 @@
+@@ -2127,8 +2211,92 @@
  }
  #endif
  
@@ -1285,7 +1286,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (renderType == RENDER_SW) {
          TileLayer *layer   = &stageLayouts[activeTileLayers[layerID]];
          int screenwidth16  = (GFX_LINESIZE >> 4) - 1;
-@@ -2157,7 +2324,16 @@
+@@ -2157,7 +2325,16 @@
              lastXSize     = layer->xsize;
              yscrollOffset = yScrollOffset;
              lineScroll    = layer->lineScroll;
@@ -1302,7 +1303,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              deformationData  = &bgDeformationData0[(byte)(yscrollOffset + layer->deformationOffset)];
              deformationDataW = &bgDeformationData1[(byte)(yscrollOffset + waterDrawPos + layer->deformationOffsetW)];
          }
-@@ -2165,6 +2341,9 @@
+@@ -2165,6 +2342,9 @@
          if (layer->type == LAYER_HSCROLL) {
              if (lastXSize != layerwidth) {
                  int fullLayerwidth = layerwidth << 7;
@@ -1312,7 +1313,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  for (int i = 0; i < hParallax.entryCount; ++i) {
                      hParallax.linePos[i] = xScrollOffset * hParallax.parallaxFactor[i] >> 8;
                      hParallax.scrollPos[i] += hParallax.scrollSpeed[i];
-@@ -2173,7 +2352,24 @@
+@@ -2173,7 +2353,24 @@
                      if (hParallax.scrollPos[i] < 0)
                          hParallax.scrollPos[i] += fullLayerwidth << 16;
                      hParallax.linePos[i] += hParallax.scrollPos[i] >> 16;
@@ -1337,7 +1338,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  }
              }
              lastXSize = layerwidth;
-@@ -2184,6 +2380,13 @@
+@@ -2184,6 +2381,13 @@
          int tileYPos           = yscrollOffset % (layerheight << 7);
          if (tileYPos < 0)
              tileYPos += layerheight << 7;
@@ -1351,7 +1352,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          byte *scrollIndex = &lineScroll[tileYPos];
          int tileY16       = tileYPos & 0xF;
          int chunkY        = tileYPos >> 7;
-@@ -2191,6 +2394,22 @@
+@@ -2191,6 +2395,22 @@
  
          // Draw Above Water (if applicable)
          int drawableLines[2] = { waterDrawPos, SCREEN_YSIZE - waterDrawPos };
@@ -1374,7 +1375,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          for (int i = 0; i < 2; ++i) {
              while (drawableLines[i]--) {
                  activePalette   = fullPalette[*lineBuffer];
-@@ -2203,8 +2422,9 @@
+@@ -2203,8 +2423,9 @@
                          deform = *deformationData;
  
                      // Fix for SS5 mobile bug
@@ -1386,7 +1387,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          deform >>= 4;
  
                      chunkX += deform;
-@@ -2221,6 +2441,10 @@
+@@ -2221,6 +2442,10 @@
                      chunkX += fullLayerwidth;
                  if (chunkX >= fullLayerwidth)
                      chunkX -= fullLayerwidth;
@@ -1397,7 +1398,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  int chunkXPos         = chunkX >> 7;
                  int tilePxXPos        = chunkX & 0xF;
                  int tileXPxRemain     = TILE_SIZE - tilePxXPos;
-@@ -2637,6 +2861,7 @@
+@@ -2637,6 +2862,7 @@
                      }
                  }
  
@@ -1405,7 +1406,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  if (++tileY16 > TILE_SIZE - 1) {
                      tileY16 = 0;
                      ++tileY;
-@@ -2650,8 +2875,22 @@
+@@ -2650,8 +2876,22 @@
                  }
              }
          }
@@ -1428,7 +1429,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          TileLayer *layer      = &stageLayouts[activeTileLayers[layerID]];
          byte *lineScrollPtr   = NULL;
          int chunkPosX         = 0;
-@@ -3481,6 +3720,7 @@
+@@ -3481,6 +3721,7 @@
  }
  void DrawVLineScrollLayer(int layerID)
  {
@@ -1436,7 +1437,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (renderType == RENDER_SW) {
          TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
          if (!layer->xsize || !layer->ysize)
-@@ -3535,6 +3775,7 @@
+@@ -3535,6 +3776,7 @@
          ushort *frameBufferPtr = Engine.frameBuffer;
          activePalette          = fullPalette[gfxLineBuffer[0]];
          activePalette32        = fullPalette32[gfxLineBuffer[0]];
@@ -1444,34 +1445,37 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          int tileXPos           = xscrollOffset % (layerheight << 7);
          if (tileXPos < 0)
              tileXPos += layerheight << 7;
-@@ -4064,6 +4305,8 @@
+@@ -4064,6 +4306,9 @@
  }
  void Draw3DFloorLayer(int layerID)
  {
 +    SCD_DRAWLOG("Draw3DFloorLayer", -1, 0);
++    SCD_PM((void)0); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4644,6 +4887,8 @@
+@@ -4644,6 +4889,9 @@
  }
  void Draw3DSkyLayer(int layerID)
  {
 +    SCD_DRAWLOG("Draw3DSkyLayer", -1, 0);
++    SCD_PM(scd_pm_sky(layerID)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4727,6 +4972,8 @@
+@@ -4727,6 +4975,9 @@
  
  void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
  {
 +    SCD_DRAWLOG("DrawRectangle", -1, width * height);
++    SCD_PM(scd_pm_rect(XPos, YPos, width, height, R, G, B, A)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (A > 0xFF)
          A = 0xFF;
      if (renderType == RENDER_SW) {
-@@ -4828,6 +5075,7 @@
+@@ -4828,6 +5079,7 @@
  
  void SetFadeHQ(int R, int G, int B, int A)
  {
@@ -1479,56 +1483,61 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (A <= 0)
          return;
      if (A > 0xFF)
-@@ -4871,6 +5119,8 @@
+@@ -4871,6 +5123,9 @@
  
  void DrawTintRectangle(int XPos, int YPos, int width, int height)
  {
 +    SCD_DRAWLOG("DrawTintRectangle", -1, width * height);
++    SCD_PM((void)0); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -4907,6 +5157,8 @@
+@@ -4907,6 +5162,9 @@
  void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                          int sheetID)
  {
 +    SCD_DRAWLOG("DrawScaledTintMask", sheetID, width * height);
++    SCD_PM((void)0); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5008,6 +5260,9 @@
+@@ -5008,6 +5266,10 @@
  
  void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
 +    SCD_DRAWLOG("DrawSprite", sheetID, width * height);
 +    SCD_SPRITE(0, sheetID, sprX, sprY, width, height, XPos, YPos, FLIP_NONE, 0, 0, 0); // REV R3
++    SCD_PM(scd_pm_sprite(XPos, YPos, width, height, sprX, sprY, FLIP_NONE, sheetID, 0xFF)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -5102,6 +5357,9 @@
+@@ -5102,6 +5364,10 @@
  
  void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
  {
 +    SCD_DRAWLOG("DrawSpriteFlipped", sheetID, width * height);
 +    SCD_SPRITE(0, sheetID, sprX, sprY, width, height, XPos, YPos, direction, 0, 0, 0); // REV R3
++    SCD_PM(scd_pm_sprite(XPos, YPos, width, height, sprX, sprY, direction, sheetID, 0xFF)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          int widthFlip  = width;
          int heightFlip = height;
-@@ -5399,6 +5657,10 @@
+@@ -5399,6 +5665,11 @@
  void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                        int sheetID)
  {
 +    SCD_DRAWLOG("DrawSpriteScaled", sheetID, width * height);
 +    if (scaleX == 0x200 && scaleY == 0x200) // REV R3: at its own size only (the VDP does not scale)
 +        SCD_SPRITE(1, sheetID, sprX, sprY, width, height, XPos, YPos, direction, 0, pivotX, pivotY);
++    SCD_PM(scd_pm_sprite_scaled(direction, XPos, YPos, pivotX, pivotY, scaleX, scaleY, width, height, sprX, sprY, sheetID)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5558,6 +5820,8 @@
+@@ -5558,6 +5829,8 @@
  void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                      int sheetID)
  {
@@ -1537,93 +1546,102 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      // Not avaliable in SW Render mode
  
      if (renderType == RENDER_HW) {
-@@ -5616,6 +5880,9 @@
+@@ -5616,6 +5889,10 @@
  void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                         int sheetID)
  {
 +    SCD_DRAWLOG("DrawSpriteRotated", sheetID, width * height);
 +    SCD_SPRITE(1, sheetID, sprX, sprY, width, height, XPos, YPos, direction, rotation, pivotX, pivotY); // REV R3
++    SCD_PM(scd_pm_sprite_rotozoom(direction, XPos, YPos, pivotX, pivotY, sprX, sprY, width, height, rotation, 0x200, false, sheetID)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          int sprXPos    = (pivotX + sprX) << 9;
          int sprYPos    = (pivotY + sprY) << 9;
-@@ -5880,6 +6147,8 @@
+@@ -5880,6 +6157,9 @@
  void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
                          int sheetID)
  {
 +    SCD_DRAWLOG("DrawSpriteRotozoom", sheetID, width * height);
++    SCD_PM(scd_pm_sprite_rotozoom(direction, XPos, YPos, pivotX, pivotY, sprX, sprY, width, height, rotation, scale, true, sheetID)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (scale == 0)
          return;
  
-@@ -6148,6 +6417,9 @@
+@@ -6148,6 +6428,10 @@
  
  void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
 +    SCD_DRAWLOG("DrawBlendedSprite", sheetID, width * height);
 +    SCD_SPRITE(2, sheetID, sprX, sprY, width, height, XPos, YPos, FLIP_NONE, 0, 0, 0); // REV R3: half see-through: every other frame
++    SCD_PM(scd_pm_sprite(XPos, YPos, width, height, sprX, sprY, FLIP_NONE, sheetID, 0x80)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6236,6 +6508,10 @@
+@@ -6236,6 +6520,11 @@
  }
  void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
 +    SCD_DRAWLOG("DrawAlphaBlendedSprite", sheetID, width * height);
 +    if (alpha >= 0x40) // REV R3: drawn plain when (nearly) opaque, else every other frame (see-through, as the Genesis games)
 +        SCD_SPRITE(alpha >= 0xF0 ? 0 : 2, sheetID, sprX, sprY, width, height, XPos, YPos, FLIP_NONE, 0, 0, 0);
++    SCD_PM(scd_pm_sprite(XPos, YPos, width, height, sprX, sprY, FLIP_NONE, sheetID, alpha)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -6359,6 +6635,10 @@
+@@ -6359,6 +6648,11 @@
  }
  void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
 +    SCD_DRAWLOG("DrawAdditiveBlendedSprite", sheetID, width * height);
 +    if (alpha >= 0x40) // REV R3: every other frame (a glow on the Genesis: no adding colours)
 +        SCD_SPRITE(2, sheetID, sprX, sprY, width, height, XPos, YPos, FLIP_NONE, 0, 0, 0);
++    SCD_PM(scd_pm_sprite(XPos, YPos, width, height, sprX, sprY, FLIP_NONE, sheetID, alpha)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6459,6 +6739,8 @@
+@@ -6459,6 +6753,9 @@
  }
  void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
 +    SCD_DRAWLOG("DrawSubtractiveBlendedSprite", sheetID, width * height);
++    SCD_PM((void)0); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6664,6 +6946,8 @@
+@@ -6664,6 +6961,9 @@
  
  void DrawFace(void *v, uint colour)
  {
 +    SCD_DRAWLOG("DrawFace", -1, 0);
++    SCD_PM(scd_pm_face(v, colour)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -6849,6 +7133,8 @@
+@@ -6849,6 +7149,9 @@
  }
  void DrawTexturedFace(void *v, byte sheetID)
  {
 +    SCD_DRAWLOG("DrawTexturedFace", sheetID, 0);
++    SCD_PM(scd_pm_tex_face(v, sheetID)); // REV R4C: the 32X picture mode
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -7022,6 +7308,7 @@
+@@ -7022,6 +7325,8 @@
  
  void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
  {
-+    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
++    if (SCD32X_NODRAW && !scdPicture) // PORT32X S5b: no pixels in the no-draw build (REV R4C: but the 32X picture mode)
++        return;
      TextMenu *tMenu = (TextMenu *)menu;
      int Y           = YPos << 9;
      if (rowCount < 0)
-@@ -7052,6 +7339,13 @@
+@@ -7052,6 +7357,14 @@
  
  void DrawTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1633,11 +1651,12 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +        plat_menu_text(&m->textData[m->entryStart[rowID]], m->entrySize[rowID], XPos, YPos, textHighlight != 0);
 +    }
 +#endif
-+    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
++    if (SCD32X_NODRAW && !scdPicture) // PORT32X S5b: no pixels in the no-draw build (REV R4C: but the 32X picture mode)
++        return;
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7062,6 +7356,17 @@
+@@ -7062,6 +7375,18 @@
  }
  void DrawStageTextEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1651,19 +1670,21 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +        }
 +    }
 +#endif
-+    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
++    if (SCD32X_NODRAW && !scdPicture) // PORT32X S5b: no pixels in the no-draw build (REV R4C: but the 32X picture mode)
++        return;
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7077,6 +7382,7 @@
+@@ -7077,6 +7402,8 @@
  }
  void DrawBlendedTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
-+    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
++    if (SCD32X_NODRAW && !scdPicture) // PORT32X S5b: no pixels in the no-draw build (REV R4C: but the 32X picture mode)
++        return;
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7087,6 +7393,11 @@
+@@ -7087,6 +7414,11 @@
  }
  void DrawTextMenu(void *menu, int XPos, int YPos)
  {
@@ -1677,14 +1698,14 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (tMenu->visibleRowCount > 0) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp engine/Drawing.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.hpp	2026-10-16 18:36:03.015989588 -0700
++++ engine/Drawing.hpp	2026-10-17 10:29:29.867719010 -0700
 @@ -12,14 +12,26 @@
  enum InkFlags { INK_NONE, INK_BLEND, INK_ALPHA, INK_ADD, INK_SUB };
  enum DrawFXFlags { FX_SCALE, FX_ROTATE, FX_ROTOZOOM, FX_INK, FX_TINT, FX_FLIP };
  
 +// PORT32X S5i: the SH2 configuration keeps 256 entries per draw layer (whole game: at most 56);
 +// additions past it are dropped and logged
-+#define DRAWLIST_SIZE (SCD32X_SMALL ? 0x100 : ENTITY_COUNT)
++#define DRAWLIST_SIZE (SCD32X_SMALL ? 0x80 : ENTITY_COUNT) // REV R4C: 128 (every stage: 56 at most - stages_report.md)
 +#if SCD32X_SMALL
 +void scd_drawlist_full(); // PORT32X S5i
 +#endif
@@ -2792,7 +2813,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  #elif RETRO_USING_SDL1
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Scene.cpp engine/Scene.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Scene.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Scene.cpp	2026-10-16 22:52:51.218070791 -0700
++++ engine/Scene.cpp	2026-10-17 10:51:39.325810482 -0700
 @@ -8,7 +8,11 @@
      "Bonus Stages",
      "Special Stages",
@@ -2820,7 +2841,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +const byte *scdChunkDir = NULL, *scdChunkPlane = NULL, *scdChunkSolid[CPATH_COUNT] = { NULL, NULL };
 +int scdChunkCount = 0;
 +uint scdChunkPatched[CHUNKTILE_COUNT / 32];
-+static int scdChunkPatchCount = 0;
++int scdChunkPatchCount = 0; // REV R4C: read by the 32X picture mode (no patches: the cart's arrays as they are)
 +static int scdChunkPatchIndex[SCD_CHUNK_PATCHES];
 +static ScdChunkEntry scdChunkPatch[SCD_CHUNK_PATCHES];
 +ScdChunkTable tiles128x128;
@@ -2958,7 +2979,17 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      StopAllSfx();
      FileInfo infoStore;
      FileInfo info;
-@@ -592,12 +723,21 @@
+@@ -577,6 +708,9 @@
+         else {
+             LoadStageGFXFile(stageListPosition);
+         }
++#if RETRO_PLATFORM == RETRO_SCD32X
++        scd_pm_stage_new(); // REV R4C: the 32X picture mode's tile table starts again with the new tiles
++#endif
+         LoadStageCollisions();
+         LoadStageBackground();
+     }
+@@ -592,12 +726,21 @@
          objectEntityList[i].scale     = 512;
      }
      LoadActLayout();
@@ -2980,7 +3011,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  }
  int LoadActFile(const char *ext, int stageID, FileInfo *info)
  {
-@@ -643,6 +783,9 @@
+@@ -643,6 +786,9 @@
  
          FileRead(&stageLayouts[0].xsize, 1);
          FileRead(&stageLayouts[0].ysize, 1);
@@ -2990,7 +3021,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          xBoundary1    = 0;
          newXBoundary1 = 0;
          yBoundary1    = 0;
-@@ -653,7 +796,14 @@
+@@ -653,7 +799,14 @@
          newXBoundary2 = stageLayouts[0].xsize << 7;
          newYBoundary2 = stageLayouts[0].ysize << 7;
  
@@ -3005,7 +3036,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
          byte fileBuffer = 0;
          for (int y = 0; y < stageLayouts[0].ysize; ++y) {
-@@ -728,6 +878,9 @@
+@@ -728,6 +881,9 @@
  }
  void LoadStageBackground()
  {
@@ -3015,7 +3046,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      for (int i = 0; i < LAYER_COUNT; ++i) {
          stageLayouts[i].type               = LAYER_NOSCROLL;
          stageLayouts[i].deformationOffset  = 0;
-@@ -757,6 +910,14 @@
+@@ -757,6 +913,14 @@
  
              FileRead(&hParallax.deform[i], 1);
          }
@@ -3030,7 +3061,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
          FileRead(&vParallax.entryCount, 1);
          for (int i = 0; i < vParallax.entryCount; ++i) {
-@@ -788,9 +949,16 @@
+@@ -788,9 +952,16 @@
              stageLayouts[i].scrollSpeed = fileBuffer << 10;
              stageLayouts[i].scrollPos   = 0;
  
@@ -3047,7 +3078,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
              // Read Line Scroll
              byte buf[3];
-@@ -831,6 +999,18 @@
+@@ -831,6 +1002,18 @@
  }
  void LoadStageChunks()
  {
@@ -3066,7 +3097,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      FileInfo info;
      byte entry[3];
  
-@@ -860,6 +1040,16 @@
+@@ -860,6 +1043,16 @@
  }
  void LoadStageCollisions()
  {
@@ -3083,7 +3114,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      FileInfo info;
      if (LoadStageFile("CollisionMasks.bin", stageListPosition, &info)) {
  
-@@ -1082,6 +1272,7 @@
+@@ -1082,6 +1275,7 @@
              } while (c != 256);
          }
  
@@ -3091,7 +3122,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          ReadGifPictureData(width, height, interlaced, tilesetGFXData, 0);
  
          byte transparent = tilesetGFXData[0];
-@@ -1089,6 +1280,7 @@
+@@ -1089,6 +1283,7 @@
              if (tilesetGFXData[i] == transparent)
                  tilesetGFXData[i] = 0;
          }
@@ -3099,7 +3130,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
          CloseFile();
      }
-@@ -1114,6 +1306,7 @@
+@@ -1114,6 +1309,7 @@
              SetPaletteEntry(-1, c, clr[0], clr[1], clr[2]);
          }
  
@@ -3107,7 +3138,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          byte *gfxData = tilesetGFXData;
          byte buf[3];
          while (true) {
-@@ -1138,6 +1331,7 @@
+@@ -1138,6 +1334,7 @@
              if (tilesetGFXData[i] == transparent)
                  tilesetGFXData[i] = 0;
          }
@@ -3115,7 +3146,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
          CloseFile();
      }
-@@ -1214,6 +1408,8 @@
+@@ -1214,6 +1411,8 @@
      }
  }
  
@@ -3126,7 +3157,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      int playerXPos = player->XPos >> 16;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Scene.hpp engine/Scene.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Scene.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Scene.hpp	2026-10-16 14:15:18.862171052 -0700
++++ engine/Scene.hpp	2026-10-17 11:26:00.141374839 -0700
 @@ -88,8 +88,16 @@
  };
  
@@ -3156,7 +3187,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
  extern int stageMode;
  
-@@ -189,14 +201,143 @@
+@@ -189,14 +201,144 @@
  extern int bgDeformationData3[DEFORM_COUNT];
  
  extern LineScroll hParallax;
@@ -3188,6 +3219,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +extern const byte *scdChunkDir, *scdChunkPlane, *scdChunkSolid[CPATH_COUNT];
 +extern int scdChunkCount;
 +extern uint scdChunkPatched[CHUNKTILE_COUNT / 32];
++extern int scdChunkPatchCount; // REV R4C
 +ScdChunkEntry *scd_chunk_entry(int i, bool create);
 +int scd_chunk_patched_get(int i, int f); // S5p: the rare path, out of line (Scene.cpp)
 +void scd_chunk_patches_reset();
@@ -3302,7 +3334,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  extern bool drawStageGFXHQ;
  
  void InitFirstStage();
-@@ -223,11 +364,31 @@
+@@ -223,11 +365,31 @@
  void LoadStageBackground();
  void LoadStageChunks();
  void LoadStageCollisions();
@@ -3334,11 +3366,12 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      for (int y = 0; y < TILELAYER_CHUNK_H; ++y) {
          for (int x = 0; x < TILELAYER_CHUNK_W; ++x) {
              int c                           = stageLayouts[layerID].tiles[(x >> 3) + (y >> 3 << 8)] << 6;
-@@ -239,6 +400,8 @@
+@@ -239,6 +401,9 @@
  
  inline void Copy16x16Tile(ushort dest, ushort src)
  {
-+    if (SCD32X_SMALL) // PORT32X S5b: animated tiles become Mega Drive tile updates later (TODO S5d)
++    scd_pm_copy_tile(dest, src); // REV R4C: the platform's tile table (the 32X picture mode; the Genesis planes' cells)
++    if (SCD32X_SMALL) // PORT32X S5b: the pixels are in the cart (the SH2 cannot write it)
 +        return;
      if (renderType == RENDER_SW) {
          byte *destPtr = &tilesetGFXData[TILELAYER_CHUNK_W * dest];
@@ -3404,8 +3437,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          Face *face = &faceBuffer[drawList3D[i].faceID];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Scene3D.hpp engine/Scene3D.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Scene3D.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Scene3D.hpp	2026-10-15 21:43:01.367456294 -0700
-@@ -1,8 +1,15 @@
++++ engine/Scene3D.hpp	2026-10-17 10:29:29.865985987 -0700
+@@ -1,8 +1,17 @@
  #ifndef DRAWING3D_H
  #define DRAWING3D_H
  
@@ -3415,15 +3448,17 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +// at most 640 / 160 - Title). Script accesses past them are dropped and logged.
 +// PORT32X S7e: the drawing build sizes the 3D buffers to the whole-game maxima (S5: 640 vertices, 160
 +// faces - the title uses exactly that); the transformed vertices / draw list need SDRAM there
-+#define VERTEXBUFFER_SIZE (SCD32X_DRAWCART ? 0x280 : SCD32X_SMALL ? 0x400 : 0x1000)
-+#define FACEBUFFER_SIZE   (SCD32X_DRAWCART ? 0xA0 : SCD32X_SMALL ? 0x100 : 0x400)
++// REV R4C: the SH2 build's 3D buffers as the game uses them at most (the title: 640 vertices, 160 faces -
++// stages_report.md); the 32X picture mode's transformed copy is in the frame buffer (cd32x/engine/scd_pm.h)
++#define VERTEXBUFFER_SIZE (SCD32X_SMALL ? 0x280 : 0x1000)
++#define FACEBUFFER_SIZE   (SCD32X_SMALL ? 0xA0 : 0x400)
 +// only drawing reads the transformed vertices and the 3D draw list - nothing in the no-draw build
 +#define VERTEXBUFFERT_SIZE (SCD32X_NODRAW ? 1 : VERTEXBUFFER_SIZE)
 +#define DRAWLIST3D_SIZE    (SCD32X_NODRAW ? 1 : FACEBUFFER_SIZE)
  
  enum FaceFlags {
      FACE_FLAG_TEXTURED_3D = 0,
-@@ -53,9 +60,9 @@
+@@ -53,9 +62,9 @@
  
  extern Face faceBuffer[FACEBUFFER_SIZE];
  extern Vertex vertexBuffer[VERTEXBUFFER_SIZE];
@@ -3435,7 +3470,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
  extern int projectionX;
  extern int projectionY;
-@@ -76,6 +83,9 @@
+@@ -76,6 +85,9 @@
  void MatrixRotateZ(Matrix *matrix, int rotationZ);
  void MatrixRotateXYZ(Matrix *matrix, int rotationX, int rotationY, int rotationZ);
  void TransformVertexBuffer();
@@ -3447,7 +3482,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.cpp	2026-10-17 09:16:36.964923477 -0700
++++ engine/Script.cpp	2026-10-17 10:01:33.255616656 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -3799,20 +3834,34 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  temp->propertyValue  = scriptEng.operands[1];
                  temp->XPos           = scriptEng.operands[2];
                  temp->YPos           = scriptEng.operands[3];
-@@ -3771,8 +3919,10 @@
+@@ -3769,12 +3917,22 @@
+                 StopSfx(globalSFXCount + scriptEng.operands[0]);
+                 break;
              case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
-             case FUNC_DRAW3DSCENE:
+-            case FUNC_DRAW3DSCENE:
++            case FUNC_DRAW3DSCENE: {
                  opcodeSize = 0;
 -                TransformVertexBuffer();
 -                Sort3DDrawList();
-+                if (!SCD32X_NODRAW) { // PORT32X S5i: they fill vertexBufferT / drawList3D, which only drawing reads
-+                    TransformVertexBuffer();
-+                    Sort3DDrawList();
+-                Draw3DScene(scriptInfo->spriteSheetID);
++                bool pm    = scdPicture; // REV R4C: the 32X picture mode draws the scene itself (its own transform, sort)
++                if (pm)
++                    scd_pm_draw3dscene(scriptInfo->spriteSheetID);
++                if (!(pm && SCD32X_NODRAW)) {
++                    scdPicture = false; // (the PC check: the engine's own faces go into its 16-bit picture only)
++                    if (!SCD32X_NODRAW) { // PORT32X S5i: they fill vertexBufferT / drawList3D, which only drawing reads
++                        TransformVertexBuffer();
++                        Sort3DDrawList();
++                    }
++                    Draw3DScene(scriptInfo->spriteSheetID);
++                    scdPicture = pm;
 +                }
-                 Draw3DScene(scriptInfo->spriteSheetID);
                  break;
++            }
              case FUNC_SETIDENTITYMATRIX:
-@@ -3897,9 +4047,24 @@
+                 opcodeSize = 0;
+                 switch (scriptEng.operands[0]) {
+@@ -3897,9 +4055,24 @@
                  }
                  break;
              case FUNC_GETTILELAYERENTRY:
@@ -3837,7 +3886,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
                  break;
              case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
-@@ -3923,18 +4088,39 @@
+@@ -3923,18 +4096,39 @@
                  break;
              case FUNC_ADDDRAWLISTENTITYREF: {
                  opcodeSize                                                                                           = 0;
@@ -3879,7 +3928,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  int index = tiles128x128.tileIndex[scriptEng.operands[6]];
                  switch (scriptEng.operands[3]) {
-@@ -3956,9 +4142,17 @@
+@@ -3956,9 +4150,17 @@
                  Copy16x16Tile(scriptEng.operands[0], scriptEng.operands[1]);
                  break;
              case FUNC_SET16X16TILEINFO: {
@@ -3898,7 +3947,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  switch (scriptEng.operands[3]) {
                      case TILEINFO_INDEX:
-@@ -4021,7 +4215,14 @@
+@@ -4021,7 +4223,14 @@
                  TextMenu *menu = &gameMenu[scriptEng.operands[1]];
                  switch (scriptEng.operands[2]) {
                      case TEXTINFO_TEXTDATA:
@@ -3913,7 +3962,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          break;
                      case TEXTINFO_TEXTSIZE: scriptEng.operands[0] = menu->entrySize[scriptEng.operands[3]]; break;
                      case TEXTINFO_ROWCOUNT: scriptEng.operands[0] = menu->rowCount; break;
-@@ -4115,6 +4316,7 @@
+@@ -4115,6 +4324,7 @@
                      case VAR_OBJECTENTITYNO: break;
                      case VAR_OBJECTTYPE: {
                          objectEntityList[arrayVal].type = scriptEng.operands[i];
@@ -3921,7 +3970,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          break;
                      }
                      case VAR_OBJECTPROPERTYVALUE: {
-@@ -4608,7 +4810,16 @@
+@@ -4608,7 +4818,16 @@
                      case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
                      case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
                      case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
@@ -3939,7 +3988,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_TILELAYERTYPE: stageLayouts[arrayVal].type = scriptEng.operands[i]; break;
                      case VAR_TILELAYERANGLE:
                          stageLayouts[arrayVal].angle = scriptEng.operands[i];
-@@ -4636,6 +4847,54 @@
+@@ -4636,6 +4855,54 @@
                      case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
@@ -3994,7 +4043,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
                      case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
                      case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-@@ -4649,12 +4908,35 @@
+@@ -4649,12 +4916,35 @@
                      case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
@@ -4031,7 +4080,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
                      case VAR_OBJECTSPRITESHEET: {
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
-@@ -4704,3 +4986,165 @@
+@@ -4704,3 +4994,165 @@
          }
      }
  }
@@ -4315,23 +4364,20 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          GFXSurface *surface = &gfxSurface[sheetID];
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Text.cpp engine/Text.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Text.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Text.cpp	2026-10-15 21:43:01.368812339 -0700
-@@ -1,77 +1,106 @@
++++ engine/Text.cpp	2026-10-17 10:29:29.865383311 -0700
+@@ -1,77 +1,103 @@
  #include "RetroEngine.hpp"
  
-+#if SCD32X_SMALL
-+// PORT32X S5q: the menus live in the SH2's frame buffer (SDRAM is short)
-+TextMenu (&gameMenu)[TEXTMENU_COUNT] = *(TextMenu(*)[TEXTMENU_COUNT])plat_fb_data(SCD_FB_MENUS, sizeof(TextMenu) * TEXTMENU_COUNT);
-+#else
++// PORT32X S5q had the SH2's menus in its frame buffer; REV R4C: in SDRAM (the 32X picture mode draws into the frame
++// buffer), smaller (Text.hpp)
  TextMenu gameMenu[TEXTMENU_COUNT];
-+#endif
 +#if SCD32X_SMALL
 +void scd_text_full() // PORT32X S5l
 +{
 +    static bool told = false;
 +    if (!told) {
 +        told = true;
-+        plat_log("PORT32X: menu text full (6,144) - characters dropped");
++        plat_log("PORT32X: menu text full (2,048) - characters dropped");
 +    }
 +}
 +#endif
@@ -4447,7 +4493,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              }
  
              // Unused
-@@ -130,7 +159,8 @@
+@@ -130,7 +156,8 @@
                                  character = 0;
                              }
                          }
@@ -4457,7 +4503,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          menu->entrySize[menu->rowCount]++;
                      }
                  }
-@@ -165,7 +195,8 @@
+@@ -165,7 +192,8 @@
                              character = 0;
                          }
                      }
@@ -4467,7 +4513,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      menu->entrySize[menu->rowCount]++;
                  }
              }
-@@ -199,7 +230,8 @@
+@@ -199,7 +227,8 @@
                              if (i == 1024)
                                  character = 0;
                          }
@@ -4477,7 +4523,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          menu->entrySize[menu->rowCount]++;
                      }
                  }
-@@ -225,7 +257,8 @@
+@@ -225,7 +254,8 @@
      menu->entrySize[menu->rowCount]      = 0;
      for (int i = 0; i < StrLength(text);) {
          if (text[i] != '\0') {
@@ -4487,7 +4533,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              menu->entrySize[menu->rowCount]++;
              ++i;
          }
-@@ -255,7 +288,8 @@
+@@ -255,7 +285,8 @@
              if (j == 1024) {
                  num = 0;
              }
@@ -4497,7 +4543,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              menu->entrySize[menu->rowCount]++;
              ++i;
          }
-@@ -271,7 +305,8 @@
+@@ -271,7 +302,8 @@
      menu->entrySize[rowID]               = 0;
      for (int i = 0; i < StrLength(text);) {
          if (text[i] != '\0') {
@@ -4507,7 +4553,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              menu->entrySize[rowID]++;
              ++i;
          }
-@@ -286,7 +321,8 @@
+@@ -286,7 +318,8 @@
      menu->entrySize[rowID]               = 0;
      for (int i = 0; i < StrLength(text);) {
          if (text[i] != '\0') {
@@ -4519,8 +4565,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          }
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Text.hpp engine/Text.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Text.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Text.hpp	2026-10-15 21:43:01.368962712 -0700
-@@ -1,8 +1,24 @@
++++ engine/Text.hpp	2026-10-17 10:29:29.864736094 -0700
+@@ -1,8 +1,27 @@
  #ifndef TEXTSYSTEM_H
  #define TEXTSYSTEM_H
  
@@ -4530,7 +4576,10 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +// Credits); writes past it are dropped and logged
 +// PORT32X S7e: the drawing build keeps the menus in SDRAM (the frame buffer holds the picture) - the
 +// title uses no menu text; larger menus come with their scenes later
-+#define TEXTDATA_COUNT  (SCD32X_DRAWCART ? 0x100 : SCD32X_SMALL ? 0x1800 : 0x2800)
++// REV R4C: the SH2 build's menus are in SDRAM too (the 32X picture mode draws into the whole frame buffer): 2,048
++// characters and 128 rows a menu - the Level Select menu's longest list (the regular stages: 70 rows, 553 characters)
++// and help (22 rows, 624 characters) fit; the game's own credits (397 rows) do not - the port shows its own credits
++#define TEXTDATA_COUNT  (SCD32X_DRAWCART ? 0x100 : SCD32X_SMALL ? 0x800 : 0x2800)
 +#if SCD32X_SMALL
 +void scd_text_full(); // PORT32X S5l
 +#define SCD_TEXT_PUT(menu, pos, ch)          \
@@ -4543,19 +4592,16 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +#else
 +#define SCD_TEXT_PUT(menu, pos, ch) ((menu)->textData[(pos)] = (ch))
 +#endif
-+#define TEXTENTRY_COUNT (SCD32X_DRAWCART ? 0x40 : 0x200) // PORT32X S7e: menus in SDRAM in the drawing build
++#define TEXTENTRY_COUNT (SCD32X_DRAWCART ? 0x40 : SCD32X_SMALL ? 0x80 : 0x200) // PORT32X S7e, REV R4C: menus in SDRAM
  #define TEXTMENU_COUNT  (0x2)
  
  #define FONTCHAR_COUNT (0x400)
-@@ -36,10 +52,18 @@
+@@ -36,10 +55,14 @@
      short xAdvance;
  };
  
-+#if SCD32X_SMALL
-+extern TextMenu (&gameMenu)[TEXTMENU_COUNT]; // PORT32X S5q
-+#else
- extern TextMenu gameMenu[TEXTMENU_COUNT];
-+#endif
+-extern TextMenu gameMenu[TEXTMENU_COUNT];
++extern TextMenu gameMenu[TEXTMENU_COUNT]; // REV R4C: in SDRAM in every build (PORT32X S5q had them in the frame buffer)
  extern int textMenuSurfaceNo;
  
 +#if SCD32X_CARTDATA
@@ -4848,8 +4894,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
-+++ engine/plat.hpp	2026-10-17 09:26:24.299439891 -0700
-@@ -0,0 +1,109 @@
++++ engine/plat.hpp	2026-10-17 11:26:00.142217881 -0700
+@@ -0,0 +1,144 @@
 +#ifndef PLAT_H
 +#define PLAT_H
 +// PORT32X: the platform layer of the Sega CD32X port.
@@ -4921,6 +4967,41 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +int plat_save_read();
 +int plat_save_write();
 +void *plat_cart_data(int kind);
++// REV R4C: the 32X PICTURE MODE (cd32x/engine/scd_pm.h): the scenes the Genesis planes cannot show (the title, the
++// menus, time attack, the special stages ...) are drawn by the SH2 into the 32X frame buffer, in 256 colours. The
++// platform turns it on for a scene whose image carries the sprite sheets' and tiles' pixels (plat_stage_loading);
++// each drawing function then hands its call to the platform. On the SH2 that is the drawing (the engine's own pixel
++// code is not in the SH2 build); on the PC check (SCD32X_PMCHECK) the platform draws the 256-colour picture beside
++// the engine's 16-bit one and compares them.
++extern bool scdPicture;
++#if SCD32X_NODRAW
++#define SCD_PM(call)        \
++    do {                    \
++        if (scdPicture) {   \
++            call;           \
++            return;         \
++        }                   \
++    } while (0)
++#else
++#define SCD_PM(call)        \
++    do {                    \
++        if (scdPicture)     \
++            call;           \
++    } while (0)
++#endif
++void scd_pm_clear(int index);
++void scd_pm_sprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID, int alpha);
++void scd_pm_sprite_scaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX,
++                          int sprY, int sheetID);
++void scd_pm_sprite_rotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
++                            int scale, bool zoom, int sheetID);
++void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B, int A);
++void scd_pm_face(void *v, unsigned int colour);
++void scd_pm_tex_face(void *v, int sheetID);
++void scd_pm_draw3dscene(int sheetID);
++void scd_pm_sky(int layerID);
++void scd_pm_copy_tile(int dest, int src); // Copy16x16Tile (every scene: the Genesis planes show animated tiles too)
++void scd_pm_stage_new(); // a new stage's tiles are loaded (Scene.cpp): no tile copied yet
 +// S7a: a file of the data pack was read up to this position (PC builds: the per-stage mini-pack
 +// builder logs it, SCD32X_FILELOG; the SH2 build does not call it)
 +void plat_file_read(const char *path, int position);

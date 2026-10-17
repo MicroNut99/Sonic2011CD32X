@@ -28,6 +28,8 @@ void md_layer_end(int slot);
 void md_check_frame();
 void md_sprite_draw(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py); // REV R3
 void md_layout_set(int layer, int x, int y); // REV R4B
+void md_tile_copy_hook(int dest, int src);      // REV R4C: Copy16x16Tile (the act's animated tiles)
+void md_tiles_new();                            // REV R4C: a stage's tiles loaded
 void md_check_summary();
 
 static unsigned int frameCount = 0;
@@ -306,12 +308,25 @@ void md_save_png(const char *name, const unsigned char *rgb, int w, int h)
     free(raw);
 }
 
+static int pmLayerY_[4];
+static bool pmLayerOn_[4];
+static int pmLines_[224];
+void pm_layer_end_host(int slot, const int *lines);
 unsigned short *plat_layer_begin(int slot, int layer, int tileYPos, unsigned short *frame)
 {
     hostInit();
+    if (scdPicture && slot >= 0 && slot < 4) { // REV R4C: the 32X picture mode's layer (its lines below)
+        pmLayerY_[slot]  = tileYPos;
+        pmLayerOn_[slot] = true;
+    }
     return md_layer_begin(slot, layer, tileYPos, frame);
 }
-void plat_layer_line(int slot, int line, int x) { md_layer_line(slot, line, x); }
+void plat_layer_line(int slot, int line, int x)
+{
+    if (scdPicture && line >= 0 && line < 224)
+        pmLines_[line] = x; // REV R4C
+    md_layer_line(slot, line, x);
+}
 // R1T: the no-draw build's lines come as one buffer per slot; the check gets them line by line at the end,
 // as the per-line calls would have given them
 static int hostLines[4][SCREEN_YSIZE];
@@ -325,6 +340,10 @@ int *plat_layer_lines(int slot)
 }
 void plat_layer_end(int slot)
 {
+    if (scdPicture && slot >= 0 && slot < 4 && pmLayerOn_[slot]) { // REV R4C: the layer's pixels in the picture mode
+        pmLayerOn_[slot] = false;
+        pm_layer_end_host(slot, hostLinesOut[slot] ? hostLines[slot] : pmLines_);
+    }
     if (slot >= 0 && slot < 4 && hostLinesOut[slot]) {
         hostLinesOut[slot] = false;
         for (int line = 0; line < SCREEN_YSIZE; ++line) md_layer_line(slot, line, hostLines[slot][line]);
@@ -425,8 +444,461 @@ static void poke_frame()
             p++;
     }
 }
+// REV R4C: SCD32X_PMLOG=file - what a scene drawn by the 32X needs, frame by frame: the palette banks the lines use,
+// the fade, the sprite sheets' bytes, changes to the tile pixels and to the palettes (logged when they change)
+static void pm_log_frame()
+{
+    static FILE *f   = NULL;
+    static bool once = false;
+    if (!once) {
+        once          = true;
+        const char *p = getenv("SCD32X_PMLOG");
+        if (p && *p)
+            f = fopen(p, "w");
+    }
+    if (!f)
+        return;
+    static char last[256];
+    static unsigned int lastTiles = 0, lastPal = 0, tileChanges = 0, palChanges = 0;
+    char banks[64];
+    unsigned int used = 0;
+    for (int y = 0; y < SCREEN_YSIZE; ++y) used |= 1u << (gfxLineBuffer[y] & 7);
+    int n = 0;
+    for (int b = 0; b < 8; ++b)
+        if (used >> b & 1)
+            n += snprintf(banks + n, sizeof banks - n, "%d", b);
+    banks[n] = 0;
+    int firstSplit = -1;
+    for (int y = 1; y < SCREEN_YSIZE; ++y)
+        if (gfxLineBuffer[y] != gfxLineBuffer[y - 1]) {
+            firstSplit = y;
+            break;
+        }
+    static unsigned int lastLay = 0, layChanges = 0;
+    unsigned int lay = 0x811C9DC5u;
+    for (int l = 0; l < LAYER_COUNT; ++l) {
+        TileLayer *L = &stageLayouts[l];
+        for (int i = 0; i < L->ysize * 0x100 && i < TILELAYER_CHUNK_COUNT; ++i) lay = (lay ^ L->tiles[i]) * 0x01000193u;
+        for (int i = 0; i < L->ysize * 128 && i < TILELAYER_SCROLL_COUNT; ++i) lay = (lay ^ L->lineScroll[i]) * 0x01000193u;
+    }
+    if (frameCount > 2 && lay != lastLay)
+        layChanges++;
+    lastLay = lay;
+    unsigned int t = 0x811C9DC5u, pl = 0x811C9DC5u;
+    for (int i = 0; i < TILESET_SIZE; i += 4) t = (t ^ *(const unsigned int *)(tilesetGFXData + i)) * 0x01000193u;
+    for (int i = 0; i < 8 * 256; ++i) pl = (pl ^ ((const unsigned short *)fullPalette)[i]) * 0x01000193u;
+    if (frameCount && t != lastTiles)
+        tileChanges++;
+    if (frameCount && pl != lastPal)
+        palChanges++;
+    lastTiles = t, lastPal = pl;
+    char line[256];
+    snprintf(line, sizeof line, "%d:%d banks %s split %d fade %d/%d gfx %d", activeStageList, stageListPosition, banks, firstSplit, fadeMode,
+             fadeA, gfxDataPosition);
+    if (strcmp(line, last)) {
+        fprintf(f, "%u %s (tiles changed %u frames, palette %u frames so far)\n", frameCount, line, tileChanges, palChanges);
+        strcpy(last, line);
+    }
+    static int maxText = 0, maxRows = 0, maxDraw = 0;
+    for (int m = 0; m < TEXTMENU_COUNT; ++m) {
+        if (gameMenu[m].textDataPos > maxText)
+            maxText = gameMenu[m].textDataPos;
+        if (gameMenu[m].rowCount > maxRows)
+            maxRows = gameMenu[m].rowCount;
+    }
+    for (int l = 0; l < DRAWLAYER_COUNT; ++l)
+        if (drawListEntries[l].listSize > maxDraw)
+            maxDraw = drawListEntries[l].listSize;
+    if (frameCount % 600 == 599)
+        fprintf(f, "%u ... tiles changed %u frames, palette %u frames, layouts %u frames so far; menu text %d rows %d draw list %d\n",
+                frameCount, tileChanges, palChanges, layChanges, maxText, maxRows, maxDraw);
+    fflush(f);
+}
+
+// ---------------------------------------------------------------- REV R4C: the 32X picture mode, checked on the PC
+// SCD32X_PMCHECK=file: in the scenes the console draws in the 32X picture mode (the presentation and special stage
+// lists, as tools/build_game_data.py gives them their pixels) every draw call also goes to cd32x/engine/scd_pm.h - the
+// console's own code - into a 256-colour picture here, two of them in turn as the console's two frame buffers; each
+// frame that picture through the frame's palette (and the frame's fade, as the colours get it on the console) is
+// compared with the engine's own 16-bit picture. Pixels scd_pm.h only approximates (dithered, a colour the palette
+// does not have) are counted apart; any other difference is logged. The tiles as the stage loaded them are kept
+// (the engine changes its own copy: Copy16x16Tile), as the console reads them from the cart.
+bool scdPicture = false;
+static bool pmCheckOn    = false;
+static FILE *pmCheckLog  = NULL;
+static unsigned char pmBuf[2][328 * 224], pmApx[2][328 * 224];
+static int pmCur         = 0;
+static unsigned char *pmTilesSnap = NULL;
+static Vertex pmVerts[0x280];
+static DrawListEntry3D pmList[0xA0];
+static int pmLinesHost[224];
+static int pmLayerY[4];
+static bool pmLayerOn[4];
+static unsigned long pmFrames = 0, pmBadFrames = 0, pmBadPixels = 0, pmApxPixels = 0, pmApxDiffer = 0;
+static unsigned char pmOp[328 * 224], pmOpNow = 0; // the draw call that wrote each pixel last (a debug aid)
+static bool pmDrew = false, pmWaitDraw = false; // a pixel written this frame; the display waits for the first such frame
+#define PM_SET(off, v) (pmBuf[pmCur][(off)] = (unsigned char)(v), pmApx[pmCur][(off)] = 0, pmOp[(off)] = pmOpNow, pmDrew = true)
+#define PM_W16(off, w) (PM_SET((off), (w) >> 8), PM_SET((off) + 1, (w) & 0xFF))
+#define PM_O16(off, w)                       \
+    do {                                     \
+        unsigned short pmw_ = (unsigned short)(w); \
+        if (pmw_ >> 8)                       \
+            PM_SET((off), pmw_ >> 8);        \
+        if (pmw_ & 0xFF)                     \
+            PM_SET((off) + 1, pmw_ & 0xFF);  \
+    } while (0)
+#define PM_O8(off, v)                        \
+    do {                                     \
+        unsigned char pmv_ = (unsigned char)(v); \
+        if (pmv_)                            \
+            PM_SET((off), pmv_);             \
+    } while (0)
+#define PM_APPROX(off, n) memset(&pmApx[pmCur][(off)], 1, (size_t)(n))
+#if SCD32X_SMALL /* the SH2 configuration (no pixels of its own): the cart image's, as the console */
+#define PM_GFX ((const unsigned char *)plat_cart_data(SCD_CART_GFXDATA))
+#define PM_TILES ((const unsigned char *)plat_cart_data(SCD_CART_TILEGFX))
+#else
+#define PM_GFX graphicData
+#define PM_TILES pmTilesSnap
+#endif
+#define PM_CHUNK_TILE(e) (tiles128x128.gfxDataPos[(e)] >> 8)
+#define PM_CHUNK_DIR(e) tiles128x128.direction[(e)]
+#define PM_CHUNK_PLANE(e) tiles128x128.visualPlane[(e)]
+static int pmScan[6 * 224];
+#define PM_SCAN pmScan
+#define PM_VERTS pmVerts
+#define PM_LIST pmList
+#define PM_CHECKING 1
+static void pm_trace_face(const void *v, int sheetID);
+#define PM_HOOK_TEXFACE(v, sheet) pm_trace_face((v), (sheet))
+#define PM_SKY_FLIPY 224 /* the engine's own (224 lines: not quite the flipped row), so the PC check compares exactly */
+#include "../cd32x/engine/scd_pm.h"
+static void pm_check_init()
+{
+    static bool done = false;
+    if (done)
+        return;
+    done          = true;
+    const char *p = getenv("SCD32X_PMCHECK");
+    if (p && *p) {
+        pmCheckLog = fopen(p, "w");
+        pmCheckOn  = pmCheckLog != NULL;
+    }
+    pmTilesSnap = (unsigned char *)calloc(1, TILESET_SIZE);
+    for (int b = 0; b < 2; ++b)
+        for (int i = 0; i < 328 * 224; ++i) pmBuf[b][i] = (unsigned char)(0x5A ^ (i * 2654435761u >> 9)); /* junk, as at power-on */
+}
+static int pm_trace_frame()
+{
+    static int f = -2;
+    if (f == -2)
+        f = getenv("SCD32X_PMTRACE") ? atoi(getenv("SCD32X_PMTRACE")) : -1;
+    return f;
+}
+#define PM_TRACE(...)                                                     \
+    do {                                                                  \
+        if (pmCheckLog && (int)frameCount == pm_trace_frame())            \
+            fprintf(pmCheckLog, "  trace: " __VA_ARGS__);                 \
+    } while (0)
+static void pm_trace_face(const void *v, int sheetID)
+{
+    const Vertex *q = (const Vertex *)v;
+    PM_TRACE("texface sheet %d: (%d,%d uv %d,%d) (%d,%d uv %d,%d) (%d,%d uv %d,%d) (%d,%d uv %d,%d)\n", sheetID, q[0].x, q[0].y, q[0].u, q[0].v, q[1].x,
+             q[1].y, q[1].u, q[1].v, q[2].x, q[2].y, q[2].u, q[2].v, q[3].x, q[3].y, q[3].u, q[3].v);
+}
+void scd_pm_clear(int index) { pmOpNow = 1; pm_clear(index); }
+void scd_pm_sprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID, int alpha)
+{
+    pmOpNow = 2;
+    PM_TRACE("sprite %d,%d %dx%d from %d,%d dir %d sheet %d alpha %d\n", XPos, YPos, width, height, sprX, sprY, direction, sheetID, alpha);
+    pm_sprite(XPos, YPos, width, height, sprX, sprY, direction, sheetID, alpha);
+}
+void scd_pm_sprite_scaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX,
+                          int sprY, int sheetID)
+{
+    pmOpNow = 3;
+    PM_TRACE("scaled %d,%d\n", XPos, YPos);
+    pm_sprite_scaled(direction, XPos, YPos, pivotX, pivotY, scaleX, scaleY, width, height, sprX, sprY, sheetID);
+}
+void scd_pm_sprite_rotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
+                            int scale, bool zoom, int sheetID)
+{
+    pmOpNow = 4;
+    pm_sprite_rotozoom(direction, XPos, YPos, pivotX, pivotY, sprX, sprY, width, height, rotation, scale, zoom, sheetID);
+}
+void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B, int A) {
+    pmOpNow = 5;
+    PM_TRACE("rect %d,%d %dx%d rgb %d,%d,%d a %d\n", XPos, YPos, width, height, R, G, B, A);
+    pm_rect(XPos, YPos, width, height, R, G, B, A);
+}
+void scd_pm_face(void *v, unsigned int colour) { pmOpNow = 6; pm_face(v, colour); }
+void scd_pm_tex_face(void *v, int sheetID)
+{
+    pmOpNow = 7;
+    pm_tex_face(v, sheetID);
+}
+void scd_pm_draw3dscene(int sheetID) { pmOpNow = 8; pm_draw3dscene(sheetID); }
+static ushort pmPalAtSky[8][256];
+static void pm_sky_debug(int layerID) /* the engine's Draw3DSkyLayer loop, in palette indices, against pm_sky's pixels */
+{
+    static int told = 0;
+    TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
+    int layerWidth = layer->xsize << 7, layerHeight = layer->ysize << 7, layerYPos = layer->YPos;
+    int sinValue = sinMLookupTable[layer->angle & 0x1FF], cosValue = cosMLookupTable[layer->angle & 0x1FF];
+    int layerXPos = layer->XPos >> 4, layerZPos = layer->ZPos >> 4;
+    static int idx[328 * 224];
+    for (int i = 0; i < 328 * 224; ++i) idx[i] = -1;
+    int *bufferPtr = &idx[((SCREEN_YSIZE / 2) + 12) * GFX_LINESIZE];
+    for (int i = TILE_SIZE / 2; i < SCREEN_YSIZE - TILE_SIZE; ++i) {
+        int xBuffer = layerYPos / (i << 8) * -cosValue >> 9;
+        int yBuffer = sinValue * (layerYPos / (i << 8)) >> 9;
+        int XPos    = layerXPos + (3 * sinValue * (layerYPos / (i << 8)) >> 2) - xBuffer * SCREEN_XSIZE;
+        int YPos    = layerZPos + (3 * cosValue * (layerYPos / (i << 8)) >> 2) - yBuffer * SCREEN_XSIZE;
+        int lineBuffer = 0;
+        while (lineBuffer < GFX_LINESIZE_DOUBLE) {
+            int tileX = XPos >> 12, tileY = YPos >> 12;
+            if (tileX > -1 && tileX < layerWidth && tileY > -1 && tileY < layerHeight) {
+                int chunk       = tile3DFloorBuffer[(YPos >> 16 << 8) + (XPos >> 16)];
+                byte *tilePixel = &tilesetGFXData[tiles128x128.gfxDataPos[chunk]];
+                switch (tiles128x128.direction[chunk]) {
+                    case FLIP_NONE: tilePixel += TILE_SIZE * (tileY & 0xF) + (tileX & 0xF); break;
+                    case FLIP_X: tilePixel += TILE_SIZE * (tileY & 0xF) + 0xF - (tileX & 0xF); break;
+                    case FLIP_Y: tilePixel += (tileX & 0xF) + SCREEN_YSIZE - TILE_SIZE * (tileY & 0xF); break;
+                    case FLIP_XY: tilePixel += 0xF - (tileX & 0xF) + SCREEN_YSIZE - TILE_SIZE * (tileY & 0xF); break;
+                    default: break;
+                }
+                if (*tilePixel > 0)
+                    *bufferPtr = *tilePixel;
+            }
+            if (lineBuffer & 1)
+                ++bufferPtr;
+            lineBuffer++;
+            XPos += xBuffer;
+            YPos += yBuffer;
+        }
+        if (!(i & 1))
+            bufferPtr -= GFX_LINESIZE;
+    }
+    int bad = 0;
+    for (int o = 124 * 328; o < 224 * 328; ++o)
+        if (idx[o] >= 0 && idx[o] != pmBuf[pmCur][o]) {
+            if (told < 5 && !bad) {
+                fprintf(pmCheckLog, "  sky: first at %d,%d engine index %d, picture %d\n", o % 328, o / 328, idx[o], pmBuf[pmCur][o]);
+                fprintf(pmCheckLog, "  layer 0: %d x %d chunks; drawn layer %d: %d x %d; layer 0 entry (10,16) = %d\n", stageLayouts[0].xsize,
+                        stageLayouts[0].ysize, activeTileLayers[layerID], layer->xsize, layer->ysize, stageLayouts[0].tiles[10 + 16 * 256]);
+                int px = o % 328, rowY = o / 328, i0 = 8 + 2 * (rowY - 124);
+                for (int ii = i0; ii < i0 + 2; ++ii) {
+                    int xBuffer = layerYPos / (ii << 8) * -cosValue >> 9;
+                    int yBuffer = sinValue * (layerYPos / (ii << 8)) >> 9;
+                    int XPos    = layerXPos + (3 * sinValue * (layerYPos / (ii << 8)) >> 2) - xBuffer * SCREEN_XSIZE;
+                    int YPos    = layerZPos + (3 * cosValue * (layerYPos / (ii << 8)) >> 2) - yBuffer * SCREEN_XSIZE;
+                    for (int sm = 2 * px; sm < 2 * px + 2; ++sm) {
+                        int X = XPos + sm * xBuffer, Y = YPos + sm * yBuffer;
+                        int tileX = X >> 12, tileY = Y >> 12, v = -1, chunk = -1;
+                        if (tileX > -1 && tileX < layerWidth && tileY > -1 && tileY < layerHeight) {
+                            chunk           = tile3DFloorBuffer[(Y >> 16 << 8) + (X >> 16)];
+                            byte *tilePixel = &tilesetGFXData[tiles128x128.gfxDataPos[chunk]];
+                            switch (tiles128x128.direction[chunk]) {
+                                case FLIP_NONE: tilePixel += TILE_SIZE * (tileY & 0xF) + (tileX & 0xF); break;
+                                case FLIP_X: tilePixel += TILE_SIZE * (tileY & 0xF) + 0xF - (tileX & 0xF); break;
+                                case FLIP_Y: tilePixel += (tileX & 0xF) + SCREEN_YSIZE - TILE_SIZE * (tileY & 0xF); break;
+                                case FLIP_XY: tilePixel += 0xF - (tileX & 0xF) + SCREEN_YSIZE - TILE_SIZE * (tileY & 0xF); break;
+                            }
+                            v = *tilePixel;
+                        }
+                        fprintf(pmCheckLog, "    row %d sample %d: X %d Y %d chunk %d dir %d -> %d\n", ii, sm, X, Y, chunk,
+                                chunk >= 0 ? tiles128x128.direction[chunk] : -1, v);
+                    }
+                }
+            }
+            bad++;
+        }
+    if (bad && told++ < 5)
+        fprintf(pmCheckLog, "  sky: %d pixels differ from the engine's loop (frame %u)\n", bad, frameCount);
+}
+void scd_pm_sky(int layerID)
+{
+    pmOpNow = 9;
+    pm_sky(layerID);
+    memcpy(pmPalAtSky, fullPalette, sizeof(pmPalAtSky));
+    if (getenv("SCD32X_PMSKYDBG"))
+        pm_sky_debug(layerID);
+}
+void scd_pm_copy_tile(int dest, int src)
+{
+    static FILE *f = getenv("SCD32X_PMCOPYLOG") ? fopen(getenv("SCD32X_PMCOPYLOG"), "w") : NULL;
+    if (f && frameCount < 40)
+        fprintf(f, "%u copy %d <- %d\n", frameCount, dest, src);
+    pm_copy_tile(dest, src);
+    md_tile_copy_hook(dest, src);
+}
+const unsigned char *plat_tiles_pristine() { return pmTilesSnap; } // REV R4C: the tiles as the stage loaded them (md_check.cpp)
+void pm_layer_end_host(int slot, const int *lines) { pmOpNow = (unsigned char)(10 + slot); pm_hline(slot, pmLayerY_[slot], lines); }
+void scd_pm_stage_new()
+{
+    pm_check_init();
+    pm_tiles_reset();
+    if (!SCD32X_SMALL)
+        memcpy(pmTilesSnap, tilesetGFXData, TILESET_SIZE);
+    md_tiles_new();
+}
+static void pm_save_png(const char *path, const unsigned char *pic, const unsigned char *mark) /* the picture (marked pixels red) */
+{
+    static unsigned short img[320 * 224];
+    for (int y = 0; y < 224; ++y)
+        for (int x = 0; x < 320; ++x) {
+            unsigned short c = fullPalette[gfxLineBuffer[y]][pic[y * 328 + x]];
+            img[y * 320 + x] = mark && mark[y * 320 + x] ? 0xF800 : c;
+        }
+    savePNG(path, img, 320, 224, 320);
+}
+int pm_darkest() /* the palette index nearest black: the picture's colour where nothing is drawn (as the engine's 0) */
+{
+    int best = 0, bestV = 0x7FFFFFFF;
+    for (int i = 0; i < 256; ++i) {
+        unsigned short c = activePalette[i];
+        int v            = (c >> 11) * 3 + ((c >> 5) & 63) * 2 + (c & 31);
+        if (v < bestV)
+            bestV = v, best = i;
+    }
+    return best;
+}
+static void pm_scene_start() /* as the console: both pictures cleared, the display off until a frame draws */
+{
+    int k = pm_darkest();
+    memset(pmBuf, k, sizeof(pmBuf));
+    memset(pmApx, 0, sizeof(pmApx));
+    pmWaitDraw = true;
+    pmDrew     = false;
+}
+static void pm_check_frame(const unsigned short *frame, int pitch)
+{
+    pm_frame_end();
+    if (SCD32X_NODRAW) { /* the SH2 configuration: the picture is drawn (AddressSanitizer watches it), no engine picture */
+        pmCur ^= 1;
+        pmPalGen++;
+        return;
+    }
+    if (!scdPicture || !pmCheckOn) {
+        pmPalGen++;
+        return;
+    }
+    if (pmWaitDraw) {
+        if (!pmDrew) { /* nothing drawn yet: the console's 32X display is still off (this buffer again next frame) */
+            pmPalGen++;
+            return;
+        }
+        pmWaitDraw = false;
+    }
+    pmDrew = false;
+    static unsigned char bad[320 * 224];
+    ushort clr = 0;
+    PACK_RGB888(clr, pmFadeR, pmFadeG, pmFadeB);
+    int a = pmFadeA > 0xFF ? 0xFF : pmFadeA;
+    const ushort *fb = &blendLookupTable[0x20 * (0xFF - a)], *pb = &blendLookupTable[0x20 * a];
+    unsigned long nBad = 0, nApx = 0, nApxDiff = 0;
+    int firstX = -1, firstY = -1;
+    for (int y = 0; y < 224; ++y)
+        for (int x = 0; x < 320; ++x) {
+            ushort c = fullPalette[gfxLineBuffer[y]][pmBuf[pmCur][y * 328 + x]];
+            if (a > 0) {
+                int R = (fb[(c & 0xF800) >> 11] + pb[(clr & 0xF800) >> 11]) << 11;
+                int G = (fb[(c & 0x7E0) >> 6] + pb[(clr & 0x7E0) >> 6]) << 6;
+                int B = fb[c & 0x1F] + pb[clr & 0x1F];
+                c     = (ushort)(R | G | B);
+            }
+            ushort e = frame[y * pitch + x];
+            bad[y * 320 + x] = 0;
+            if (pmApx[pmCur][y * 328 + x]) {
+                nApx++;
+                nApxDiff += c != e;
+            }
+            else if (c != e) {
+                bad[y * 320 + x] = 1;
+                if (!nBad++)
+                    firstX = x, firstY = y;
+            }
+        }
+    if (pm_trace_frame() == (int)frameCount) { /* (the trace frame: which draw call each pixel shows) */
+        int ops[32] = { 0 };
+        for (int y = 0; y < 224; ++y)
+            for (int x = 0; x < 320; ++x) ops[pmOp[y * 328 + x] & 31]++;
+        fprintf(pmCheckLog, "  shown pixels by draw call:");
+        for (int k = 0; k < 32; ++k)
+            if (ops[k])
+                fprintf(pmCheckLog, " %d:%d", k, ops[k]);
+        fprintf(pmCheckLog, "\n");
+    }
+    pmFrames++;
+    pmApxPixels += nApx;
+    pmApxDiffer += nApxDiff;
+    if (nBad) {
+        pmBadPixels += nBad;
+        if (pmBadFrames++ < 40) {
+            if (getenv("SCD32X_PMTILEDIFF")) {
+                int n = 0;
+                for (int t = 0; t < TILE_COUNT; ++t)
+                    if (memcmp(&tilesetGFXData[t * 256], &pmTilesSnap[pmTileMap[t] * 256], 256) && n++ < 8)
+                        fprintf(pmCheckLog, "  tile %d shows %d's pixels here, the engine's differ\n", t, pmTileMap[t]);
+                fprintf(pmCheckLog, "  %d tiles differ\n", n);
+            }
+            if (getenv("SCD32X_PMPALDIFF")) {
+                int n = 0;
+                for (int b = 0; b < 8; ++b)
+                    for (int i = 0; i < 256; ++i)
+                        if (pmPalAtSky[b][i] != fullPalette[b][i] && n++ < 12)
+                            fprintf(pmCheckLog, "  palette %d:%d %04X at the floor, %04X at the end\n", b, i, pmPalAtSky[b][i], fullPalette[b][i]);
+                fprintf(pmCheckLog, "  %d palette entries changed after the floor; line bank at row %d: %d\n", n, firstY, gfxLineBuffer[firstY]);
+            }
+            {
+                int ops[32] = { 0 };
+                for (int i = 0; i < 320 * 224; ++i)
+                    if (bad[i])
+                        ops[pmOp[(i / 320) * 328 + i % 320] & 31]++;
+                fprintf(pmCheckLog, "  by draw call (1 clear 2 sprite 3 scaled 4 rotozoom 5 rect 6 face 7 texface 8 3d 9 sky 10+ layer):");
+                for (int k = 0; k < 32; ++k)
+                    if (ops[k])
+                        fprintf(pmCheckLog, " %d:%d", k, ops[k]);
+                fprintf(pmCheckLog, "\n");
+            }
+            int rowLo = 224, rowHi = -1, colLo = 320, colHi = -1;
+            for (int y = 0; y < 224; ++y)
+                for (int x = 0; x < 320; ++x)
+                    if (bad[y * 320 + x]) {
+                        rowLo = y < rowLo ? y : rowLo, rowHi = y > rowHi ? y : rowHi;
+                        colLo = x < colLo ? x : colLo, colHi = x > colHi ? x : colHi;
+                    }
+            fprintf(pmCheckLog,
+                    "frame %u scene %d:%d: %lu pixels differ (first at %d,%d: picture %04X [%d] engine %04X; rows %d-%d, columns %d-%d), %lu "
+                    "approximated\n",
+                    frameCount, activeStageList, stageListPosition, nBad, firstX, firstY,
+                    fullPalette[gfxLineBuffer[firstY]][pmBuf[pmCur][firstY * 328 + firstX]], pmBuf[pmCur][firstY * 328 + firstX],
+                    frame[firstY * pitch + firstX], rowLo, rowHi, colLo, colHi, nApx);
+            if (pmBadFrames <= 6 && framesDir) {
+                char path[512];
+                snprintf(path, sizeof(path), "%s/pm%06u.png", framesDir, frameCount);
+                pm_save_png(path, pmBuf[pmCur], NULL);
+                snprintf(path, sizeof(path), "%s/pm%06u_bad.png", framesDir, frameCount);
+                pm_save_png(path, pmBuf[pmCur], bad);
+            }
+        }
+    }
+    if (framesDir && frameCount % saveEvery == 0) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/p%06u.png", framesDir, frameCount);
+        pm_save_png(path, pmBuf[pmCur], NULL);
+    }
+    if (frameCount % 600 == 599)
+        fprintf(pmCheckLog, "%u ... %lu picture frames, %lu with differences (%lu pixels); %lu pixels approximated (%lu of them differ)\n",
+                frameCount, pmFrames, pmBadFrames, pmBadPixels, pmApxPixels, pmApxDiffer);
+    fflush(pmCheckLog);
+    pmCur ^= 1; /* the console draws the next frame into the other buffer */
+    pmPalGen++;
+}
 void plat_present(const unsigned short *frame, int width, int height, int pitch)
 {
+    pm_check_frame(frame, pitch); // REV R4C
+    pm_log_frame(); // REV R4C
     draw_log_frame(); // S7e
     hostInit();
     menu_log();
@@ -712,10 +1184,17 @@ bool plat_stage_loading()
     const char *in = getenv("SCD32X_CARTIMG_IN");
     if (in && *in && !cart_read(in, cartLoads))
         ev("PORT32X: no cart image for stage load %d (kept the previous one)", cartLoads);
+    pm_check_init(); // REV R4C: the 32X picture mode in the presentation and special stage lists (as the console's images)
+    /* (the SH2 configuration always: its drawing is the picture mode's, as on the console) */
+    scdPicture = (pmCheckOn || SCD32X_NODRAW) && (activeStageList == STAGELIST_PRESENTATION || activeStageList == STAGELIST_SPECIAL);
+    if (getenv("SCD32X_NOPM")) // (a check without it)
+        scdPicture = false;
     return true;
 }
 void plat_stage_loaded()
 {
+    if (scdPicture && pmCheckOn)
+        pm_scene_start(); // REV R4C
     stageStartMs = plat_ticks_ms(); // REV R4: the DEMO PAD switch's pad from here
     const char *out = getenv("SCD32X_CARTIMG_OUT");
     int n           = cartLoads++;
@@ -742,7 +1221,7 @@ void plat_stage_loaded()
     memcpy(blend + 0x10000, blendLookupTable, 0x2000 * sizeof(ushort));
     memcpy(blend + 0x12000, subtractLookupTable, 0x2000 * sizeof(ushort));
     src[SCD_CART_GFXDATA] = graphicData;
-    src[SCD_CART_TILEGFX] = tilesetGFXData;
+    src[SCD_CART_TILEGFX] = pmTilesSnap ? pmTilesSnap : tilesetGFXData; // REV R4C: the tiles as loaded (before any copy)
     src[SCD_CART_BLEND]   = blend;
 #else
     static const unsigned char none[1] = { 0 };
@@ -769,6 +1248,11 @@ void plat_stage_loaded()
       // (host/cart_build trims trailing zeros, and a script's last instruction, End, is a 0)
         int32_t pos[2] = { scriptCodePos, jumpTablePos };
         fwrite("SPOS", 1, 4, f);
+        fwrite(pos, sizeof(pos), 1, f);
+    }
+    { // REV R4C: the sheets' extent and the tile set's size - kept whole in the console image (the 32X picture mode)
+        int32_t pos[2] = { gfxDataPosition, TILESET_SIZE };
+        fwrite("GPOS", 1, 4, f);
         fwrite(pos, sizeof(pos), 1, f);
     }
     fclose(f);
@@ -967,7 +1451,7 @@ unsigned char *plat_layout_pool(int *size)
     const int n                = 82 * 1024; // S5q: as on the SH2 (frame buffer: record 12 | menus 34 | pool 82 KB)
     if (!pool)
         pool = (unsigned char *)calloc(1, n);
-    *size = n;
+    *size = scdPicture ? PM_POOL_BYTES : n; // REV R4C: the picture mode's pool (cd32x/engine/scd_pm.h) in its scenes
     return pool;
 }
 

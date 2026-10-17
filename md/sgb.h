@@ -24,6 +24,10 @@
  *  48 u32 'SKY1' (REV R4B) 52 u32 the sky section's offset: u16 background layer, sky colour (engine palette index),
  *     rows (the layer's height), pairs (rows / 2), the sky colour's RGB565 when the file was made, 0; then pairs x
  *     { u16 A, u16 B }: the 32X colours (0BBBBBGGGGGRRRRR) of the background's row pair, a 2 x 2 checkerboard of A and B
+ * REV R4C: the file's last 8 bytes u32 offset, u32 'ANI1': the act's animated tiles (Copy16x16Tile) - at the offset
+ *   128 bytes: the tiles with name words (bit t of byte t >> 3; the quads hold every picture the act's animations show,
+ *   as loaded), 64 bytes: the chunks that hold an animated tile (bit c of byte c >> 3); the SH2 shows tile t with the
+ *   name words of the tile whose pixels it has (md_planes.h tileMap, md_tile_copy, md_plane_refresh)
  * Plain C, no host dependencies. */
 #ifndef SGB_H
 #define SGB_H
@@ -35,6 +39,7 @@
 #define SGB_HEADER 64
 #define SGB_REC_MAX 6000      /* words: the frame buffer's 12 KB record area (a full reload is ~4,300) */
 #define SGB_SKY_TAG 0x534B5931u /* 'SKY1': the act has a 32X sky (header words 48 / 52) */
+#define SGB_ANI_TAG 0x414E4931u /* 'ANI1': the act has animated tiles (the file's last 8 bytes, see above) */
 #define SGB_NAME_A 0xC000
 #define SGB_NAME_B 0xE000
 

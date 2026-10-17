@@ -37,8 +37,12 @@ for s in $(expand); do
     printf "[Dev]\nStartingCategory=%s\nStartingScene=%s\nDataFile=%s\n" "$l" "$p" "$DATA" > "$T/run/settings.ini"
     # REV R4B: the chunks the act's scripts can place later (tile triggers ...) get their cells too
     placed=$(python3 tools/scd_chunks.py "$DATA" "$l" "$p")
+    # REV R4C: the act's animated tiles (Copy16x16Tile) first - which tiles get which pictures (the act's timers: all
+    # of them within its first seconds); the act file then has those pictures' cells (host/md_check.cpp)
+    ( cd "$T/run" && SCD32X_PLAYER=$pl SCD32X_TILECOPYLOG="$T/run/copies.txt" SCD32X_MAX_FRAMES=900 \
+        "$OLDPWD/host/soniccd_host" > pre.txt 2>&1 ) || true
     ( cd "$T/run" && SCD32X_PLAYER=$pl SCD32X_MDCHECK=1 SCD32X_MDGEXPORT="$T/run/mdg" SCD32X_MAX_FRAMES=120 SCD32X_EVENT_LOG=events.txt \
-        SCD32X_PLACED="$placed" "$OLDPWD/host/soniccd_host" > out.txt 2>&1 ) || true
+        SCD32X_PLACED="$placed" SCD32X_ANIMTILES="$T/run/copies.txt" "$OLDPWD/host/soniccd_host" > out.txt 2>&1 ) || true
     f=$(ls "$T/run/mdg"/*.MDG 2>/dev/null | head -1)
     name=$(printf "G%dS%03d.MDG" "$l" "$((p + 128 * pl))")
     if [ -z "$f" ]; then
@@ -50,7 +54,8 @@ for s in $(expand); do
         echo "*** $name: $size bytes - more than the cart slot (458752)"; exit 1
     fi
     cp "$f" "$OUT/$name"
-    echo "  $name: $size bytes ($(basename "$f" .MDG))"
+    ani=$(grep -o "animated tiles in [0-9]* chunks" "$T/run/events.txt" | head -1)
+    echo "  $name: $size bytes ($(basename "$f" .MDG))${ani:+, $ani}"
     made=$((made + 1))
 done
 rm -rf "$T"

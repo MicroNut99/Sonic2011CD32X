@@ -184,13 +184,37 @@ static unsigned int scdDemoFrom   = 0; /* the frame the stage started: the scrip
 #define SC_ADAPTER_B (*(volatile unsigned char *)0x20004000)
 typedef int (*ScdLoadFile)(unsigned short number, unsigned int *bytes); /* the loader's resident routine */
 static bool planesOn = false;
+/* REV R4C: the act's animated tiles (the scripts' Copy16x16Tile; md/sgb.h 'ANI1'): the planes show tile t with the name
+   words of the tile (as loaded) whose pixels it has now - pmTileMap, the picture mode's own map (scd_pm.h); a tile
+   that changed (aniDirty) has its cells the planes hold written again (planes_frame, md_plane_refresh) */
+static unsigned short pmTileMap[TILE_COUNT];
+#define PM_TILE_MAP_OWN 1
+static const unsigned char *aniTiles = 0; /* the act file's section: 128 bytes the tiles with name words, 64 the chunks
+                                             that hold an animated tile (0: the act has none / not a planes act) */
+static unsigned int aniDirty[32];         /* 1024 bits (md_planes.h tileBits) */
+static bool aniDirtyAny = false;
 static MdPlane sgbA, sgbB;
 static int sgbBLayer = -1;
 static bool slotUsed[4];
 static unsigned char slotLayer[4];
 static int tileYA, tileYB, frameBg;
-static int xA[SCREEN_YSIZE], xB[SCREEN_YSIZE];
-static int16_t hsA[SCREEN_YSIZE], hsB[SCREEN_YSIZE];
+/* REV R4C: the planes' scroll arrays share their SDRAM with the 32X picture mode's (below): never used together */
+static union {
+    struct {
+        int xA[SCREEN_YSIZE], xB[SCREEN_YSIZE];
+        int16_t hsA[SCREEN_YSIZE], hsB[SCREEN_YSIZE];
+    } pl;
+    struct {
+        int lines[SCREEN_YSIZE];      /* a tile layer's x per line (DrawHLineScrollLayer's own) */
+        DrawListEntry3D list[0xA0];   /* the 3D scene's faces, sorted */
+    } pm;
+} scdShared;
+#define xA scdShared.pl.xA
+#define xB scdShared.pl.xB
+#define hsA scdShared.pl.hsA
+#define hsB scdShared.pl.hsB
+#define pmLines scdShared.pm.lines
+#define pmList scdShared.pm.list
 static unsigned short cramSent[64];
 static unsigned short recId = 0;
 static MdSprites sprites; /* REV R3: the act's sprites as Genesis hardware sprites (md/md_sprites.h) */
@@ -483,7 +507,8 @@ static void planes_off(int show = PLANES_OFF_PICTURE)
    pack has Tails's frames). tools/build_game_data.py and tools/build_mdg.sh make them ("1:0@1"). */
 static unsigned int player_files()
 {
-    return (playerListPos == 1 && stageListPosition >= 0 && stageListPosition < 0x80) ? 0x80u : 0u;
+    /* REV R4C: the presentation scenes (the title, the menus ...) are the same for both: Sonic's files */
+    return (playerListPos == 1 && activeStageList != STAGELIST_PRESENTATION && stageListPosition >= 0 && stageListPosition < 0x80) ? 0x80u : 0u;
 }
 static unsigned int mdgInCart = 0, mdgBytes = 0; /* REV R4B: the act file in the cart's slot (0: none, or another file) */
 static unsigned int mdg_file() { return 0x1000 + (((unsigned int)activeStageList + 1) << 8) + (unsigned int)stageListPosition + player_files(); }
@@ -517,6 +542,14 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
     }
     mdgInCart = file;
     mdgBytes  = bytes;
+    aniTiles  = 0; /* REV R4C: 'ANI1' - the file's last 8 bytes (the section's offset, the tag) */
+    if (!(bytes & 3) && bytes >= 8 + 192 && *(const unsigned int *)(f + bytes - 4) == SGB_ANI_TAG) {
+        unsigned int at = *(const unsigned int *)(f + bytes - 8);
+        if (at <= bytes - 8 - 192)
+            aniTiles = f + at;
+    }
+    for (int i = 0; i < 32; ++i) aniDirty[i] = 0;
+    aniDirtyAny = false;
     STATE(0x5C65); /* R1C: the MDG is in the cart; command 68 next */
     SC_COMM4 = 0; /* R1S (R1P's line): COMM4 still held the Sub-CPU's start-up check 0x1234 - the 68000 took it as a
                      record id the moment command 68 switched the records on and copied junk from the frame buffer
@@ -645,6 +678,7 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     MdLayer LA, LB;
     LA.chunks       = (const uint16_t *)(f + *(const unsigned int *)(f + 24));
     LA.quads        = (const uint16_t *)(f + *(const unsigned int *)(f + 20));
+    LA.tileMap      = aniTiles ? pmTileMap : 0; /* REV R4C: the act's animated tiles (Copy16x16Tile) */
     LB              = LA;
     LA.layout       = stageLayouts[0].tiles;
     LA.layoutStride = 0x100;
@@ -685,6 +719,13 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
         else if (layoutQ[i][0] == bgLayer)
             md_plane_chunk(&sgbB, &LB, SGB_NAME_B, layoutQ[i][1], layoutQ[i][2], sgb_write, &o);
     layoutQn = 0;
+    if (aniDirtyAny) { /* REV R4C: the changed animated tiles' cells the planes hold */
+        md_plane_refresh(&sgbA, &LA, SGB_NAME_A, aniTiles + 128, (const uint8_t *)aniDirty, sgb_write, &o);
+        if (bgLayer >= 0)
+            md_plane_refresh(&sgbB, &LB, SGB_NAME_B, aniTiles + 128, (const uint8_t *)aniDirty, sgb_write, &o);
+        for (int i = 0; i < 32; ++i) aniDirty[i] = 0;
+        aniDirtyAny = false;
+    }
     const unsigned short *slots = (const unsigned short *)(f + *(const unsigned int *)(f + 16));
     uint16_t cIdx[64], cCol[64];
     int nc = 0;
@@ -725,10 +766,12 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
 #define MENU_CUR ((volatile unsigned short *)0x24001800)
 #define MENU_SHOWN ((volatile unsigned short *)(0x24001800 + 2 * MENU_COLS * MENU_ROWS))
 static bool menuDrawn = false, menuFailed = false;
+static void pm_end(bool picture);
 void plat_menu_clear()
 {
     if (Engine.gameMode != ENGINE_DEVMENU)
         return;
+    pm_end(false); /* REV R4C: from a scene in the 32X picture mode (A + B + C + START): its text is the menu's again */
     for (int i = 0; i < MENU_COLS * MENU_ROWS; ++i) MENU_CUR[i] = 0;
     menuDrawn = true;
 }
@@ -804,16 +847,335 @@ static void menu_frame()
     rec_handover();
 }
 void scd_text_on() { splash_fail(); } /* REV R4B: for the fatal screens (engine_start.cpp's exception screen, no_heap) */
+// ---------------------------------------------------------------- REV R4C: the 32X picture mode (cd32x/engine/scd_pm.h)
+// The scenes whose image carries the sprite sheets' and the tiles' pixels (tools/build_game_data.py: the presentation
+// and the special stage lists - the title, the menus, time attack, the special stages ...) are drawn by the SH2 into the
+// 32X frame buffer in 256 colours, the Genesis display off. The two frame buffers take turns: the SH2 draws a frame into
+// one while the 32X shows the other; they swap in the vertical blank. Each holds the line table, the picture
+// (PM_FB_PIXELS: 224 lines of 328), the 3D scene's vertices, the scene's layouts (PM_FB_POOL - the layout pool of these
+// scenes: the engine reads its layouts from whichever buffer the SH2 has, so both hold the same - copied when the scene
+// starts, a script's change written into the other buffer too, after the swap) and the engine's one-line buffer
+// (SCD_FB_LINE). The colours are the engine's palette with its fade, written in each vertical blank after a swap. A
+// frame that takes longer than its vertical blank makes the next ones logic only (pmSkip), up to PM_SKIP_MAX in a row,
+// until the game is back on time: the game keeps its speed, the picture comes less often.
+// Status codes: 5C90 the picture mode starts (both buffers set up), 5C91 done.
+bool scdPicture = false;
+static bool pmScene = false; /* the scene in the cart is drawn in the picture mode (plat_stage_loading) */
+static bool pmReady = false; /* both frame buffers set up for it (pm_begin) */
+static bool pmShown = false; /* the 32X shows its picture */
+static bool pmDrew  = false; /* a draw call since the last frame shown */
+static const unsigned char *pmGfx = 0, *pmTiles = 0;
+static int pmTileY[4];
+static unsigned int pmVbl0 = 0, pmLogic = 0;
+static int pmSkipRun = 0;
+#define PM_SKIP_MAX 10
+#define PM_FB16 ((volatile unsigned short *)(0x24000000 + PM_FB_PIXELS))
+#define PM_OV16 ((volatile unsigned short *)(0x24020000 + PM_FB_PIXELS)) /* the overwrite image: 0 bytes not written */
+#define PM_W16(off, w) (PM_FB16[(off) >> 1] = (unsigned short)(w))
+#define PM_O16(off, w) (PM_OV16[(off) >> 1] = (unsigned short)(w))
+#define PM_O8(off, v) (PM_OV16[(off) >> 1] = ((off) & 1) ? (unsigned short)(unsigned char)(v) : (unsigned short)((unsigned char)(v) << 8))
+#define PM_GFX pmGfx
+#define PM_TILES pmTiles
+/* the chunk table's arrays in the cart, read directly (the proxy, tiles128x128, only while a script has patched an
+   entry: Set16x16TileInfo - none of these scenes does) */
+static inline int pm_chunk_tile(int e)
+{
+    if (scdChunkPatchCount)
+        return tiles128x128.gfxDataPos[e] >> 8;
+    return (unsigned)e < (unsigned)scdChunkCount ? scdChunkIndex[e] : 0;
+}
+static inline int pm_chunk_dir(int e)
+{
+    if (scdChunkPatchCount)
+        return tiles128x128.direction[e];
+    return (unsigned)e < (unsigned)scdChunkCount ? scdChunkDir[e] : 0;
+}
+static inline int pm_chunk_plane(int e)
+{
+    if (scdChunkPatchCount)
+        return tiles128x128.visualPlane[e];
+    return (unsigned)e < (unsigned)scdChunkCount ? scdChunkPlane[e] : 0;
+}
+#define PM_CHUNK_TILE(e) pm_chunk_tile(e)
+#define PM_CHUNK_DIR(e) pm_chunk_dir(e)
+#define PM_CHUNK_PLANE(e) pm_chunk_plane(e)
+/* the SH2's on-chip divider (32 / 32 bits, signed, 39 cycles): the library's __sdivsi3 is a loop. No interrupt handler
+   of this program divides (the loader's vertical blank counts and samples only) */
+static inline int pm_div(int a, int b)
+{
+    *(volatile int *)0xFFFFFF00 = b; /* DVSR */
+    *(volatile int *)0xFFFFFF04 = a; /* DVDNT: starts the division */
+    return *(volatile int *)0xFFFFFF04;
+}
+#define PM_DIV(a, b) pm_div((a), (b))
+#define PM_BE16(p) (*(const unsigned short *)(p)) /* (big-endian: one read) */
+#define PM_SKY_ROWS2 1 /* the special stages' floor: every other line sampled, shown twice (half its cost) */
+#define PM_VERTS ((Vertex *)(0x24000000 + PM_FB_VERTS))
+#define PM_SCAN ((int *)(0x24000000 + PM_FB_SCAN))
+#define PM_LIST pmList
+#include "scd_pm.h"
+void scd_pm_clear(int index)
+{
+    pmDrew = true;
+    pm_clear(index);
+}
+void scd_pm_sprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID, int alpha)
+{
+    pmDrew = true;
+    pm_sprite(XPos, YPos, width, height, sprX, sprY, direction, sheetID, alpha);
+}
+void scd_pm_sprite_scaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX,
+                          int sprY, int sheetID)
+{
+    pmDrew = true;
+    pm_sprite_scaled(direction, XPos, YPos, pivotX, pivotY, scaleX, scaleY, width, height, sprX, sprY, sheetID);
+}
+void scd_pm_sprite_rotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
+                            int scale, bool zoom, int sheetID)
+{
+    pmDrew = true;
+    pm_sprite_rotozoom(direction, XPos, YPos, pivotX, pivotY, sprX, sprY, width, height, rotation, scale, zoom, sheetID);
+}
+void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
+{
+    pmDrew = true;
+    pm_rect(XPos, YPos, width, height, R, G, B, A);
+}
+void scd_pm_face(void *v, unsigned int colour)
+{
+    pmDrew = true;
+    pm_face(v, colour);
+}
+void scd_pm_tex_face(void *v, int sheetID)
+{
+    pmDrew = true;
+    pm_tex_face(v, sheetID);
+}
+void scd_pm_draw3dscene(int sheetID)
+{
+    pmDrew = true;
+    pm_draw3dscene(sheetID);
+}
+void scd_pm_sky(int layerID)
+{
+    pmDrew = true;
+    pm_sky(layerID);
+}
+void scd_pm_copy_tile(int dest, int src)
+{
+    if (aniTiles) { /* REV R4C: a planes act - on the map only if the picture has name words (md_tile_copy) */
+        if (md_tile_copy(pmTileMap, (uint8_t *)aniDirty, aniTiles, dest, src))
+            aniDirtyAny = true;
+        return;
+    }
+    pm_copy_tile(dest, src);
+}
+void scd_pm_stage_new()
+{
+    pm_tiles_reset();
+    aniTiles    = 0; /* REV R4C: (planes_load: the act file's) */
+    aniDirtyAny = false;
+}
+static void pm_layer_end(int slot) __attribute__((noinline)); /* cart code (plat_layer_end) */
+static void pm_layer_end(int slot)
+{
+    if (slot >= 0 && slot < 4) {
+        pmDrew = true;
+        pm_hline(slot, pmTileY[slot], pmLines);
+    }
+}
+static int pm_darkest() /* the palette index nearest black: the picture's colour where nothing is drawn (the engine's 0) */
+{
+    const unsigned short *pal = fullPalette[gfxLineBuffer[0]];
+    int best = 0, bestV = 0x7FFFFFFF;
+    for (int i = 0; i < 256; ++i) {
+        unsigned short c = pal[i];
+        int v            = (c >> 11) * 3 + ((c >> 5) & 63) * 2 + (c & 31);
+        if (v < bestV)
+            bestV = v, best = i;
+    }
+    return best;
+}
+static void pm_buffer_setup(int k) /* the SH2's frame buffer: the line table, the picture all colour k */
+{
+    volatile unsigned short *fb = SC_FB;
+    for (int y = 0; y < 256; ++y) fb[y] = (unsigned short)(PM_FB_PIXELS / 2 + (y < 224 ? y : 223) * (PM_STRIDE / 2));
+    unsigned short w = (unsigned short)(k << 8 | k);
+    for (int i = 0; i < PM_STRIDE * PM_LINES / 2; ++i) PM_FB16[i] = w;
+}
+static unsigned int pm_pool_used() /* the layout pool's bytes in use (each layer: its rows' entries, then their scroll) */
+{
+    unsigned int used = 0, base = 0x24000000u + PM_FB_POOL;
+    for (int i = 0; i < LAYER_COUNT; ++i) {
+        unsigned int t = (unsigned int)(unsigned long)stageLayouts[i].lineScroll;
+        if (stageLayouts[i].rowsCap > 0 && t >= base && t < base + PM_POOL_BYTES) {
+            unsigned int end = t + (unsigned int)stageLayouts[i].rowsCap * CHUNK_SIZE - base;
+            if (end > used)
+                used = end;
+        }
+    }
+    return (used + 3u) & ~3u;
+}
+static void pm_mirror(unsigned int at, unsigned int bytes) __attribute__((noinline));
+static void pm_mirror(unsigned int at, unsigned int bytes) /* frame buffer bytes at..: the SH2's buffer into the other, 2 KB
+                                                              at a time through the stack - two swaps each */
+{
+    unsigned short buf[1024];
+    for (unsigned int done = 0; done < bytes; done += sizeof(buf)) {
+        unsigned int n             = bytes - done < sizeof(buf) ? bytes - done : (unsigned int)sizeof(buf);
+        volatile unsigned short *p = (volatile unsigned short *)(0x24000000u + at + done);
+        for (unsigned int i = 0; i < n / 2; ++i) buf[i] = p[i];
+        flip_wait();
+        for (unsigned int i = 0; i < n / 2; ++i) p[i] = buf[i];
+        flip_wait();
+    }
+}
+static void pm_begin() __attribute__((noinline));
+static void pm_begin() /* plat_stage_loaded: the scene is loaded - both frame buffers set up, the display off until it draws */
+{
+    STATE(0x5C90);
+    splash_part(20, 32); /* the loading bar full (the scene has no act file) */
+    splash_chunk(1, 1);
+    if (!genesisOff) {
+        sub_cmd(52, 0); /* the Genesis display off: the 32X picture is the whole screen */
+        genesisOff = true;
+    }
+    MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000); /* blank while the buffers are set up */
+    splashUp    = false;
+    skyPicture  = false; /* (both buffers are the picture's now) */
+    statusReady = false;
+    int k       = pm_darkest();
+    pm_buffer_setup(k);
+    pm_mirror(PM_FB_POOL, pm_pool_used()); /* the layouts into the other buffer */
+    flip_wait();
+    pm_buffer_setup(k); /* the other buffer: the first frame is drawn into it */
+    pmReady     = true;
+    pmShown     = false;
+    pmDrew      = false;
+    pmSkip      = false;
+    pmSkipRun   = 0;
+    pmLogic     = 0;
+    pmVbl0      = VBLANK_COUNT;
+    layoutQn    = 0;
+    layoutQLost = false;
+    pmPalGen++;
+    STATE(0x5C91);
+}
+static void pm_end(bool picture) /* the scene ends (another loads: the loading picture; the dev menu: blank) */
+{
+    if (!scdPicture && !pmReady)
+        return;
+    bool shown = pmShown;
+    scdPicture = false;
+    pmReady    = false;
+    pmShown    = false;
+    if (shown && picture)
+        splash_show(); /* (into the buffer shown last: the SH2 keeps its own) */
+    else
+        MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000);
+    statusReady = false;
+    skyPicture  = false;
+}
+static void pm_colours() /* the frame's palette with its fade (the engine's arithmetic: DrawRectangle) into the 32X colours */
+{
+    const unsigned short *pal = fullPalette[gfxLineBuffer[0]];
+    int a                     = pmFadeA > 0xFF ? 0xFF : pmFadeA, ia = 0xFF - a;
+    unsigned int clr = (unsigned int)((((pmFadeB & 0xFF) >> 3) | (((pmFadeG & 0xFF) >> 2) << 5) | (((pmFadeR & 0xFF) >> 3) << 11)));
+    int fr = (int)(clr >> 11), fg = (int)((clr & 0x7E0) >> 6), fb = (int)(clr & 0x1F);
+    volatile unsigned short *cram = SC_CRAM;
+    for (int i = 0; i < 256; ++i) {
+        unsigned int c = pal[i];
+        int r = (int)(c >> 11), g = (int)((c >> 6) & 31), b = (int)(c & 31);
+        if (a > 0) {
+            r = (ia * r >> 8) + (a * fr >> 8);
+            g = (ia * (int)((c & 0x7E0) >> 6) >> 8) + (a * fg >> 8);
+            b = (ia * b >> 8) + (a * fb >> 8);
+        }
+        unsigned short w = (unsigned short)(0x8000 | b << 10 | g << 5 | r); /* bit 15: in front of the Genesis */
+        cram[i]          = w == 0x8000 ? 0x8400 : w;                         /* (as the loading picture: never 0x8000) */
+    }
+}
+static void pm_present() __attribute__((noinline)); /* cart code: plat_present (SDRAM) calls it */
+static void pm_present()
+{
+    pm_frame_end();
+    pmLogic++;
+    bool flip = !pmSkip && (pmShown || pmDrew); /* nothing drawn yet: the display waits, the same buffer again */
+    if (flip) {
+        /* the scripts' layout changes (plat_layout_set): their values from this buffer, into the other after the swap */
+        unsigned short val[LAYOUT_QUEUE];
+        for (int i = 0; i < layoutQn; ++i) {
+            const TileLayer *L = &stageLayouts[layoutQ[i][0] < LAYER_COUNT ? layoutQ[i][0] : 0];
+            val[i]             = layoutQ[i][2] < L->rowsCap ? L->tiles[layoutQ[i][1] + (layoutQ[i][2] << 8)] : 0;
+        }
+        flip_wait(); /* the frame is shown from this vertical blank */
+        pm_colours();
+        if (!pmShown) {
+            MARS_VDP_DISPMODE = (unsigned short)((MARS_VDP_DISPMODE & 0x8000) | MARS_VDP_MODE_256);
+            pmShown           = true;
+        }
+        for (int i = 0; i < layoutQn; ++i) {
+            const TileLayer *L = &stageLayouts[layoutQ[i][0] < LAYER_COUNT ? layoutQ[i][0] : 0];
+            if (layoutQ[i][2] < L->rowsCap)
+                L->tiles[layoutQ[i][1] + (layoutQ[i][2] << 8)] = val[i];
+        }
+        if (layoutQLost) /* more changes in one frame than the queue holds: all the layouts again */
+            pm_mirror(PM_FB_POOL, pm_pool_used());
+        layoutQn    = 0;
+        layoutQLost = false;
+        pmDrew      = false;
+    }
+    else {
+        unsigned int target = pmVbl0 + pmLogic; /* logic only: on time, not ahead of it */
+        if ((int)(VBLANK_COUNT - target) < 0) {
+            while ((int)(VBLANK_COUNT - target) < 0) {
+            }
+            if (pmShown)
+                pm_colours(); /* (a vertical blank began just now: the fade goes on between the pictures) */
+        }
+    }
+    pmPalGen++;
+    int late = (int)(VBLANK_COUNT - (pmVbl0 + pmLogic));
+    if (late > 90) { /* far behind (the game itself is slower than 60 frames a second here): from now on */
+        pmVbl0 = VBLANK_COUNT - pmLogic;
+        late   = 0;
+    }
+    if (late > 0 && pmShown && pmSkipRun < PM_SKIP_MAX) {
+        pmSkip = true;
+        pmSkipRun++;
+    }
+    else {
+        pmSkip    = false;
+        pmSkipRun = 0;
+    }
+}
 #else
 void plat_menu_clear() {}
 void plat_menu_text(const unsigned short *, int, int, int, int) {}
 void plat_layout_set(int, int, int) {} /* REV R4B: no planes - the engine draws its layers itself */
 void scd_text_on() {}
+bool scdPicture = false; /* REV R4C: the picture mode is the planes build's */
+void scd_pm_clear(int) {}
+void scd_pm_sprite(int, int, int, int, int, int, int, int, int) {}
+void scd_pm_sprite_scaled(int, int, int, int, int, int, int, int, int, int, int, int) {}
+void scd_pm_sprite_rotozoom(int, int, int, int, int, int, int, int, int, int, int, bool, int) {}
+void scd_pm_rect(int, int, int, int, int, int, int, int) {}
+void scd_pm_face(void *, unsigned int) {}
+void scd_pm_tex_face(void *, int) {}
+void scd_pm_draw3dscene(int) {}
+void scd_pm_sky(int) {}
+void scd_pm_copy_tile(int, int) {}
+void scd_pm_stage_new() {}
 #endif
 bool plat_boot_menu() /* REV R4 */
 {
 #if SCD_PLANES
+#if defined(SCD32X_START_LIST) && SCD32X_START_LIST == 0 && SCD32X_START_STAGE == 0
+    return false; /* REV R4C: a disc that starts with the title screen starts the game itself (A + B + C + START: the
+                     Options Menu) */
+#else
     return SCD_DEVMENU != 0;
+#endif
 #else
     return false;
 #endif
@@ -824,6 +1186,13 @@ static void draw_show(); // S7e (below)
 void plat_present(const unsigned short *, int, int, int) SCD_HOT; /* R1V: SDRAM */
 void plat_present(const unsigned short *, int, int, int)
 {
+#if SCD_PLANES
+    if (scdPicture && pmReady) { /* REV R4C: the 32X picture mode */
+        pm_present();
+        presented++;
+        return;
+    }
+#endif
 #if SCD32X_DRAWCART
     draw_show(); /* S7e: the game's own picture; flip_wait paces at the vertical blank */
 #if SCD_DRAW_DIAG
@@ -1214,6 +1583,11 @@ unsigned int plat_pad()
 unsigned short *plat_layer_begin(int slot, int layer, int tileYPos, unsigned short *frame) SCD_HOT; /* R1W: SDRAM */
 unsigned short *plat_layer_begin(int slot, int layer, int tileYPos, unsigned short *frame)
 {
+    if (scdPicture) { /* REV R4C: the 32X picture mode draws the layer (plat_layer_end) */
+        if (slot >= 0 && slot < 4)
+            pmTileY[slot] = tileYPos;
+        return frame;
+    }
     if (slot >= 0 && slot < 4) {
         slotUsed[slot]  = true;
         slotLayer[slot] = (unsigned char)layer;
@@ -1235,10 +1609,16 @@ void plat_layer_line(int slot, int line, int x)
     else if (slotLayer[slot] == frameBg)
         xB[line] = x;
 }
-void plat_layer_end(int) {}
+void plat_layer_end(int slot)
+{
+    if (scdPicture)
+        pm_layer_end(slot); /* REV R4C */
+}
 int *plat_layer_lines(int slot) SCD_HOT; /* R1W: SDRAM */
 int *plat_layer_lines(int slot) /* R1T: as plat_layer_line - layer 0 into xA, the frame's background layer into xB */
 {
+    if (scdPicture)
+        return pmLines; /* REV R4C: the 32X picture mode's (plat_layer_end) */
     if (slot < 0 || slot >= 4)
         return 0;
     if (slotLayer[slot] == 0)
@@ -1585,6 +1965,17 @@ static void menu_note_missing(unsigned int file) /* REV R4: the dev menu's two l
 bool plat_stage_loading()
 {
 #if SCD_PLANES
+    pm_end(true); /* REV R4C: a scene in the 32X picture mode ends: the loading picture */
+    pmScene = false;
+    if (activeStageList == STAGELIST_PRESENTATION && stageListPosition >= 0 && stageListPosition < stageListCount[STAGELIST_PRESENTATION] &&
+        name_is(stageList[STAGELIST_PRESENTATION][stageListPosition].folder, "Credits")) {
+        /* REV R4C: the game's own credits (after the ending, or from its menu): this port's credits screen, then the
+           title screen */
+        plat_credits();
+        activeStageList   = STAGELIST_PRESENTATION;
+        stageListPosition = 0;
+        ResetCurrentStageFolder();
+    }
     /* REV R1: the planes off (the Sub-CPU's loading lines) - REV R4B: the loading picture in front, the Genesis display
        off; the scene and its act file in the cart already (a restart): black, nothing to wait for */
     planes_off(scene_file() == SCD_BOOT_RECORD[5] && mdg_file() == mdgInCart ? PLANES_OFF_BLACK : PLANES_OFF_PICTURE);
@@ -1636,6 +2027,18 @@ bool plat_stage_loading()
 #endif
     if (bad < 0)
         scene_stop(0x5CE8, "NO SCENE ", file); /* the scene's .IMG is not on the disc */
+#if SCD_PLANES
+    { /* REV R4C: an image with the sheets' and the tiles' pixels is a scene of the 32X picture mode - from its load on
+         (the layout pool, the tiles its scripts copy) */
+        const unsigned int *ih = (const unsigned int *)CART_STAGE;
+        pmScene = ih[2] > SCD_CART_TILEGFX && ih[3 + 5 * SCD_CART_GFXDATA + 1] > 0 && ih[3 + 5 * SCD_CART_TILEGFX + 1] > 0;
+        if (pmScene) {
+            pmGfx   = (const unsigned char *)plat_cart_data(SCD_CART_GFXDATA);
+            pmTiles = (const unsigned char *)plat_cart_data(SCD_CART_TILEGFX);
+        }
+        scdPicture = pmScene;
+    }
+#endif
     STATE(0x5C16); /* R1C: the engine's own stage load runs from here (until 5Lnn) */
     comm_idle();   /* REV R4: the pad answer taken now - the sampler writes COMM8 (CKPT) from here on */
     scd_sampling(1);
@@ -1652,7 +2055,10 @@ void plat_stage_loaded() /* line 10: STATE:5Lnn = list L, scene nn (5000 = the t
     STATE(0x5000 | ((unsigned int)activeStageList << 8) | ((unsigned int)stageListPosition & 0xFF));
     scdDemoFrom = presented; /* REV R4: the scripted pad from the stage's start */
 #if SCD_PLANES
-    planes_load(); /* REV R1: the scene's Genesis planes (a failure leaves its 5C6x code on line 10) */
+    if (pmScene)
+        pm_begin(); /* REV R4C: the 32X picture mode (no act file) */
+    else
+        planes_load(); /* REV R1: the scene's Genesis planes (a failure leaves its 5C6x code on line 10) */
 #endif
 }
 void plat_file_read(const char *, int) {} // PC builds only
@@ -1711,6 +2117,12 @@ unsigned char *plat_fb_data(int kind, int size)
 }
 unsigned char *plat_layout_pool(int *size)
 {
+#if SCD_PLANES
+    if (pmScene) { /* REV R4C: the 32X picture mode's pool, after its picture (cd32x/engine/scd_pm.h) */
+        *size = PM_POOL_BYTES;
+        return (unsigned char *)(0x24000000u + PM_FB_POOL);
+    }
+#endif
     *size = SCD_FB_POOL_BYTES - SCD_FB_LINE_BYTES; /* stages_report.md: regular and special stages use 24 KB at most */
     return (unsigned char *)SCD_FB_POOL_AT;
 }

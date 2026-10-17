@@ -37,9 +37,12 @@ uint16_t md_name(const MdLayer *L, int cx, int cy)
     uint16_t chunk = L->layout[(int32_t)(int16_t)(cy >> 4) * (int16_t)L->layoutStride + (cx >> 4)];
     uint16_t e     = L->chunks[((uint32_t)chunk << 6) + (((cy >> 1) & 7) << 3) + ((cx >> 1) & 7)];
     int front      = MD_CE_FRONT(e);
+    uint32_t tile  = MD_CE_TILE(e);
     if (MD_CE_HIDDEN(e) || (front ? !L->showFront : !L->showBack))
         return 0;
-    return (uint16_t)(L->quads[(((uint32_t)MD_CE_TILE(e) << 2) + MD_CE_FLIP(e)) * 4 + ((cy & 1) << 1) + (cx & 1)] | (front << 15));
+    if (L->tileMap) /* REV R4C */
+        tile = L->tileMap[tile] & 0x3FF;
+    return (uint16_t)(L->quads[((tile << 2) + MD_CE_FLIP(e)) * 4 + ((cy & 1) << 1) + (cx & 1)] | (front << 15));
 }
 
 /* write layer columns c0..c1 (unwrapped) of one layer cell row into plane row r */
@@ -55,7 +58,7 @@ static void write_cols(MdPlane *p, const MdLayer *L, uint16_t nameBase, int r, i
        piece's last column: its left one); the layer's width is whole chunks, so a tile never straddles its wrap. */
     uint16_t names[MD_PLANE_W];
     const uint16_t *lrow = L->layout + (int32_t)(int16_t)(layerRow >> 4) * (int16_t)L->layoutStride;
-    const uint16_t *chunks = L->chunks, *quads = L->quads, *crow = 0;
+    const uint16_t *chunks = L->chunks, *quads = L->quads, *crow = 0, *tmap = L->tileMap;
     const unsigned ey = (unsigned)((layerRow >> 1) & 7) << 3, qy = (unsigned)(layerRow & 1) << 1;
     const int sf = L->showFront, sb = L->showBack;
     const uint16_t rowAddr = (uint16_t)(nameBase + ((r * MD_PLANE_W) << 1));
@@ -75,7 +78,8 @@ static void write_cols(MdPlane *p, const MdLayer *L, uint16_t nameBase, int r, i
             }
             e = crow[(cw >> 1) & 7];
             if (!MD_CE_HIDDEN(e) && (MD_CE_FRONT(e) ? sf : sb)) {
-                const uint16_t *q = quads + (((uint32_t)MD_CE_TILE(e) << 2) + MD_CE_FLIP(e)) * 4 + qy;
+                uint32_t tile     = tmap ? (uint32_t)(tmap[MD_CE_TILE(e)] & 0x3FF) : (uint32_t)MD_CE_TILE(e); /* REV R4C */
+                const uint16_t *q = quads + ((tile << 2) + MD_CE_FLIP(e)) * 4 + qy;
                 uint16_t front    = (uint16_t)(MD_CE_FRONT(e) << 15);
                 a                 = (uint16_t)(q[0] | front);
                 b                 = (uint16_t)(q[1] | front);
@@ -232,4 +236,65 @@ void md_plane_chunk(MdPlane *p, const MdLayer *L, uint16_t nameBase, int chunkX,
             }
         }
     }
+}
+
+/* REV R4C: see md_planes.h. Each plane row holds a layer row and the window of columns rowC0 .. rowC0 + 63 (unwrapped;
+   a layer that repeats across the plane: its columns 0 .. 63, plane column = column & 63): the window is walked a
+   chunk at a time (a chunk with no animated tile: skipped), in it a tile at a time - a changed tile's cells written */
+void md_plane_refresh(MdPlane *p, const MdLayer *L, uint16_t nameBase, const uint8_t *chunkBits, const uint8_t *tileBits, MdWriteFn write,
+                      void *ctx)
+{
+    int wCells = L->wChunks << 4, repeat = (MD_PLANE_W % wCells) == 0, r;
+    if (wCells <= 0)
+        return;
+    for (r = 0; r < MD_PLANE_H; r++) {
+        int lr = p->rowLayer[r], ey;
+        int32_t u, end, w;
+        const uint16_t *lrow;
+        if (lr < 0)
+            continue;
+        lrow = L->layout + (int32_t)(int16_t)(lr >> 4) * (int16_t)L->layoutStride;
+        ey   = ((lr >> 1) & 7) << 3;
+        u    = repeat ? 0 : p->rowC0[r];
+        end  = u + MD_PLANE_W; /* (exclusive) */
+        w    = u % wCells;     /* the row's one modulo */
+        if (w < 0)
+            w += wCells;
+        while (u < end) {
+            uint16_t chunk = lrow[w >> 4];
+            int32_t step;
+            if (chunk >= 512 || (chunkBits && !(chunkBits[chunk >> 3] >> (chunk & 7) & 1)))
+                step = 16 - (w & 15); /* to the next chunk */
+            else {
+                uint16_t e = L->chunks[((uint32_t)chunk << 6) + ey + ((w >> 1) & 7)];
+                unsigned t = MD_CE_TILE(e);
+                step       = 2 - (w & 1); /* to the next tile */
+                if (tileBits[t >> 3] >> (t & 7) & 1) {
+                    int32_t k;
+                    for (k = 0; k < step && u + k < end; k++) {
+                        write(ctx, (uint16_t)(nameBase + ((r * MD_PLANE_W + (int)((u + k) & (MD_PLANE_W - 1))) << 1)),
+                              md_name(L, (int)(w + k), lr));
+                        p->written++;
+                    }
+                }
+            }
+            u += step;
+            w += step;
+            if (w >= wCells)
+                w -= wCells;
+        }
+    }
+}
+
+int md_tile_copy(uint16_t *map, uint8_t *tileBits, const uint8_t *shown, int dest, int src)
+{
+    unsigned s;
+    if ((unsigned)dest >= 1024u || (unsigned)src >= 1024u)
+        return 0;
+    s = map[src];
+    if (map[dest] == s || (shown && !(shown[s >> 3] >> (s & 7) & 1)))
+        return 0;
+    map[dest] = (uint16_t)s;
+    tileBits[dest >> 3] |= (uint8_t)(1u << (dest & 7));
+    return 1;
 }

@@ -177,6 +177,15 @@ int main(int argc, char **argv)
             memcpy(sp, &in[q + 4], sizeof(sp));
             keep[SCD_CART_SCRIPTCODE] = sp[0] > 0 ? (size_t)sp[0] : 0;
             keep[SCD_CART_JUMPTABLE]  = sp[1] > 0 ? (size_t)sp[1] : 0;
+            q += 12;
+        }
+        // REV R4C: the sprite sheets' extent (gfxDataPosition) and the whole tile set - the 32X picture mode reads every
+        // pixel of a sheet or a tile, see-through ones too (a trimmed part would end in the next part's bytes)
+        if (q + 12 <= in.size() && !memcmp(&in[q], "GPOS", 4)) {
+            int32_t gp[2];
+            memcpy(gp, &in[q + 4], sizeof(gp));
+            keep[SCD_CART_GFXDATA] = gp[0] > 0 ? (size_t)gp[0] : 0;
+            keep[SCD_CART_TILEGFX] = gp[1] > 0 ? (size_t)gp[1] : 0;
         }
     }
 

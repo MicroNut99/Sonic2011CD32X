@@ -30,6 +30,7 @@ void md_save_png(const char *name, const unsigned char *rgb, int w, int h);
 void md_save_png_path(const char *path, const unsigned char *rgb, int w, int h); // REV R4B
 const char *md_frames_dir();
 unsigned int md_frame_number();
+const unsigned char *plat_tiles_pristine(); // REV R4C (plat_host.cpp): the tiles as the stage loaded them
 
 namespace {
 
@@ -37,6 +38,15 @@ const int MAXLINES = SCREEN_YSIZE;
 const uint16_t NAME_A = 0xC000, NAME_B = 0xE000, MAXCELLS = 0xC000 / 32;
 
 bool enabled = false, inited = false;
+
+// REV R4C: the act's animated tiles (the scripts' Copy16x16Tile). The SH2 shows them on the Genesis planes by name:
+// tile t shows the cells of the tile (as loaded) whose pixels it has now - aniMap, as the SH2's pmTileMap - so the act
+// file has the cells of those tiles too (tools/build_mdg.sh finds them first: SCD32X_TILECOPYLOG, then
+// SCD32X_ANIMTILES), and the tiles' cells the planes hold are written again when they change (md_plane_refresh).
+uint16_t rawMap[1024], aniMap[1024]; // the engine's own (every copy); the SH2's (a copy of a tile without cells: not)
+uint8_t aniDirty[128];
+bool aniDirtyAny = false;
+const uint8_t *convPix = nullptr; // convert_tile's pixels (convert_stage: the tiles as loaded; 0: the engine's now)
 
 // ---------------------------------------------------------------- frame capture
 struct SlotRec {
@@ -85,6 +95,12 @@ struct Stage {
     bool skyOn = false;
     int skyIdx = 144, skyLayer = 1;
     std::vector<bool> skyTile; // tiles of the background (not of the foreground) whose sky colour is see-through
+    // REV R4C: the animated tiles (SCD32X_ANIMTILES): (tile, the tile as loaded it gets the pixels of) pairs; the cells
+    // and name words as converted (the act file's: later conversions are the comparison model's), the tiles with them
+    std::vector<std::pair<int, int>> aniPairs;
+    std::vector<uint16_t> quads0;
+    size_t cells0 = 0;
+    std::vector<uint8_t> shownBits; // 1024 bits
 };
 Stage st;
 MdPlane planeA, planeB;
@@ -263,7 +279,7 @@ bool convert_tile(int tile)
     uint16_t name[4];
     for (int q = 0; q < 4; ++q) {
         uint8_t pix[64];
-        cell_indices(tilesetGFXData, tile, q, pix);
+        cell_indices(convPix ? convPix : tilesetGFXData, tile, q, pix);
         std::set<int> s;
         for (int i = 0; i < 64; ++i)
             if (pix[i])
@@ -574,10 +590,32 @@ std::string stage_key()
     return k;
 }
 
+// REV R4C: SCD32X_ANIMTILES=file (SCD32X_TILECOPYLOG's lines: stage, tile, source, frame) - the stage's pairs
+static void ani_load()
+{
+    const char *path = getenv("SCD32X_ANIMTILES");
+    FILE *f          = path && *path ? fopen(path, "r") : nullptr;
+    if (!f)
+        return;
+    char key[0x60];
+    int d, src;
+    unsigned fr;
+    std::set<std::pair<int, int>> seen;
+    while (fscanf(f, "%95s %d %d %u", key, &d, &src, &fr) == 4)
+        if (st.key == key && d >= 0 && d < 1024 && src >= 0 && src < 1024 && seen.insert({ d, src }).second)
+            st.aniPairs.push_back({ d, src });
+    fclose(f);
+}
+
 void convert_stage()
 {
     st          = Stage();
     st.key      = stage_key();
+    struct PixGuard {
+        ~PixGuard() { convPix = nullptr; }
+    } pixGuard;
+    convPix = plat_tiles_pristine(); // REV R4C: as loaded (the SH2's tiles: the copies are names, aniMap)
+    ani_load();
     std::fill(vram.begin(), vram.end(), 0);
     st.cells.assign(32, 0); // cell 0: blank
     st.quads.assign(1024 * 16, 0);
@@ -639,6 +677,18 @@ void convert_stage()
     }
     for (int c : usedChunks)
         for (int e = 0; e < 64; ++e) st.tileUsed[tiles128x128.tileIndex[c * 64 + e] & 0x3FF] = true;
+    if (!st.aniPairs.empty()) { // REV R4C: the animated tiles' pictures get cells too
+        std::set<int> srcs;
+        for (auto &pr : st.aniPairs)
+            if (st.tileUsed[pr.first])
+                srcs.insert(pr.second);
+        int added = 0;
+        for (int t : srcs)
+            if (!st.tileUsed[t])
+                st.tileUsed[t] = true, added++;
+        md_log("MDCHECK stage %s: %d animated tile pairs, %d pictures (%d more tiles)", stage_key().c_str(), (int)st.aniPairs.size(),
+               (int)srcs.size(), added);
+    }
     if (usedChunks.size() != layoutChunks)
         md_log("MDCHECK stage %s: %d chunks in the layouts, %d with the ones scripts place", stage_key().c_str(), (int)layoutChunks,
                (int)usedChunks.size());
@@ -666,13 +716,26 @@ void convert_stage()
         }
         sky_decide(fgChunks);
     }
+    if (st.skyOn && !st.aniPairs.empty()) { // REV R4C: a picture shown in the background's tiles: its sky colour see-through
+        std::map<int, int> kind;            // bit 0: shown in a background tile, bit 1: in another
+        for (auto &pr : st.aniPairs)
+            if (pr.first != pr.second)
+                kind[pr.second] |= st.skyTile[pr.first] ? 1 : 2;
+        for (auto &k : kind) {
+            if (k.second == 3)
+                md_log("MDCHECK stage %s: animated picture %d is shown in background and foreground tiles (its sky colour: drawn)",
+                       stage_key().c_str(), k.first);
+            if (!st.skyTile[k.first] || k.second != 1)
+                st.skyTile[k.first] = k.second == 1;
+        }
+    }
     // palette lines from every used cell's index set
     std::vector<std::set<int>> sets;
     for (int t = 0; t < 1024; ++t)
         if (st.tileUsed[t])
             for (int q = 0; q < 4; ++q) {
                 uint8_t pix[64];
-                cell_indices(tilesetGFXData, t, q, pix);
+                cell_indices(convPix, t, q, pix);
                 std::set<int> s;
                 for (int i = 0; i < 64; ++i)
                     if (pix[i])
@@ -696,7 +759,13 @@ void convert_stage()
             md_log("MDCHECK stage %s: %s", st.key.c_str(), st.error.c_str());
             return;
         }
-    st.tileSnap.assign(tilesetGFXData, tilesetGFXData + TILESET_SIZE);
+    st.tileSnap.assign(convPix, convPix + TILESET_SIZE); // (follow_changes: the engine's tiles that differ from these)
+    st.quads0 = st.quads;                                // REV R4C: the act file's
+    st.cells0 = st.cells.size() / 32;
+    st.shownBits.assign(128, 0);
+    for (int t = 0; t < 1024; ++t)
+        if (st.tileUsed[t])
+            st.shownBits[t >> 3] |= (uint8_t)(1 << (t & 7));
     st.ok = true;
     md_plane_reset(&planeA);
     md_plane_reset(&planeB);
@@ -1015,6 +1084,7 @@ MdLayer make_layer(int layer, bool back, bool front)
     L.hChunks      = stageLayouts[layer].ysize;
     L.showBack     = back;
     L.showFront    = front;
+    L.tileMap      = 0; // REV R4C (this model follows tile changes by converting them: follow_changes)
     return L;
 }
 
@@ -1532,9 +1602,9 @@ std::vector<uint8_t> mdg_build()
     std::vector<uint8_t> h(SGB_HEADER, 0);
     h[0] = 'S', h[1] = 'C', h[2] = 'M', h[3] = 'G';
     set16(h, 4, SGB_VERSION);
-    set16(h, 6, (unsigned)(st.cells.size() / 32));
+    set16(h, 6, (unsigned)st.cells0); // REV R4C: the cells as converted (the comparison model's later ones: not)
     set32(h, 12, (uint32_t)h.size());
-    h.insert(h.end(), st.cells.begin(), st.cells.end());
+    h.insert(h.end(), st.cells.begin(), st.cells.begin() + (long)st.cells0 * 32);
     set32(h, 16, (uint32_t)h.size());
     for (int l = 0; l < 4; ++l)
         for (int k = 0; k < 16; ++k) {
@@ -1542,7 +1612,7 @@ std::vector<uint8_t> mdg_build()
             put16(h, k && idx >= 0 ? (unsigned)idx : 0xFFFF);
         }
     set32(h, 20, (uint32_t)h.size());
-    for (int i = 0; i < 1024 * 16; ++i) put16(h, st.quads[i]);
+    for (int i = 0; i < 1024 * 16; ++i) put16(h, st.quads0[i]);
     set32(h, 24, (uint32_t)h.size());
     for (int i = 0; i < 512 * 64; ++i) put16(h, st.chunks[i]);
     set32(h, 28, (uint32_t)h.size());
@@ -1611,6 +1681,26 @@ std::vector<uint8_t> mdg_build()
             }
         }
     }
+    if (!st.aniPairs.empty()) { // REV R4C: the animated tiles ('ANI1', the file's last 8 bytes: md/sgb.h)
+        std::vector<uint8_t> chunkBits(64, 0);
+        std::vector<bool> dest(1024, false);
+        for (auto &pr : st.aniPairs) dest[pr.first] = true;
+        int nch = 0;
+        for (int c = 0; c < 512; ++c)
+            for (int e = 0; e < 64; ++e)
+                if (dest[tiles128x128.tileIndex[c * 64 + e] & 0x3FF]) {
+                    chunkBits[c >> 3] |= (uint8_t)(1 << (c & 7));
+                    nch++;
+                    break;
+                }
+        while (h.size() & 3) h.push_back(0);
+        uint32_t at = (uint32_t)h.size();
+        h.insert(h.end(), st.shownBits.begin(), st.shownBits.end());
+        h.insert(h.end(), chunkBits.begin(), chunkBits.end());
+        put32(h, at);
+        put32(h, SGB_ANI_TAG);
+        md_log("SGB stage %s: animated tiles in %d chunks", st.key.c_str(), nch);
+    }
     set32(h, 8, (uint32_t)h.size());
     std::string k = st.key;
     for (size_t i = 0; i < k.size() && i < 11; ++i) h[36 + i] = (uint8_t)k[i]; // R3: the stage (REV R4B: 11 characters; 48-55 the sky)
@@ -1626,11 +1716,14 @@ struct Sgb {
     int bLayer = -1;
     uint16_t sent[64], shown[64];
     long frames = 0, different = 0, pixels = 0, overflow = 0, words = 0, maxWords = 0, waterFrames = 0, bankPixels = 0;
+    long dryDifferent = 0, dryPixels = 0; // REV R4C: of those, the frames without water lines (one CRAM: the water's colours differ)
     long exported = 0;
     // REV R3: the sprites through the same record, and the whole picture compared with the engine's
     std::vector<uint8_t> mdg;
     MdSprites spr;
     bool sprOn = false;
+    std::vector<uint8_t> aniShown, aniChunks; // REV R4C: the file's 'ANI1' (none: the act has no animated tiles)
+    bool aniOn = false;
     long sprFrames = 0, sprDifferent = 0, sprPixels = 0, sprSkipped = 0, sprSaved = 0;
 } sgb;
 
@@ -1738,6 +1831,14 @@ void sgb_stage()
     md_plane_reset(&sgb.pA);
     md_plane_reset(&sgb.pB);
     sgb.bLayer = -1;
+    sgb.aniOn  = f.size() >= 8 && be32(f, f.size() - 4) == SGB_ANI_TAG; // REV R4C
+    if (sgb.aniOn) {
+        uint32_t at = be32(f, f.size() - 8);
+        sgb.aniShown.assign(f.begin() + at, f.begin() + at + 128);
+        sgb.aniChunks.assign(f.begin() + at + 128, f.begin() + at + 192);
+    }
+    memset(aniDirty, 0, sizeof(aniDirty)); // (the planes are written from scratch)
+    aniDirtyAny = false;
 }
 
 int sgb_pixel(uint16_t nameBase, int16_t hs, uint16_t vs, int x, int y)
@@ -1891,6 +1992,7 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
         L.hChunks      = stageLayouts[l].ysize;
         L.showBack     = shows(slots, false);
         L.showFront    = shows(slots, true);
+        L.tileMap      = sgb.aniOn ? aniMap : nullptr; // REV R4C: as the SH2 (0: the act has no animated tiles)
         return L;
     };
     SgbOut o;
@@ -1939,6 +2041,16 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
         }
     }
     layoutSets.clear();
+    if (sgb.aniOn && aniDirtyAny) { // REV R4C: the animated tiles' cells the planes hold (plat_mars.cpp planes_frame)
+        MdLayer L0 = layer(0, fgSlots);
+        md_plane_refresh(&sgb.pA, &L0, SGB_NAME_A, sgb.aniChunks.data(), aniDirty, sgb_write, &o);
+        if (bgLayer >= 0) {
+            MdLayer L1 = layer(bgLayer, bgSlots);
+            md_plane_refresh(&sgb.pB, &L1, SGB_NAME_B, sgb.aniChunks.data(), aniDirty, sgb_write, &o);
+        }
+        memset(aniDirty, 0, sizeof(aniDirty));
+        aniDirtyAny = false;
+    }
     // palette: the engine's colours behind each CRAM slot, sent when they change (fades, cycles)
     uint16_t cIdx[64], cCol[64];
     int nc = 0;
@@ -2008,6 +2120,8 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
     if (diff) {
         sgb.different++;
         sgb.pixels += diff;
+        if (!water)
+            sgb.dryDifferent++, sgb.dryPixels += diff;
         if (sgb.different <= 5)
             md_log("SGB frame %u: %ld pixels different%s", md_frame_number(), diff, water ? " (water lines)" : "");
     }
@@ -2206,6 +2320,33 @@ void md_layout_set(int layer, int x, int y) // REV R4B (plat_layout_set)
         layoutSetsLost = true;
     else
         layoutSets.push_back({ layer, x, y });
+}
+void md_tiles_new() // REV R4C (plat_host.cpp scd_pm_stage_new): a stage's tiles loaded
+{
+    for (int t = 0; t < 1024; ++t) rawMap[t] = aniMap[t] = (uint16_t)t;
+    memset(aniDirty, 0, sizeof(aniDirty));
+    aniDirtyAny = false;
+}
+void md_tile_copy_hook(int dest, int src) // REV R4C (plat_host.cpp scd_pm_copy_tile): Copy16x16Tile
+{
+    if ((unsigned)dest >= 1024u || (unsigned)src >= 1024u)
+        return;
+    static FILE *log = getenv("SCD32X_TILECOPYLOG") ? fopen(getenv("SCD32X_TILECOPYLOG"), "w") : nullptr;
+    int s0 = rawMap[src];
+    if (log) { // every (stage, tile, source as loaded) once
+        static std::set<std::string> seen;
+        std::string k = stage_key();
+        char line[0x80];
+        snprintf(line, sizeof(line), "%s %d %d", k.c_str(), dest, s0);
+        if (seen.insert(line).second) {
+            fprintf(log, "%s %u\n", line, md_frame_number());
+            fflush(log);
+        }
+    }
+    rawMap[dest] = (uint16_t)s0;
+    const uint8_t *shown = st.ok && !st.shownBits.empty() && st.key == stage_key() ? st.shownBits.data() : nullptr;
+    if (md_tile_copy(aniMap, aniDirty, shown, dest, src))
+        aniDirtyAny = true;
 }
 void md_sprite_draw(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py)
 {
@@ -2502,9 +2643,10 @@ void md_check_summary()
            (int)st.cells.size() / 32, st.animUpdates, st.animCells, st.layoutChanges);
     if (sgb.test) // REV R1
         md_log("SGB summary: %ld frames through record + 68000 model, %ld with differences (%ld pixels), %ld with water lines, "
-               "%ld records too big; record words avg %ld max %ld (limit %d); pixels whose colour needs a second palette bank: %ld",
+               "%ld records too big; record words avg %ld max %ld (limit %d); pixels whose colour needs a second palette bank: %ld; "
+               "without water lines %ld frames with differences (%ld pixels)",
                sgb.frames, sgb.different, sgb.pixels, sgb.waterFrames, sgb.overflow, sgb.frames ? sgb.words / sgb.frames : 0, sgb.maxWords,
-               SGB_REC_MAX, sgb.bankPixels);
+               SGB_REC_MAX, sgb.bankPixels, sgb.dryDifferent, sgb.dryPixels);
     if (sgb.test && sgb.sprOn) // REV R3
         md_log("SPR summary: %ld frames of the whole picture (planes + sprites) compared, %ld with differences (%ld pixels), %ld skipped "
                "(fades); hardware sprites at most %ld, pattern words uploaded %ld (%ld a frame), draws waiting a frame %ld, cell sets "

@@ -70,12 +70,21 @@ def chunk_hashes(img):
     return out
 
 
+# REV R4C: the parts' order in the image - the 32X picture mode's pixels (14 the sprite sheets, 15 the tiles) last: only
+# its scenes (the presentation and special stage lists) carry them, so every other image ends before them (their room
+# is reserved in the layout, not in the files)
+PM_LISTS = (0, 3)
+TILESET_SIZE = 0x40000
+def part_order(n):
+    return [k for k in list(range(14)) + [16, 17, 18, 15, 14] if k < n] + list(range(19, n))
+
+
 def part_offsets(n, caps):
-    """REV R4: where each of the n parts starts in a fixed-layout image (caps: the parts' room)"""
+    """REV R4: where each of the n parts starts in a fixed-layout image (caps: the parts' room), in part_order"""
     pos = (12 + 20 * n + 8 + 8 * HASH_MAX + 15) & ~15
-    out = []
-    for k in range(n):
-        out.append(pos)
+    out = [0] * n
+    for k in part_order(n):
+        out[k] = pos
         pos += (caps[k] + 15) & ~15 if k < len(caps) else 0
     return out
 
@@ -87,16 +96,18 @@ def fixed_image(parts, caps):
     out[0:4] = b"SCCB"
     out[4:8] = struct.pack(">I", 2)
     out[8:12] = struct.pack(">I", n)
-    pos = (len(out) + 15) & ~15
+    offs = part_offsets(n, caps)
+    end = len(out)
     for k, (data, es, cnt, crc) in enumerate(parts):
         assert len(data) <= caps[k]
-        assert pos == part_offsets(n, caps)[k]
-        out[12 + 20 * k:32 + 20 * k] = struct.pack(">5I", pos, len(data), es, cnt, crc)
-        pos += (caps[k] + 15) & ~15
-    out.extend(b"\0" * (pos - len(out)))
+        out[12 + 20 * k:32 + 20 * k] = struct.pack(">5I", offs[k], len(data), es, cnt, crc)
+        if data:  # REV R4C: the file ends after the last part with data (an empty part's room is not in the file)
+            end = max(end, offs[k] + ((caps[k] + 15) & ~15 if k == 15 else len(data)))
+    end = (end + 15) & ~15
+    out.extend(b"\0" * (end - len(out)))
     for k, (data, es, cnt, crc) in enumerate(parts):
-        off = struct.unpack(">I", out[12 + 20 * k:16 + 20 * k])[0]
-        out[off:off + len(data)] = data
+        if data:
+            out[offs[k]:offs[k] + len(data)] = data
     hs = chunk_hashes(bytes(out))
     assert len(hs) <= HASH_MAX, f"{len(hs)} chunks: more than the header's {HASH_MAX}"
     out[hdr:hdr + 8] = b"SCHK" + struct.pack(">I", len(hs))
@@ -397,8 +408,12 @@ def main():
                 f = os.path.join(imgdir, f"{folder}_{sid}.bin")
                 if os.path.exists(f) and (cat, pos, pl) in want:
                     parts = read_image(f)
-                    if not pixels:  # REV R4: empty - half the image, half the disc, half the load time
-                        parts = [(b"", es, 0, 0) if k in (14, 15, 16) else (d, es, cnt, crc) for k, (d, es, cnt, crc) in enumerate(parts)]
+                    # REV R4: no pixels - half the image, half the disc, half the load time. REV R4C: but the scenes the
+                    # 32X picture mode draws (PM_LISTS) keep their sheets' and tiles' pixels (not the blend tables)
+                    drop = (16,) if pixels or cat in PM_LISTS else (14, 15, 16)
+                    if not pixels and cat in PM_LISTS:
+                        assert len(parts[15][0]) <= TILESET_SIZE
+                    parts = [(b"", es, 0, 0) if k in drop else (d, es, cnt, crc) for k, (d, es, cnt, crc) in enumerate(parts)]
                     all_parts[(cat, pos, pl)] = parts
     # 2. the included scenes' data packs (each checked: SH2 configuration identical on it)
     reports, bads = [], []
@@ -433,6 +448,8 @@ def main():
     # S7e: the fixed layout over the INCLUDED scenes
     incl = list(all_parts.values())
     caps = [max(len(p[k][0]) for p in incl) for k in range(n)]
+    if caps[15]:
+        caps[15] = TILESET_SIZE  # REV R4C: every tile index reads inside the part (zeros past a scene's own tiles)
     # 3b. REV R4: part 18, the scene's own scripts as native code - linked for where part 18 starts in the cart (the
     # parts before it decide that), the same code for a scene played as Sonic or as Tails (the same bytecode)
     blobs, esum = {}, 0

@@ -47,6 +47,18 @@ void plat_chunk_arrays(const unsigned short **a, const unsigned char **b, const 
 {
     *a = 0, *b = 0, *c = 0, d[0] = d[1] = 0, *n = 0;
 }
+bool scdPicture = false; // REV R4C: the 32X picture mode (not in this check)
+void scd_pm_clear(int) {}
+void scd_pm_sprite(int, int, int, int, int, int, int, int, int) {}
+void scd_pm_sprite_scaled(int, int, int, int, int, int, int, int, int, int, int, int) {}
+void scd_pm_sprite_rotozoom(int, int, int, int, int, int, int, int, int, int, int, bool, int) {}
+void scd_pm_rect(int, int, int, int, int, int, int, int) {}
+void scd_pm_face(void *, unsigned int) {}
+void scd_pm_tex_face(void *, int) {}
+void scd_pm_draw3dscene(int) {}
+void scd_pm_sky(int) {}
+void scd_pm_copy_tile(int, int) {}
+void scd_pm_stage_new() {}
 unsigned char *plat_layout_pool(int *size)
 {
     static unsigned char pool[96 * 1024];
