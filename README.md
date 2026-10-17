@@ -50,6 +50,7 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | R4: the whole game's acts, the controller, the Level Select menu, music and sound | **On the console (R4A)**: every regular act as Sonic and as Tails with the controller, the music and the sound effects. [docs/R4_NOTES.md](docs/R4_NOTES.md) |
 | R4B: the loading picture, the Options Menu, the pause menu, 32X skies, the time warp | **On the console (R4B)**: the title screen with a loading bar at power-on and between the scenes (no green text), the Options Menu (player, lives, debug mode), the pause menu (continue, restart, exit), a 32X sky behind 27 acts, the time warp to the future, the ramps run backwards. [docs/R4B_NOTES.md](docs/R4B_NOTES.md) |
 | R4C: the game's own title and menus, the special stages, saves, faster loading, animated tiles | **In sh2emu**: power-on to the game's title screen, its main menu, save select and time attack, the special stages (drawn by the 32X), the save files in the Sega CD's backup RAM, up to four chunks a CD read, the animated tiles of 22 acts - next: the console. [docs/R4C_NOTES.md](docs/R4C_NOTES.md) |
+| R4D: the second SH2, each stage's own sound effects, the underwater colours | **In sh2emu**: three Options Menu switches, each off at power-on (off: R4C) - `2ND SH2` (the 32X's second SH2 draws half of every picture of the picture mode), `STAGE SFX` (each scene's own PCM bank), `UNDERWATER` (Tidal Tempest's water colours from the 68000's line interrupt) - next: the console. [docs/R4D_NOTES.md](docs/R4D_NOTES.md) |
 
 ## Rounds
 
@@ -62,7 +63,8 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | R4 | Every regular act as Sonic and as Tails, the controller, the Level Select menu (stage select, demo pad and debug mode switches, credits), music as CD audio tracks, sound effects on the PCM chip, each scene image with its own data pack and native scripts, scene changes that load only the chunks that differ. [docs/R4_NOTES.md](docs/R4_NOTES.md) |
 | R4B | The loading picture (the SH2 loader and the engine: Sub-CPU commands 51 and 52), the Options Menu, the pause menu, 32X skies, the time warp, the layout changes on the planes, Palmtree Panic's palette banks, a restart without disc reads. [docs/R4B_NOTES.md](docs/R4B_NOTES.md) |
 | R4C | The 32X picture mode (`cd32x/engine/scd_pm.h`): the title, the menus, time attack and the special stages; power-on to the title; saves in the backup RAM (Sub-CPU: Kobo's commands 56-59, a 512-byte file); faster loading (Sub-CPU command 46 with a run of up to 4 chunks, checked by the SH2); the animated tiles on the planes (`md_plane_refresh`). [docs/R4C_NOTES.md](docs/R4C_NOTES.md) |
-| later | Water (palette per line: the 68000's line interrupt), the 22 acts that differ in R0, the stages' own sound effects, the second SH2 for the 32X picture mode (the special stages' speed), time travel without loading (all four periods of an act fit the cart together – S2). |
+| R4D | Three boot-stack changes behind Options Menu switches (off at power-on): the second SH2 for the 32X picture mode (the loader's `secondary()` runs the engine's jobs from a mailbox; `scd_pm.h` splits the floor, the tile layers and the big faces by rows), each scene's own sound effects (Sub-CPU command 53 with a bank number: `SFX<n>.BIN`), the underwater colours (the records' water trailer; the 68000's H-int at the water line). [docs/R4D_NOTES.md](docs/R4D_NOTES.md) |
+| later | The 22 acts that differ in R0, time travel without loading (all four periods of an act fit the cart together – S2). |
 
 ## Command numbers
 
@@ -84,7 +86,7 @@ SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 6800
 ```
 
 The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
-the disc's steps are in [docs/R4C_NOTES.md](docs/R4C_NOTES.md) (R4B: [docs/R4B_NOTES.md](docs/R4B_NOTES.md), R4A: [docs/R4_NOTES.md](docs/R4_NOTES.md), R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
+the disc's steps are in [docs/R4D_NOTES.md](docs/R4D_NOTES.md) (R4C: [docs/R4C_NOTES.md](docs/R4C_NOTES.md), R4B: [docs/R4B_NOTES.md](docs/R4B_NOTES.md), R4A: [docs/R4_NOTES.md](docs/R4_NOTES.md), R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
 
 ## Checking a build before burning: tools/sh2emu
 

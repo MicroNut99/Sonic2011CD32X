@@ -55,6 +55,16 @@
 #ifndef PM_BE16 /* a big-endian 16-bit word at an even address (the SH2: one read; the PC check: two) */
 #define PM_BE16(p) ((unsigned short)((p)[0] << 8 | (p)[1]))
 #endif
+/* REV R4D: a draw call's rows shared with the 32X's second SH2 - the includer's PM_SPLIT(fn, job) runs fn(job, 1, 2)
+   there and fn(job, 0, 2) here, both done before it returns (the rows are disjoint: the same picture); PM_SPLIT_FN(fn, J)
+   after each such fn (what the other SH2 calls). Without them: fn(job, 0, 1), every row here (the PC check) */
+#ifndef PM_SPLIT
+#define PM_SPLIT(fn, job) fn(job, 0, 1)
+#endif
+#ifndef PM_SPLIT_FN
+#define PM_SPLIT_FN(fn, J)
+#endif
+#define PM_SPLIT_MIN 24 /* a face shorter than this: all of it here (the hand-over costs more than it saves) */
 /* a value the compiler must not see through: x * (1 << s) would become x << s - a library call on the SH2 */
 static inline int pm_opaque(int x)
 {
@@ -729,6 +739,37 @@ static bool pm_face_off(const Vertex *verts)
         return true;
     return false;
 }
+/* REV R4D: DrawFace's rows (part of parts: every parts-th row from the top) */
+struct PmFaceJob {
+    int top, bottom, alpha, a16;
+    unsigned char c;
+    bool exact;
+};
+static void pm_face_part(const PmFaceJob *j, int part, int parts)
+{
+    const int mask = parts - 1, alpha = j->alpha, a16 = j->a16;
+    const unsigned char c = j->c;
+    for (int faceTop = j->top; faceTop < j->bottom; ++faceTop) {
+        if (((faceTop - j->top) & mask) != part)
+            continue;
+        int startX = pmLineStart[faceTop], endX = pmLineEnd[faceTop];
+        if (startX >= PM_STRIDE || endX <= 0)
+            continue;
+        if (startX < 0)
+            startX = 0;
+        if (endX > PM_STRIDE - 1)
+            endX = PM_STRIDE - 1;
+        unsigned int off = (unsigned int)(PM_STRIDE * faceTop + startX);
+        if (alpha == 0xFF) {
+            pm_fill_span(off, endX - startX + 1, c);
+            if (!j->exact)
+                PM_APPROX(off, endX - startX + 1);
+        }
+        else
+            pm_dither_span(off, startX, faceTop, endX - startX + 1, c, a16);
+    }
+}
+PM_SPLIT_FN(pm_face_part, PmFaceJob)
 static void pm_face(void *v, unsigned int colour) /* DrawFace */
 {
     PM_FLUSH();
@@ -759,25 +800,17 @@ static void pm_face(void *v, unsigned int colour) /* DrawFace */
     pm_scan_edge(&verts[vB], &verts[vC]);
     pm_scan_edge(&verts[vC], &verts[vD]);
     pm_scan_edge(&verts[vB], &verts[vD]);
-    unsigned char c = (unsigned char)pm_nearest((int)((colour >> 16) & 0xFF), (int)((colour >> 8) & 0xFF), (int)(colour & 0xFF));
-    int a16         = pm_alpha16(alpha);
-    for (; faceTop < faceBottom; ++faceTop) {
-        int startX = pmLineStart[faceTop], endX = pmLineEnd[faceTop];
-        if (startX >= PM_STRIDE || endX <= 0)
-            continue;
-        if (startX < 0)
-            startX = 0;
-        if (endX > PM_STRIDE - 1)
-            endX = PM_STRIDE - 1;
-        unsigned int off = (unsigned int)(PM_STRIDE * faceTop + startX);
-        if (alpha == 0xFF) {
-            pm_fill_span(off, endX - startX + 1, c);
-            if (!pmNearExact)
-                PM_APPROX(off, endX - startX + 1);
-        }
-        else
-            pm_dither_span(off, startX, faceTop, endX - startX + 1, c, a16);
-    }
+    PmFaceJob j;
+    j.c      = (unsigned char)pm_nearest((int)((colour >> 16) & 0xFF), (int)((colour >> 8) & 0xFF), (int)(colour & 0xFF));
+    j.a16    = pm_alpha16(alpha);
+    j.alpha  = alpha;
+    j.top    = faceTop;
+    j.bottom = faceBottom;
+    j.exact  = pmNearExact;
+    if (faceBottom - faceTop >= PM_SPLIT_MIN)
+        PM_SPLIT(pm_face_part, &j); /* REV R4D */
+    else
+        pm_face_part(&j, 0, 1);
 }
 /* a textured face's row that reads one texture row (U only, forwards): pairs of pixels, registers only */
 static void pm_tex_span(unsigned int off, int n, const unsigned char *trow, unsigned int U, unsigned int dU) __attribute__((noinline));
@@ -808,38 +841,18 @@ static void pm_tex_span(unsigned int off, int n, const unsigned char *trow, unsi
             PM_O8(off, a);
     }
 }
-#ifndef PM_HOOK_TEXFACE
-#define PM_HOOK_TEXFACE(v, sheet) ((void)0) /* (the PC check's trace) */
-#endif
-static void pm_tex_face(void *v, int sheetID) /* DrawTexturedFace */
+/* REV R4D: DrawTexturedFace's rows (part of parts: every parts-th row from the top) */
+struct PmTexJob {
+    const unsigned char *sheet;
+    int rowBytes, top, bottom;
+};
+static void pm_tex_part(const PmTexJob *j, int part, int parts)
 {
-    PM_HOOK_TEXFACE(v, sheetID);
-    PM_FLUSH();
-    if (pmSkip)
-        return;
-    Vertex *verts = (Vertex *)v;
-    if (pm_face_off(verts))
-        return;
-    int vA, vB, vC, vD;
-    pm_face_order(verts, &vA, &vB, &vC, &vD);
-    int faceTop = verts[vA].y, faceBottom = verts[vD].y;
-    if (faceTop < 0)
-        faceTop = 0;
-    if (faceBottom > PM_LINES)
-        faceBottom = PM_LINES;
-    for (int i = faceTop; i <= faceBottom && i < PM_LINES; ++i) { /* (and the row below: the scan edges look at it) */
-        pmLineStart[i] = 100000;
-        pmLineEnd[i]   = -100000;
-    }
-    pm_scan_edge_uv(&verts[vA], &verts[vB]);
-    pm_scan_edge_uv(&verts[vA], &verts[vC]);
-    pm_scan_edge_uv(&verts[vA], &verts[vD]);
-    pm_scan_edge_uv(&verts[vB], &verts[vC]);
-    pm_scan_edge_uv(&verts[vC], &verts[vD]);
-    pm_scan_edge_uv(&verts[vB], &verts[vD]);
-    const unsigned char *sheet = &PM_GFX[gfxSurface[sheetID].dataPosition];
-    int rowBytes               = pm_opaque(1 << gfxSurface[sheetID].widthShifted); /* (a multiply, not a shift) */
-    for (; faceTop < faceBottom; ++faceTop) {
+    const unsigned char *sheet = j->sheet;
+    const int rowBytes = j->rowBytes, mask = parts - 1;
+    for (int faceTop = j->top; faceTop < j->bottom; ++faceTop) {
+        if (((faceTop - j->top) & mask) != part)
+            continue;
         int startX = pmLineStart[faceTop], endX = pmLineEnd[faceTop];
         int UPos = pmLineStartU[faceTop], VPos = pmLineStartV[faceTop];
         if (startX >= PM_STRIDE || endX <= 0)
@@ -884,6 +897,46 @@ static void pm_tex_face(void *v, int sheetID) /* DrawTexturedFace */
                 return index;
             });
     }
+}
+PM_SPLIT_FN(pm_tex_part, PmTexJob)
+#ifndef PM_HOOK_TEXFACE
+#define PM_HOOK_TEXFACE(v, sheet) ((void)0) /* (the PC check's trace) */
+#endif
+static void pm_tex_face(void *v, int sheetID) /* DrawTexturedFace */
+{
+    PM_HOOK_TEXFACE(v, sheetID);
+    PM_FLUSH();
+    if (pmSkip)
+        return;
+    Vertex *verts = (Vertex *)v;
+    if (pm_face_off(verts))
+        return;
+    int vA, vB, vC, vD;
+    pm_face_order(verts, &vA, &vB, &vC, &vD);
+    int faceTop = verts[vA].y, faceBottom = verts[vD].y;
+    if (faceTop < 0)
+        faceTop = 0;
+    if (faceBottom > PM_LINES)
+        faceBottom = PM_LINES;
+    for (int i = faceTop; i <= faceBottom && i < PM_LINES; ++i) { /* (and the row below: the scan edges look at it) */
+        pmLineStart[i] = 100000;
+        pmLineEnd[i]   = -100000;
+    }
+    pm_scan_edge_uv(&verts[vA], &verts[vB]);
+    pm_scan_edge_uv(&verts[vA], &verts[vC]);
+    pm_scan_edge_uv(&verts[vA], &verts[vD]);
+    pm_scan_edge_uv(&verts[vB], &verts[vC]);
+    pm_scan_edge_uv(&verts[vC], &verts[vD]);
+    pm_scan_edge_uv(&verts[vB], &verts[vD]);
+    PmTexJob j;
+    j.sheet    = &PM_GFX[gfxSurface[sheetID].dataPosition];
+    j.rowBytes = pm_opaque(1 << gfxSurface[sheetID].widthShifted); /* (a multiply, not a shift) */
+    j.top      = faceTop;
+    j.bottom   = faceBottom;
+    if (faceBottom - faceTop >= PM_SPLIT_MIN)
+        PM_SPLIT(pm_tex_part, &j); /* REV R4D */
+    else
+        pm_tex_part(&j, 0, 1);
 }
 /* the script's Draw3DScene: the engine's TransformVertexBuffer, Sort3DDrawList (a bubble sort: stable, by depth, the
    deepest first - the same order as any stable sort) and Draw3DScene, its transformed vertices and its sorted list in
@@ -984,22 +1037,24 @@ static inline const unsigned char *pm_tile_row(int entry, int ty16, int *dx) /* 
         case FLIP_XY: *dx = -1; return t + 16 * (15 - ty16) + 15;
     }
 }
-/* DrawHLineScrollLayer's pixels: lines[] holds each line's x (the engine's own scroll arithmetic), tileYPos the layer
-   row at the screen's top - every line of the layer, its tiles of this half (visualPlane == aboveMidPoint) */
-static void pm_hline(int layerID, int tileYPos, const int *lines)
+/* REV R4D: DrawHLineScrollLayer's lines (part of parts: every parts-th line) */
+struct PmHlineJob {
+    const TileLayer *layer;
+    int fullW, fullH, plane;
+    unsigned int ly0;
+    const int *lines;
+};
+static void pm_hline_part(const PmHlineJob *j, int part, int parts)
 {
-    PM_FLUSH();
-    if (pmSkip)
-        return;
-    TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
-    int fullW = layer->xsize << 7, fullH = layer->ysize << 7;
-    if (fullW <= 0 || fullH <= 0)
-        return;
-    int plane       = layerID >= tLayerMidPoint ? 1 : 0;
-    unsigned int ly = (unsigned int)tileYPos, uW = (unsigned int)fullW; /* (unsigned: no library shifts on the SH2) */
+    const TileLayer *layer = j->layer;
+    const int fullW = j->fullW, fullH = j->fullH, plane = j->plane, mask = parts - 1;
+    const int *lines = j->lines;
+    unsigned int ly = j->ly0, uW = (unsigned int)fullW; /* (unsigned: no library shifts on the SH2) */
     for (int y = 0; y < PM_LINES; ++y, ++ly) {
         if (ly >= (unsigned int)fullH)
             ly -= (unsigned int)fullH;
+        if ((y & mask) != part)
+            continue;
         unsigned int chunkY = ly >> 7, tileY = (ly & 0x7F) >> 4, ty16 = ly & 15;
         int lx = lines[y];
         if (lx < 0 || lx >= fullW) /* (the engine's arithmetic keeps it inside the layer; just in case) */
@@ -1029,6 +1084,27 @@ static void pm_hline(int layerID, int tileYPos, const int *lines)
                 cx -= uW;
         }
     }
+}
+PM_SPLIT_FN(pm_hline_part, PmHlineJob)
+/* DrawHLineScrollLayer's pixels: lines[] holds each line's x (the engine's own scroll arithmetic), tileYPos the layer
+   row at the screen's top - every line of the layer, its tiles of this half (visualPlane == aboveMidPoint) */
+static void pm_hline(int layerID, int tileYPos, const int *lines)
+{
+    PM_FLUSH();
+    if (pmSkip)
+        return;
+    TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
+    int fullW = layer->xsize << 7, fullH = layer->ysize << 7;
+    if (fullW <= 0 || fullH <= 0)
+        return;
+    PmHlineJob j;
+    j.layer = layer;
+    j.fullW = fullW;
+    j.fullH = fullH;
+    j.plane = layerID >= tLayerMidPoint ? 1 : 0;
+    j.ly0   = (unsigned int)tileYPos;
+    j.lines = lines;
+    PM_SPLIT(pm_hline_part, &j); /* REV R4D */
 }
 /* Draw3DSkyLayer (the special stages' floor): rows (SCREEN_YSIZE / 2) + 12 on, 100 of them; the engine samples each
    pixel four times (two rows of samples, two samples a pixel, the later visible one wins) - here the last sample first,
@@ -1127,27 +1203,26 @@ static void pm_sky_row(PmSkyRow *r, unsigned int off, bool twice) /* off: the ro
         }
     }
 }
-static void pm_sky(int layerID)
+/* REV R4D: the floor's rows (part of parts: every parts-th row it draws) */
+struct PmSkyJob {
+    const TileLayer *floor;
+    unsigned int lw, lh;
+    int layerYPos, sinValue, cosValue, layerXPos, layerZPos;
+};
+static void pm_sky_part(const PmSkyJob *j, int part, int parts)
 {
-    PM_FLUSH();
-    if (pmSkip)
-        return;
-    TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
-    if (!layer->xsize || !layer->ysize)
-        return;
     PmSkyRow r;
-    r.floor       = &stageLayouts[0];
-    r.lw          = (unsigned int)layer->xsize << 7;
-    r.lh          = (unsigned int)layer->ysize << 7;
-    int layerYPos = layer->YPos;
-    int sinValue  = sinMLookupTable[layer->angle & 0x1FF];
-    int cosValue  = cosMLookupTable[layer->angle & 0x1FF];
-    int layerXPos = layer->XPos >> 4;
-    int layerZPos = layer->ZPos >> 4;
-    int row       = (PM_LINES / 2) + 12;
+    r.floor = j->floor;
+    r.lw    = j->lw;
+    r.lh    = j->lh;
+    const int layerYPos = j->layerYPos, sinValue = j->sinValue, cosValue = j->cosValue, layerXPos = j->layerXPos;
+    const int layerZPos = j->layerZPos, mask = parts - 1;
+    int row = (PM_LINES / 2) + 12, drawn = 0;
     for (int i = TILE_SIZE / 2; i + 1 < PM_LINES - TILE_SIZE; i += 2, ++row) {
         if (PM_SKY_ROWS2 && ((row - (PM_LINES / 2) - 12) & 1))
             continue; /* (the line above drew this one too) */
+        if ((drawn++ & mask) != part)
+            continue;
         for (int k = 0; k < 2; ++k) { /* row i (k 0) and i + 1 (k 1) */
             int ii      = i + k;
             int q       = PM_DIV(layerYPos, ii << 8);
@@ -1162,5 +1237,25 @@ static void pm_sky(int layerID)
            (i + 1, 2p), (i + 1, 2p + 1) - the last non-zero one shows */
         pm_sky_row(&r, (unsigned int)(PM_STRIDE * row), PM_SKY_ROWS2 && row + 1 < PM_LINES);
     }
+}
+PM_SPLIT_FN(pm_sky_part, PmSkyJob)
+static void pm_sky(int layerID)
+{
+    PM_FLUSH();
+    if (pmSkip)
+        return;
+    TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
+    if (!layer->xsize || !layer->ysize)
+        return;
+    PmSkyJob j;
+    j.floor     = &stageLayouts[0];
+    j.lw        = (unsigned int)layer->xsize << 7;
+    j.lh        = (unsigned int)layer->ysize << 7;
+    j.layerYPos = layer->YPos;
+    j.sinValue  = sinMLookupTable[layer->angle & 0x1FF];
+    j.cosValue  = cosMLookupTable[layer->angle & 0x1FF];
+    j.layerXPos = layer->XPos >> 4;
+    j.layerZPos = layer->ZPos >> 4;
+    PM_SPLIT(pm_sky_part, &j); /* REV R4D */
 }
 #endif

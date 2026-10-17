@@ -14,6 +14,7 @@ void sgb_write(void *ctx, uint16_t addr, uint16_t word) SCD_MD_HOT;
 void sgb_write_run(void *ctx, uint16_t addr, const uint16_t *words, int n) SCD_MD_HOT;
 int sgb_out_end(SgbOut *o, uint16_t vA, uint16_t vB, const int16_t *hsA, const int16_t *hsB, int lines,
                 const uint16_t *cramIdx, const uint16_t *cramCol, int ncram) SCD_MD_HOT;
+int sgb_out_water(SgbOut *o, int line, const uint16_t *idx, const uint16_t *col, int n) SCD_MD_HOT;
 
 uint16_t sgb_fade565(uint16_t c, int r, int g, int b, int a)
 {
@@ -131,6 +132,22 @@ int sgb_out_end(SgbOut *o, uint16_t vA, uint16_t vB, const int16_t *hsA, const i
     return o->pos;
 }
 
+int sgb_out_water(SgbOut *o, int line, const uint16_t *idx, const uint16_t *col, int n)
+{
+    int i;
+    if (o->pos + 2 * n + 3 > o->max)
+        return -1;
+    for (i = 0; i < n; i++) {
+        o->out[o->pos++] = idx[i];
+        o->out[o->pos++] = col[i];
+    }
+    o->out[o->pos++] = (uint16_t)n;
+    o->out[o->pos++] = (uint16_t)line;
+    o->out[o->pos++] = SGB_WATER_TAG;
+    o->out[0]        = (uint16_t)(o->pos - 1);
+    return o->pos;
+}
+
 uint16_t sgb_md_color(uint16_t c)
 {
     /* RGB565 -> 3 bits a channel (as md_check.cpp rgb9_of565), then 0000 BBB0 GGG0 RRR0 */
@@ -139,7 +156,7 @@ uint16_t sgb_md_color(uint16_t c)
 }
 
 int sgb_apply(const uint16_t *rec, int lines, SgbVramFn vram_w, void *ctx, int16_t *hsA, int16_t *hsB, uint16_t *vA,
-              uint16_t *vB, uint16_t *cram)
+              uint16_t *vB, uint16_t *cram, int *wline, uint16_t *wcram)
 {
     const uint16_t *p = rec + 1;
     int g, i, k, pass;
@@ -166,6 +183,17 @@ int sgb_apply(const uint16_t *rec, int lines, SgbVramFn vram_w, void *ctx, int16
         uint16_t col = *p++;
         if (idx < 64)
             cram[idx] = col;
+    }
+    if (wline)
+        *wline = 0;
+    if (rec[0] >= 3 && rec[rec[0]] == SGB_WATER_TAG) { /* REV R4D: the water trailer (as hw_md.s sgb_water: from the end) */
+        const uint16_t *t = rec + rec[0];
+        int q = t[-2];
+        if (wline)
+            *wline = t[-1];
+        if (q <= 64 && wcram)
+            for (i = 0, t -= 2 + 2 * q; i < q; i++, t += 2) wcram[t[0] & 63] = t[1];
+        p = rec + rec[0] + 1;
     }
     return (int)(p - rec);
 }

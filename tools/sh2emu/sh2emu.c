@@ -66,7 +66,8 @@ static u32 cart_wpc[CART_SIZE / 2];
 static u8 sysreg[0x100]; /* 0x4000-0x40FF, big-endian bytes */
 static u8 vdpreg[0x100]; /* 0x4100-0x41FF */
 static u8 cram[0x200];   /* 0x4200-0x43FF */
-static u8 onchip[0x200]; /* 0xFFFFFE00-0xFFFFFFFF */
+static u8 onchip_m[0x200], onchip_s[0x200]; /* 0xFFFFFE00-0xFFFFFFFF - REV R4D: each SH2 its own */
+static u8 *onchip = onchip_m;
 
 /* ------------------------------------------------------------------ CPU */
 static u32 R[16], PC, PR, SR, GBR, VBR, MACH, MACL;
@@ -75,6 +76,7 @@ static u32 R[16], PC, PR, SR, GBR, VBR, MACH, MACL;
 #define F_Q 0x100u
 #define F_M 0x200u
 static u64 cycles, insns;
+static int cur_cpu; /* REV R4D: 0 the master SH2, 1 the slave (cpu_swap) */
 static int in_slot;
 static u32 cur_pc; /* address of the instruction being executed */
 static int no_int_next;
@@ -242,7 +244,7 @@ static int kind_severity(const char *k)
 {
     /* REV R4C: DIVU - the engine's 32X picture mode divides with the on-chip divider (no interrupt handler uses it) */
     static const char *info[] = { "W-COMM", "W-SYSREG", "W-VDP", "W-SAMPLING", "CCR", "VBR", "W-VECTOR", "W-BOOTREC", "DIVU", 0 };
-    static const char *warn[] = { "R-UNDEF", 0 };
+    static const char *warn[] = { "R-UNDEF", "A-SFX", 0 };
     for (int i = 0; info[i]; ++i)
         if (!strcmp(k, info[i]))
             return 0;
@@ -257,8 +259,8 @@ static void evlog(const char *kind, const char *fmt, ...)
     count_kind(kind);
     if (!log_allow(kind, cur_pc))
         return;
-    printf("[f%5d c%llu] %-10s PC=%s PR=%s R15=%08X ", frame_no(), (unsigned long long)cycles, kind, symname(cur_pc, b1),
-           symname(PR, b2), R[15]);
+    printf("[f%5d c%llu]%s %-10s PC=%s PR=%s R15=%08X ", frame_no(), (unsigned long long)cycles, cur_cpu ? " SLAVE" : "", kind,
+           symname(cur_pc, b1), symname(PR, b2), R[15]);
     va_list ap;
     va_start(ap, fmt);
     vprintf(fmt, ap);
@@ -268,9 +270,10 @@ static void evlog(const char *kind, const char *fmt, ...)
 
 /* shadow call stack */
 #define CSD 256
-static struct {
+typedef struct {
     u32 target, ret, sp;
-} cstack[CSD];
+} CallEnt;
+static CallEnt cstack_m[CSD], cstack_s[CSD], *cstack = cstack_m; /* REV R4D: each SH2 its own */
 static int csp;
 static const char *opt_callers; /* -callers NAME: who calls NAME, while profiling */
 /* REV R4: -set SYMBOL=VALUE: the engine variable SYMBOL (32 bits) set to VALUE when the engine reaches its first stage
@@ -301,14 +304,14 @@ static u8 sdram_byte(u32 a);
 static u32 sdram_read32(u32 a);
 static void call_push(u32 target, u32 ret)
 {
-    if (scr_fn && target == scr_fn && !scr_active) {
+    if (!cur_cpu && scr_fn && target == scr_fn && !scr_active) {
         u32 loop = sdram_read32(scr_loop_addr);
         u8 type  = loop < 0x4A0 ? sdram_byte(scr_ents_addr + loop * 68 + 56) : 0;
         scr_active = 1;
         scr_ctx    = type * 4 + (int)(R[6] & 3);
         scr_ret    = ret;
     }
-    if (callers_addr && target == callers_addr && prof_active_c) {
+    if (!cur_cpu && callers_addr && target == callers_addr && prof_active_c) {
         int k = sym_index(cur_pc);
         callers_count[k < 0 ? nsyms : k]++;
     }
@@ -321,7 +324,7 @@ static void call_push(u32 target, u32 ret)
 }
 static void call_ret(u32 to)
 {
-    if (scr_active && to == scr_ret)
+    if (!cur_cpu && scr_active && to == scr_ret)
         scr_active = 0;
     for (int i = (csp < CSD ? csp : CSD) - 1; i >= 0 && i >= csp - 8; --i)
         if (cstack[i].ret == to) {
@@ -887,17 +890,18 @@ static int frame_in_vblank(void)
 }
 
 /* ------------------------------------------------------------------ cache (SH7604: 4 ways x 64 x 16 bytes) */
-static struct {
+typedef struct {
     u32 tag;
     int valid;
     u8 d[16];
     u64 used;
-} cl[64][4];
+} CacheLine;
+static CacheLine cache_m[64][4], cache_s[64][4], (*cl)[4] = cache_m; /* REV R4D: each SH2 its own */
 static u8 ccr;
 static u64 lru_clock;
 static void cache_purge(void)
 {
-    memset(cl, 0, sizeof cl);
+    memset(cl, 0, sizeof(CacheLine) * 64 * 4);
 }
 
 /* ------------------------------------------------------------------ physical bus */
@@ -958,6 +962,26 @@ static u8 vdp_read8(u32 off)
     return vdpreg[off];
 }
 static int bus_penalty;
+/* REV R4D: the second SH2 - both on the 32X's one bus (an access waits for the other's), the engine's jobs through the
+   loader's mailbox (SDRAM 0x06001F40: magic, sequence, function, argument, done - cd32x/sh2_engboot.c secondary()) */
+static int slave_on;             /* the slave runs (from its boot-table entry) */
+static int slave_idle;           /* 1: it waits for the mailbox (or 2: in a loop to itself) - not stepped meanwhile */
+static int slave_arm;            /* it read the mailbox's sequence with nothing to do: the next such read = idle */
+static u64 slave_jobs, slave_insns_busy, slave_wait_cycles;
+static u64 bus_free_at;
+#define SLAVE_BOX_OFF 0x1F40u    /* the mailbox: SDRAM offset, 5 words */
+#define SLAVE_MAGIC 0x534C5631u  /* 'SLV1' */
+static int bus_contend(int rg, int add) /* cycles this access waits for the other SH2's */
+{
+    if (!slave_on || slave_idle || rg == RG_NONE || rg == RG_ROM)
+        return 0;
+    u64 now = cycles + (u64)bus_penalty;
+    int w   = bus_free_at > now ? (int)(bus_free_at - now) : 0;
+    bus_free_at = now + (u64)w + (u64)add;
+    if (cur_cpu)
+        slave_wait_cycles += (u64)w;
+    return w;
+}
 static void pen_note(int rg, int ifetch, int add, u32 p)
 {
     if (pen_quiet)
@@ -1100,6 +1124,19 @@ static u32 bus_read(u32 p, int size, int ifetch)
         default:
             add = 3;
     }
+    if (!pen_quiet)
+        add += bus_contend(rg, add); /* REV R4D */
+    if (rg == RG_SDRAM && cur_cpu && !pen_quiet && (off & (SDRAM_SIZE - 1)) == SLAVE_BOX_OFF + 4 && size == 4) {
+        /* REV R4D: the slave reads the mailbox's sequence: nothing new (not 'SLV1', or done = sequence) twice = idle */
+        u32 magic = sdram_read32(0x06000000u + SLAVE_BOX_OFF), done = sdram_read32(0x06000000u + SLAVE_BOX_OFF + 16);
+        if (magic != SLAVE_MAGIC || done == v) {
+            if (slave_arm)
+                slave_idle = 1;
+            slave_arm = 1;
+        }
+        else
+            slave_arm = 0;
+    }
     bus_penalty += add;
     pen_note(rg, ifetch, add, p);
     return v;
@@ -1189,6 +1226,13 @@ static void bus_write(u32 p, u32 v, int size)
             break;
         default:
             add = 3;
+    }
+    add += bus_contend(rg, add); /* REV R4D */
+    if (rg == RG_SDRAM && (off & (SDRAM_SIZE - 1)) >= SLAVE_BOX_OFF && (off & (SDRAM_SIZE - 1)) < SLAVE_BOX_OFF + 20) {
+        if (!cur_cpu) /* REV R4D: the master writes the mailbox: the slave looks again */
+            slave_idle = slave_idle == 2 ? 2 : 0, slave_arm = 0;
+        else if ((off & (SDRAM_SIZE - 1)) == SLAVE_BOX_OFF + 16 && size == 4)
+            slave_jobs++; /* the slave's done */
     }
     bus_penalty += add;
     pen_note(rg, 0, add, p);
@@ -1315,6 +1359,8 @@ static void check_data_access(u32 a, int size, int write, u32 v)
                 ok = 2; /* scdSampling (the engine switches it) */
             if (off < 0x400 && cur_pc >= ENG_TEXT_LO && cur_pc < ENG_TEXT_LO + 0x100)
                 ok = 3; /* scd_engine_entry puts its exception handlers in the vector table */
+            if (off >= SLAVE_BOX_OFF && off < SLAVE_BOX_OFF + 20)
+                ok = 1; /* REV R4D: the second SH2's mailbox (the loader's secondary() reads it) */
             if (off >= 0x1F14 && off < 0x1F18 && size == 4)
                 ok = 4; /* REV R3: boot record [5], the scene image now in the cart - the engine sets it after it loaded
                            another scene (cd32x/engine/plat_mars.cpp scene_load) */
@@ -1381,6 +1427,8 @@ static u32 cache_read(u32 a, int size, int ifetch)
         u32 off;
         int rg      = region(p, &off);
         int fillc   = rg == RG_CART ? opt_cart_fill : (rg == RG_FB || rg == RG_FBOV) ? 8 * opt_fb_rd : opt_sdram_fill;
+        bus_penalty = save;
+        fillc += bus_contend(rg, fillc); /* REV R4D */
         bus_penalty = save + fillc;
         pen_note(rg, ifetch, fillc, p);
         if (!pen_quiet)
@@ -1599,6 +1647,81 @@ static void take_interrupt(int level, int vec)
     PC = mem_read(VBR + vec * 4, 4, 0);
 }
 
+/* ------------------------------------------------------------------ REV R4D: the second SH2 (the slave) */
+/* each SH2's own state; the globals above are the one running (cpu_swap) - memory, the 32X registers (but the interrupt
+   mask), the frame buffer and its FIFO are the two's */
+typedef struct {
+    u32 R[16], PC, PR, SR, GBR, VBR, MACH, MACL, cur_pc, pending_addr, divu_dvsr, divu_dvdntl, divu_dvdnth;
+    u64 cycles, insns, lru_clock, divu_done;
+    int in_slot, no_int_next, exc_taken, pending_addr_err, vint_pending, cmdint_pending, csp;
+    u16 intmsk_lo;
+    u8 ccr;
+    CacheLine (*cl)[4];
+    u8 *onchip;
+    CallEnt *cstack;
+} CpuCtx;
+static CpuCtx cpu_ctx[2];
+static void cpu_swap(int k) /* the SH2 k runs from here */
+{
+    if (k == cur_cpu)
+        return;
+    CpuCtx *o = &cpu_ctx[cur_cpu], *n = &cpu_ctx[k];
+#define SW(f) o->f = f, f = n->f
+    for (int i = 0; i < 16; ++i) o->R[i] = R[i], R[i] = n->R[i];
+    SW(PC); SW(PR); SW(SR); SW(GBR); SW(VBR); SW(MACH); SW(MACL); SW(cur_pc); SW(pending_addr); SW(divu_dvsr); SW(divu_dvdntl);
+    SW(divu_dvdnth); SW(cycles); SW(insns); SW(lru_clock); SW(divu_done); SW(in_slot); SW(no_int_next); SW(exc_taken);
+    SW(pending_addr_err); SW(vint_pending); SW(cmdint_pending); SW(csp); SW(intmsk_lo); SW(ccr); SW(cl); SW(onchip); SW(cstack);
+#undef SW
+    cur_cpu = k;
+}
+#define SLAVE_STACK_LO 0x0603F400u
+#define SLAVE_STACK_HI 0x06040000u
+static u64 slave_stack_low = 0xFFFFFFFF;
+static void slave_start(u32 entry, u32 vbr) /* the 32X boot ROM's slave: after the master's M_OK, VBR, its entry */
+{
+    CpuCtx *c = &cpu_ctx[1];
+    memset(c, 0, sizeof *c);
+    c->PC = entry, c->VBR = vbr, c->SR = 0xF0, c->R[15] = SLAVE_STACK_HI;
+    c->cl = cache_s, c->onchip = onchip_s, c->cstack = cstack_s;
+    c->cycles = cycles;
+    slave_on  = 1;
+    printf("second SH2: starts at %08X (VBR %08X)\n", entry, vbr);
+}
+static void exec(u16 op, u32 pc);
+static u16 fetch(u32 a);
+static void slave_step(void) /* one instruction of the slave */
+{
+    cpu_swap(1);
+    bus_penalty = 0;
+    if (!no_int_next && vint_pending && ((SR >> 4) & 15) < 12)
+        take_interrupt(12, 70);
+    no_int_next = 0;
+    u32 pc = PC;
+    cur_pc = pc;
+    if (fbq_n)
+        fbq_drain(cycles);
+    u16 op = fetch(pc);
+    if (!stopped) {
+        PC = pc + 2;
+        exec(op, pc);
+        cycles += 1 + (u64)bus_penalty;
+        insns++;
+        if (pending_addr_err) {
+            pending_addr_err = 0;
+            exception(9, PC, "address error (second SH2)");
+        }
+        if (PC == pc && (op & 0xF000) == 0xA000) /* bra to itself: waits for an interrupt (an older loader's secondary()) */
+            slave_idle = 2;
+        if (R[15] < slave_stack_low)
+            slave_stack_low = R[15];
+        if ((R[15] < SLAVE_STACK_LO || R[15] > SLAVE_STACK_HI) && engine_started)
+            evlog("STACK", "second SH2: R15=%08X outside its stack %08X-%08X", R[15], SLAVE_STACK_LO, SLAVE_STACK_HI);
+        if (!(pc >= LDR_LO && pc < ldr_text_hi))
+            slave_insns_busy++;
+    }
+    cpu_swap(0);
+}
+
 /* ------------------------------------------------------------------ the Sub-CPU / 68000 side */
 static struct {
     const char *name;
@@ -1650,6 +1773,14 @@ static u64 splash_cmds;      /* REV R4B: command 51s (file chunk -> frame buffer
 /* ---- the 68000's plane records and the VDP (cd32x/kobo/hw_md.s sgb_poll / sgb_vblank, md/sgb.h) ---- */
 static u16 vram[0x8000];      /* 64 KB, words */
 static u16 vsram[2], vcram[64];
+/* REV R4D: the 68000's underwater colours (hw_md.s sgb_water / hint_int): its shadow of the normal colours (stale until
+   a record fills it: 0x0BAD at power-on, kept from act to act), the water colours, the water line, whether CRAM holds
+   the water colours (this frame's H-int) */
+static u16 vncram[64], vwcram[64];
+static int vwline, vwon;
+static u64 water_frames;
+static int swap_frames[1024]; /* REV R4D: the frames of the last 1024 frame buffer swaps */
+static u64 swap_n;
 static int sgb_on, sgb_ready, sgb_bad;
 static u16 sgb_last;
 static u16 sgb_rec[6002];
@@ -1670,6 +1801,12 @@ static void vdp_planes_on(u32 mdg_off)
     for (u32 i = 0; i < cells * 16 && i < 0x6000; ++i) vram[i] = rd_be16(m + oCell + 2 * i);
     for (int i = 0; i < 64; ++i) vcram[i] = rd_be16(m + oCram + 2 * i);
     vsram[0] = vsram[1] = 0;
+    vwline = vwon = 0; /* REV R4D: (SGB_FLAG 0 while loading: the vertical blank cleared them) */
+    static int shadowInit = 0;
+    if (!shadowInit) { /* power-on: work RAM not cleared - the shadow holds junk until a record fills it */
+        for (int i = 0; i < 64; ++i) vncram[i] = vwcram[i] = 0x0BAD;
+        shadowInit = 1;
+    }
     sgb_on = 1;
     sgb_ready = sgb_bad = 0;
     sgb_last = 0;
@@ -1771,7 +1908,7 @@ static void sgb_apply_model(void) /* sgb_vblank: the waiting record into the VDP
     int P = NEXTW;
     for (int i = 0; i < P; ++i) {
         int idx = NEXTW & 63;
-        vcram[idx] = NEXTW;
+        vcram[idx] = vncram[idx] = NEXTW; /* REV R4D: and the shadow */
     }
 #undef NEXTW
     /* sgb_vblank's 68000 clocks: name words 22 each (move.w (a0)+,(a3) / dbra), a group's command ~60, the h-scroll
@@ -1786,13 +1923,33 @@ static void sgb_apply_model(void) /* sgb_vblank: the waiting record into the VDP
 }
 static void sgb_vblank_model(void)
 {
-    if (!sgb_on)
+    if (!sgb_on) {
+        vwline = vwon = 0; /* REV R4D: vbl_dry */
         return;
+    }
+    if (sgb_ready) { /* REV R4D: sgb_water - the record's water trailer (md/sgb.h), from its end */
+        u16 len = sgb_rec[0];
+        vwline  = 0;
+        if (len >= 3 && len <= 6000 && sgb_rec[len] == 0x5741) {
+            vwline = sgb_rec[len - 1];
+            int q  = sgb_rec[len - 2];
+            if (q <= 64)
+                for (int i = 0; i < q; ++i) vwcram[sgb_rec[len - 2 - 2 * q + 2 * i] & 63] = sgb_rec[len - 1 - 2 * q + 2 * i];
+        }
+    }
+    if (vwon) { /* the normal colours back */
+        memcpy(vcram, vncram, sizeof vcram);
+        vwon = 0;
+    }
     if (sgb_bad)
         vcram[0] = 0x000E; /* R1G: the backdrop red */
     if (sgb_ready) {
         sgb_apply_model();
         sgb_ready = 0;
+    }
+    if (vwline > 0 && vwline < 224) { /* this frame's H-int: the water colours from line vwline on */
+        vwon = 1;
+        water_frames++;
     }
 }
 static int plane_pixel(u32 base, int hs, int vs, int x, int y, int *pri)
@@ -1883,7 +2040,7 @@ static void write_shot(const char *path)
             if (cs >= 0 && ps) c = cs;
             if (!md_display) /* REV R4B: the Genesis display off (CMD 52): black, see-through for the 32X */
                 c = 0;
-            u16 g = md_display ? vcram[c & 63] : 0;
+            u16 g = md_display ? (vwon && y >= vwline ? vwcram[c & 63] : vcram[c & 63]) : 0; /* REV R4D: the water line */
             line[x * 3 + 0] = (u8)(((g >> 9) & 7) * 36);
             line[x * 3 + 1] = (u8)(((g >> 5) & 7) * 36);
             line[x * 3 + 2] = (u8)(((g >> 1) & 7) * 36);
@@ -1915,9 +2072,12 @@ static void write_shot(const char *path)
 static int sub_boot_stage;
 static u64 pad_requests; /* command 48s answered */
 static u64 sfx_plays, music_cmds; /* REV R4 */
+static int sfx_bank_count;          /* REV R4D: the effects in the PCM chip's bank (command 53) */
+static u64 sfx_bank_loads;
 /* REV R4C: the fast command 46 (runs of chunks, checksum answer) and the backup-RAM file (commands 56-59) */
 static u64 load_runs, load_run_chunks, load_singles;
 static int opt_badrun = -1;          /* -badrun N: the Nth run's checksum answer is wrong (the SH2 must load it again) */
+static int opt_noslave = 0;          /* REV R4D */
 static int opt_oldsub = 0;           /* -oldsub: a Sub-CPU program without the fast command 46 (R4B's): a run's COMM2 is
                                         taken as one chunk number past the file's end - nothing copied, COMM8 untouched */
 static const char *opt_bram = 0;     /* -bram FILE: the backup RAM's SONICCD32X_ file, kept between runs */
@@ -2112,6 +2272,8 @@ static void sub_finish(void)
         u16 pad = pad_now();
         if (cmd >> 8) { /* REV R4: a sound effect in the request's upper byte (the Sub-CPU's pcm_play) */
             sfx_plays++;
+            if ((int)(cmd >> 8) > sfx_bank_count) /* REV R4D: not in the bank in the chip - pcm_play plays nothing */
+                evlog("A-SFX", "sound effect %d - the bank in the PCM chip has %d", cmd >> 8, sfx_bank_count);
             if (sfx_plays <= 40)
                 printf("[f%5d] SUB: sound effect %d (PCM chip)\n", frame_no(), cmd >> 8);
         }
@@ -2128,11 +2290,32 @@ static void sub_finish(void)
         printf("[f%5d] SUB: CMD %d %s%d\n", frame_no(), cmd, cmd == 45 ? "play track " : "stop", cmd == 45 ? COMM(2) : 0);
         SET_COMM(0, 0);
     }
-    else if (cmd == 53) { /* REV R4: KOBOSFX.BIN -> the PCM chip; COMM12 = the number of effects */
-        int k = find_file("KOBOSFX.BIN"), n = 0;
-        if (k >= 0 && files[k].len >= 8 && !memcmp(files[k].data, "KSFX", 4))
-            n = files[k].data[4] << 8 | files[k].data[5];
-        printf("[f%5d] SUB: CMD 53 load KOBOSFX.BIN -> %d effects\n", frame_no(), n);
+    else if (cmd == 53) { /* REV R4: KOBOSFX.BIN -> the PCM chip; COMM12 = the number of effects. REV R4D: COMM2 = the
+                             bank (0 KOBOSFX.BIN, 1-99 SFX<n>.BIN); as sub_main.c pcm_load: a file not there or not right
+                             changes nothing (0) */
+        int bank = COMM(2) & 0xFF, n = 0;
+        char nm[16];
+        if (bank > 0 && bank < 100)
+            sprintf(nm, "SFX%02d.BIN", bank);
+        else
+            strcpy(nm, "KOBOSFX.BIN");
+        int k = find_file(nm);
+        if (k >= 0 && files[k].len >= 8 && !memcmp(files[k].data, "KSFX", 4)) {
+            const u8 *d = files[k].data;
+            u32 cnt = (u32)(d[4] << 8 | d[5]), img = (u32)(d[6] << 8 | d[7]), hdr = (8 + cnt * 8 + 255) & ~255u;
+            u32 nsec = (files[k].len + 2047) / 2048;
+            if (nsec > 48)
+                nsec = 48;
+            if (!img)
+                img = 65536;
+            if (cnt >= 1 && cnt <= 63 && hdr + img <= nsec * 2048)
+                n = (int)cnt;
+        }
+        printf("[f%5d] SUB: CMD 53 load %s -> %d effects\n", frame_no(), nm, n);
+        if (n) {
+            sfx_bank_count = n;
+            sfx_bank_loads++;
+        }
         SET_COMM(12, (u16)n);
         SET_COMM(0, 0);
     }
@@ -2314,6 +2497,8 @@ static void frame_tick(void)
             }
         }
     if (fs_req >= 0) { /* REV R4: the frame buffer swap, in vertical blank */
+        if (fs_bit != fs_req) /* REV R4D: the pictures shown (the 32X picture mode: one a swap) */
+            swap_frames[swap_n++ & 1023] = frame_no();
         fs_bit = fs_req;
         fs_req = -1;
     }
@@ -3065,11 +3250,27 @@ static void summary(void)
     if (rec_crc_count)
         printf("record contents   records 1-%u: CRC %08X (the same for the same picture sequence, at any speed)\n",
                rec_crc_count, ~rec_crc);
+    if (slave_on) /* REV R4D */
+        printf("second SH2        %llu jobs from the engine (mailbox), %llu instructions outside the loader, %llu cycles "
+               "waiting for the bus, stack low %08X%s\n",
+               (unsigned long long)slave_jobs, (unsigned long long)slave_insns_busy, (unsigned long long)slave_wait_cycles,
+               (u32)slave_stack_low, slave_idle == 2 ? " (waits in a loop to itself: an older loader)" : "");
     if (pad_requests)
         printf("controller        %llu pad requests (command 48) answered\n", (unsigned long long)pad_requests);
     if (sfx_plays || music_cmds)
-        printf("audio             %llu sound effects played, %llu CD audio commands\n", (unsigned long long)sfx_plays,
-               (unsigned long long)music_cmds);
+        printf("audio             %llu sound effects played, %llu CD audio commands, %llu sound banks loaded\n",
+               (unsigned long long)sfx_plays, (unsigned long long)music_cmds, (unsigned long long)sfx_bank_loads);
+    if (swap_n) { /* REV R4D: the 32X picture mode's pictures a second at the end (one a frame buffer swap) */
+        int last = frame_no(), n10 = 0;
+        for (u64 i = 0; i < swap_n && i < 1024; ++i)
+            if (swap_frames[(swap_n - 1 - i) & 1023] > last - 600)
+                n10++;
+        printf("pictures          %llu frame buffer swaps; in the last 10 s %d (%.1f a second)\n", (unsigned long long)swap_n, n10,
+               n10 / 10.0);
+    }
+    if (water_frames) /* REV R4D */
+        printf("underwater        %llu frames with a water line (the 68000's H-int writes the water colours there)\n",
+               (unsigned long long)water_frames);
     if (load_runs || load_singles) /* REV R4C */
         printf("loading           %llu fast runs (%llu chunks, one CD read each run), %llu chunks one by one (verified by "
                "the Sub-CPU)\n", (unsigned long long)load_runs, (unsigned long long)load_run_chunks, (unsigned long long)load_singles);
@@ -3301,6 +3502,8 @@ int main(int argc, char **argv)
             opt_fifo = 0;
         else if (!strcmp(argv[i], "-badrun") && i + 1 < argc) /* REV R4C */
             opt_badrun = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-noslave")) /* REV R4D: the second SH2 not run (as sh2emu before R4D) */
+            opt_noslave = 1;
         else if (!strcmp(argv[i], "-oldsub")) /* REV R4C */
             opt_oldsub = 1;
         else if (!strcmp(argv[i], "-bram") && i + 1 < argc) /* REV R4C */
@@ -3403,6 +3606,11 @@ int main(int argc, char **argv)
     SR    = 0xF0;
     R[15] = 0x06040000;
     ccr   = 0;
+    if (!opt_noslave) { /* REV R4D: the slave's entry and VBR from the same table */
+        u32 sentry = (u32)boot[0x24] << 24 | boot[0x25] << 16 | boot[0x26] << 8 | boot[0x27];
+        u32 svbr   = (u32)boot[0x2C] << 24 | boot[0x2D] << 16 | boot[0x2E] << 8 | boot[0x2F];
+        slave_start(sentry, svbr);
+    }
 
     u64 next_vbi    = (u64)opt_cpf * 224 / 262;
     int sampler_frozen_reported = 0;
@@ -3412,6 +3620,16 @@ int main(int argc, char **argv)
     while (!stopped) {
         if (frame_no() >= opt_frames)
             break;
+        if (slave_on) { /* REV R4D: the SH2 behind in time runs next (an idle slave keeps the master's time) */
+            if (slave_idle == 2 && cpu_ctx[1].vint_pending)
+                slave_idle = 0;
+            if (!slave_idle && cpu_ctx[1].cycles <= cycles) {
+                slave_step();
+                continue;
+            }
+            if (slave_idle && cpu_ctx[1].cycles < cycles)
+                cpu_ctx[1].cycles = cycles;
+        }
         /* this instruction's time starts here: the interrupt entry and the instruction fetch count too */
         bus_penalty = 0;
         for (int k = 0; k < PK_N; ++k) pen_kind[k] = fill_kind[k] = 0;
@@ -3433,6 +3651,8 @@ int main(int argc, char **argv)
             frame_tick();
             if (intmsk_lo & 0x08)
                 vint_pending = 1;
+            if (slave_on && (cpu_ctx[1].intmsk_lo & 0x08)) /* REV R4D: the slave's, if it takes them */
+                cpu_ctx[1].vint_pending = 1;
             vbi_count++;
             if (opt_peek_every > 0 && opt_npeek && frame_no() % opt_peek_every == 0)
                 print_peeks("every");

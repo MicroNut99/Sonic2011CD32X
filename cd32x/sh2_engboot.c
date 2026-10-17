@@ -39,7 +39,7 @@
 #define SCD_SPLASH 1 /* REV R4B: the loading picture (IMAGE.RAW); 0 = the text only, as R1S - R4A */
 #endif
 
-const char sh2_build_marker[] = "SH2-VR4C"; /* the Sub-CPU looks for "SH2-V" (its line 4 shows "SH2-VR4") */
+const char sh2_build_marker[] = "SH2-VR4D"; /* the Sub-CPU looks for "SH2-V" (its line 4 shows "SH2-VR4") */
 
 #define SC_COMM2 (*(volatile uint16_t *)0x20004022)
 #define SC_COMM8_32 (*(volatile uint32_t *)0x20004028)
@@ -136,11 +136,40 @@ void *memcpy(void *d, const void *s, size_t n)
     while (n--) *p++ = *q++;
     return d;
 }
+/* REV R4D: the second SH2 runs the engine's jobs (the Options Menu's 2ND SH2 switch: half of each picture of the 32X
+   picture mode, cd32x/engine/plat_mars.cpp PM_SPLIT). The mailbox after the boot record, cache-through (the engine
+   writes it, this SH2 reads it): [0] 'SLV1', [1] a sequence number, [2] the job's function, [3] its argument, [4] done =
+   the sequence once the function returned. This SH2's cache is purged before each job (the engine changed what the job
+   reads). Cleared here first (SDRAM holds anything at power-on); boot record [11] 'SLV1' tells the engine it is here.
+   No other work: only the command interrupt is on (nothing raises it), the engine's code runs here only inside a job
+   (never while the 68000 holds the cart: the engine posts jobs only while it draws). */
+#define SLAVE_BOX ((volatile uint32_t *)0x26001F40)
+#define SLAVE_MAGIC 0x534C5631
 void secondary(void)
 {
+    uint32_t seen = 0;
     MARS_SYS_INTMSK |= 0x0002;
     __asm__ __volatile__("ldc %0,sr" : : "r"(0) : "memory");
+    SLAVE_BOX[0] = 0;
+    SLAVE_BOX[1] = 0;
+    SLAVE_BOX[2] = 0;
+    SLAVE_BOX[3] = 0;
+    SLAVE_BOX[4] = 0;
     while (1) {
+        uint32_t seq = SLAVE_BOX[1];
+        if (SLAVE_BOX[0] == SLAVE_MAGIC && seq != seen) {
+            void (*fn)(uint32_t) = (void (*)(uint32_t))SLAVE_BOX[2];
+            uint32_t arg         = SLAVE_BOX[3];
+            seen                 = seq;
+            SC_CCR               = 0x11; /* purge + enable */
+            fn(arg);
+            SLAVE_BOX[4] = seq;
+        }
+        else {
+            volatile int k;
+            for (k = 0; k < 16; k++) {
+            }
+        }
     }
 }
 
@@ -429,6 +458,8 @@ int main(void)
     BOOT_RECORD[7] = (uint32_t)&scdSampling;       /* R1C: the engine switches the PC sampler on / off */
     BOOT_RECORD[8] = (uint32_t)scd_cart_sum;       /* REV R4C: the engine checks its fast loads with it ... */
     BOOT_RECORD[9] = 0x53554D31;                   /* ... 'SUM1' */
+    BOOT_RECORD[10] = 0x06001F40;                  /* REV R4D: the second SH2's mailbox (secondary()) ... */
+    BOOT_RECORD[11] = SLAVE_MAGIC;                 /* ... 'SLV1' */
     show_status(0x5C05);
 #if SCD_SPLASH
     splashOn = 0; /* REV R4B: the picture stays shown; the engine's loads (this routine) leave the colours alone */

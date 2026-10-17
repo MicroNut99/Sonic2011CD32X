@@ -1715,6 +1715,13 @@ struct Sgb {
     MdPlane pA, pB;
     int bLayer = -1;
     uint16_t sent[64], shown[64];
+    // REV R4D: SCD32X_WATER=1 - the records' water trailer, as plat_mars.cpp with the UNDERWATER switch on, and the
+    // 68000's water colours, its shadow of the normal ones (stale at an act's start: the first record must fill it), the
+    // water line, whether last frame's H-int wrote the water colours
+    bool waterOn = false, cramSync = false, wPrev = false;
+    uint16_t wsent[64], water[64], shadow[64];
+    int wline = 0;
+    long wetFrames = 0, wetDifferent = 0, wetPixels = 0;
     long frames = 0, different = 0, pixels = 0, overflow = 0, words = 0, maxWords = 0, waterFrames = 0, bankPixels = 0;
     long dryDifferent = 0, dryPixels = 0; // REV R4C: of those, the frames without water lines (one CRAM: the water's colours differ)
     long exported = 0;
@@ -1826,6 +1833,11 @@ void sgb_stage()
     int ncells = be16(f, 6);
     for (int i = 0; i < ncells * 32; ++i) sgb.vram[i] = f[be32(f, 12) + i]; // the 68000's copy_vram of the cells
     for (int i = 0; i < 64; ++i) sgb.sent[i] = sgb.shown[i] = sgb.cram0[i];
+    sgb.waterOn  = getenv("SCD32X_WATER") && atoi(getenv("SCD32X_WATER")) > 0; // REV R4D
+    sgb.cramSync = sgb.waterOn;
+    sgb.wPrev    = false;
+    sgb.wline    = 0;
+    for (int i = 0; i < 64; ++i) sgb.wsent[i] = 0xFFFF, sgb.water[i] = sgb.shadow[i] = 0x0BAD;
     sgb.mdg   = f; // REV R3: the sprite pack, as the SH2 finds it (the header's last 8 bytes)
     sgb.sprOn = be32(f, 56) == MDS_TAG && mds_init(&sgb.spr, sgb.mdg.data() + be32(f, 60), (uint16_t)ncells, 0xC000 / 32);
     md_plane_reset(&sgb.pA);
@@ -1935,10 +1947,12 @@ void sgb_sprite_compare(const int16_t *gA, const int16_t *gB, uint16_t gvA, uint
             int b   = bgLayer >= 0 ? sgb_pixel(SGB_NAME_B, gB[y], gvB, x, y) : 0;
             int pix = vdp_pick(a, b, sl[x]);
             int k   = pix ? ((pix >> 4) & 3) * 16 + (pix & 15) : 0;
-            uint16_t w = sgb.shown[k];
+            const bool wet = sgb.wPrev && y >= sgb.wline; // REV R4D: below the water line, the water colours
+            uint16_t w = wet ? sgb.water[k] : sgb.shown[k];
             int model  = ((w >> 1) & 7) << 6 | ((w >> 5) & 7) << 3 | ((w >> 9) & 7);
             int ref    = rgb9_of565(Engine.frameBuffer[y * GFX_LINESIZE + x]);
-            bool bad   = gfxLineBuffer[y] == gfxLineBuffer[0] && ref != model && !(pix == 0 && sky_shows(ref, gfxLineBuffer[0])); // REV R4B
+            bool bad   = (wet || gfxLineBuffer[y] == gfxLineBuffer[0]) && ref != model &&
+                       !(pix == 0 && sky_shows(ref, gfxLineBuffer[y])); // REV R4B
             diff += bad;
             if (save) {
                 auto put = [&](int panel, int c9) {
@@ -2063,20 +2077,70 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
     uint16_t cIdx[64], cCol[64];
     int nc = 0;
     for (int i = 0; i < 64; ++i) {
-        if (sgb.slots[i] == 0xFFFF)
+        if (sgb.slots[i] == 0xFFFF) {
+            if (sgb.cramSync) // REV R4D: the act's first record - all 64 (the 68000's shadow), as plat_mars.cpp
+                cIdx[nc] = (uint16_t)i, cCol[nc++] = sgb.sent[i];
             continue;
-        uint16_t c565 = activePalette[sgb.slots[i]]; // REV R4B: the active bank (as plat_mars.cpp)
+        }
+        // REV R4B: the active bank (as plat_mars.cpp); REV R4D: with the water trailer, line 0's bank
+        uint16_t c565 = (sgb.waterOn ? fullPalette[gfxLineBuffer[0]] : activePalette)[sgb.slots[i]];
         if (fadeMode > 0) // REV R3: the engine's fade, on the palette (as plat_mars.cpp)
             c565 = sgb_fade565(c565, fadeR, fadeG, fadeB, fadeA);
         uint16_t c = sgb_md_color(c565);
-        if (c != sgb.sent[i]) {
+        if (c != sgb.sent[i] || sgb.cramSync) {
             cIdx[nc]   = (uint16_t)i;
             cCol[nc++] = c;
             sgb.sent[i] = c;
         }
     }
     int n = sgb_out_end(&o, vA, vB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc);
+    uint16_t wIdx[64], wCol[64];
+    int nw = 0;
+    if (n >= 0 && sgb.waterOn) { // REV R4D: the water trailer, as plat_mars.cpp water_out
+        int W = 0, b0 = gfxLineBuffer[0], y = 1;
+        while (y < SCREEN_YSIZE && gfxLineBuffer[y] == b0) ++y;
+        if (y < SCREEN_YSIZE) {
+            W = y;
+            for (int k = y + 1; k < SCREEN_YSIZE; ++k)
+                if (gfxLineBuffer[k] != gfxLineBuffer[y])
+                    W = 0;
+        }
+        static int dbg = getenv("SCD32X_WATERDBG") ? atoi(getenv("SCD32X_WATERDBG")) : 0;
+        if (dbg > 0 && y < SCREEN_YSIZE) { // the line banks as runs, and how many slot colours differ from line 0's bank
+            dbg--;
+            char b[512];
+            int len = 0;
+            for (int yy = 0; yy < SCREEN_YSIZE && len < 480;) {
+                int k = yy;
+                while (k < SCREEN_YSIZE && gfxLineBuffer[k] == gfxLineBuffer[yy]) k++;
+                len += snprintf(b + len, sizeof b - len, " %d-%d:%d", yy, k - 1, gfxLineBuffer[yy]);
+                yy = k;
+            }
+            int nd = 0;
+            for (int i = 0; i < 64; ++i)
+                if (sgb.slots[i] != 0xFFFF && fullPalette[gfxLineBuffer[y]][sgb.slots[i]] != fullPalette[b0][sgb.slots[i]])
+                    nd++;
+            md_log("WATERDBG frame %u: W %d banks%s; %d slot colours differ", md_frame_number(), W, b, nd);
+        }
+        if (W)
+            for (int i = 0; i < 64; ++i) {
+                uint16_t c = sgb.sent[i];
+                if (sgb.slots[i] != 0xFFFF) {
+                    uint16_t c565 = fullPalette[gfxLineBuffer[W]][sgb.slots[i]];
+                    if (fadeMode > 0)
+                        c565 = sgb_fade565(c565, fadeR, fadeG, fadeB, fadeA);
+                    c = sgb_md_color(c565);
+                }
+                if (c != sgb.wsent[i])
+                    wIdx[nw] = (uint16_t)i, wCol[nw++] = c, sgb.wsent[i] = c;
+            }
+        n = sgb_out_water(&o, W, wIdx, wCol, nw);
+    }
     if (n < 0) { // as the SH2: too big - both planes from scratch next frame
+        for (int k = 0; k < nc; ++k) // REV R4D: its colours again next frame (plat_mars.cpp colours_lost)
+            if (sgb.slots[cIdx[k]] != 0xFFFF)
+                sgb.sent[cIdx[k]] = 0xFFFF;
+        for (int k = 0; k < nw; ++k) sgb.wsent[wIdx[k]] = 0xFFFF;
         sgb.overflow++;
         md_plane_reset(&sgb.pA);
         md_plane_reset(&sgb.pB);
@@ -2088,9 +2152,27 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
     // the 68000
     int16_t gA[MAXLINES], gB[MAXLINES];
     uint16_t gvA, gvB;
-    int used = sgb_apply(recw, SCREEN_YSIZE, sgb_vram_w, NULL, gA, gB, &gvA, &gvB, sgb.shown);
+    sgb.cramSync = false;
+    // REV R4D: the 68000 (hw_md.s): CRAM held the water colours (last frame's H-int) - the shadow back first
+    if (sgb.wPrev)
+        memcpy(sgb.shown, sgb.shadow, sizeof sgb.shown);
+    int used = sgb_apply(recw, SCREEN_YSIZE, sgb_vram_w, NULL, gA, gB, &gvA, &gvB, sgb.shown, &sgb.wline, sgb.water);
     if (used != n)
         md_log("SGB frame %u: record %d words, the 68000 model read %d", md_frame_number(), n, used);
+    {
+        int16_t tA[MAXLINES], tB[MAXLINES];
+        uint16_t t1, t2;
+        sgb_apply(recw, SCREEN_YSIZE, [](void *, uint16_t, uint16_t) {}, NULL, tA, tB, &t1, &t2, sgb.shadow, NULL, NULL);
+    }
+    sgb.wPrev = sgb.wline > 0 && sgb.wline < SCREEN_YSIZE;
+    if (sgb.wPrev)
+        sgb.wetFrames++;
+    if (getenv("SCD32X_WATERDBG")) {
+        int ns = 0, nwt = 0;
+        for (int i = 0; i < 64; ++i) ns += sgb.shadow[i] != sgb.shown[i], nwt += sgb.water[i] == 0x0BAD;
+        if (ns || (sgb.wPrev && nwt))
+            md_log("WATERDBG frame %u: shadow differs from CRAM in %d, water colours unset %d (wline %d)", md_frame_number(), ns, nwt, sgb.wline);
+    }
     // the picture, compared with the engine's (in 9-bit colour, bank 0: water banks are R4)
     long diff = 0;
     bool water = false;
@@ -2104,7 +2186,11 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
             int model = -1;
             if (pix) {
                 int k = ((pix >> 4) & 3) * 16 + (pix & 15);
-                if (gfxLineBuffer[y] == gfxLineBuffer[0]) { // the active bank: the colour the 68000 put into CRAM
+                if (sgb.wPrev && y >= sgb.wline) { // REV R4D: below the water line - the H-int's water colours
+                    uint16_t w = sgb.water[k];
+                    model      = ((w >> 1) & 7) << 6 | ((w >> 5) & 7) << 3 | ((w >> 9) & 7);
+                }
+                else if (gfxLineBuffer[y] == gfxLineBuffer[0]) { // the active bank: the colour the 68000 put into CRAM
                     uint16_t w = sgb.shown[k];
                     model      = ((w >> 1) & 7) << 6 | ((w >> 5) & 7) << 3 | ((w >> 9) & 7);
                 }
@@ -2130,6 +2216,8 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
         sgb.pixels += diff;
         if (!water)
             sgb.dryDifferent++, sgb.dryPixels += diff;
+        if (sgb.wPrev) // REV R4D
+            sgb.wetDifferent++, sgb.wetPixels += diff;
         if (sgb.different <= 5)
             md_log("SGB frame %u: %ld pixels different%s", md_frame_number(), diff, water ? " (water lines)" : "");
     }
@@ -2655,6 +2743,9 @@ void md_check_summary()
                "without water lines %ld frames with differences (%ld pixels)",
                sgb.frames, sgb.different, sgb.pixels, sgb.waterFrames, sgb.overflow, sgb.frames ? sgb.words / sgb.frames : 0, sgb.maxWords,
                SGB_REC_MAX, sgb.bankPixels, sgb.dryDifferent, sgb.dryPixels);
+    if (sgb.test && sgb.waterOn) // REV R4D
+        md_log("SGB water: %ld frames with a water line (the H-int's colours below it), %ld of them with differences (%ld pixels)",
+               sgb.wetFrames, sgb.wetDifferent, sgb.wetPixels);
     if (sgb.test && sgb.sprOn) // REV R3
         md_log("SPR summary: %ld frames of the whole picture (planes + sprites) compared, %ld with differences (%ld pixels), %ld skipped "
                "(fades); hardware sprites at most %ld, pattern words uploaded %ld (%ld a frame), draws waiting a frame %ld, cell sets "

@@ -222,6 +222,67 @@ static union {
 #define pmList scdShared.pm.list
 static unsigned short cramSent[64];
 static unsigned short recId = 0;
+/* REV R4D: the UNDERWATER switch (scdWaterSwitch) - the records' water trailer (md/sgb.h): the water colours the 68000
+   has (waterSent; 0xFFFF: none yet), and the first record of an act with all 64 normal colours (cramSync: the 68000's
+   shadow of CRAM, which it writes back after the water line) */
+static unsigned short waterSent[64];
+static bool cramSync = false;
+static uint16_t wIdx[64], wCol[64];
+static int wN = 0;
+/* the first line drawn with another palette bank than line 0's, if every line below it has that bank (one water line);
+   0: none - a frame with more than one change (as R4C: line 0's colours everywhere) */
+static int water_line()
+{
+    const int b0 = gfxLineBuffer[0];
+    int y        = 1;
+    while (y < SCREEN_YSIZE && gfxLineBuffer[y] == b0) ++y;
+    if (y >= SCREEN_YSIZE)
+        return 0;
+    const int wb = gfxLineBuffer[y];
+    for (int k = y + 1; k < SCREEN_YSIZE; ++k)
+        if (gfxLineBuffer[k] != wb)
+            return 0;
+    return y;
+}
+/* the trailer: the water line and the water colours that changed (the CRAM slots' engine colours in the water line's
+   bank, faded as the normal ones; a slot without one: its normal colour). dim: the pause menu's (lines 0-2 at 40 %) */
+static int water_out(SgbOut *o, const unsigned short *slots, bool dim)
+{
+    wN    = 0;
+    int W = water_line();
+    if (W) {
+        const unsigned short *pal = fullPalette[gfxLineBuffer[W]];
+        for (int i = 0; i < 64; ++i) {
+            uint16_t c = cramSent[i];
+            if (slots[i] != 0xFFFF) {
+                uint16_t c565 = pal[slots[i]];
+                if (dim) {
+                    if (i < 48)
+                        c565 = sgb_fade565(c565, 0, 0, 0, 150);
+                }
+                else if (fadeMode > 0)
+                    c565 = sgb_fade565(c565, fadeR, fadeG, fadeB, fadeA);
+                c = sgb_md_color(c565);
+            }
+            if (c != waterSent[i]) {
+                wIdx[wN]     = (uint16_t)i;
+                wCol[wN++]   = c;
+                waterSent[i] = c;
+            }
+        }
+    }
+    return sgb_out_water(o, W, wIdx, wCol, wN);
+}
+/* a record that did not fit (not sent): its colour changes again next frame (REV R4D - R4C lost them until the colour
+   changed again) */
+static void colours_lost(const unsigned short *slots, const uint16_t *idx, int n)
+{
+    for (int k = 0; k < n; ++k)
+        if (slots[idx[k]] != 0xFFFF)
+            cramSent[idx[k]] = 0xFFFF;
+    for (int k = 0; k < wN; ++k) waterSent[wIdx[k]] = 0xFFFF;
+    wN = 0;
+}
 static MdSprites sprites; /* REV R3: the act's sprites as Genesis hardware sprites (md/md_sprites.h) */
 static void sgb_pause()
 {
@@ -574,6 +635,9 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
     }
     const unsigned short *cram0 = (const unsigned short *)(f + *(const unsigned int *)(f + 32));
     for (int i = 0; i < 64; ++i) cramSent[i] = cram0[i];
+    for (int i = 0; i < 64; ++i) waterSent[i] = 0xFFFF; /* REV R4D */
+    cramSync = scdWaterSwitch != 0;
+    wN       = 0;
     /* REV R3: the sprite pack after the plane data ('SPRP' + offset in the header's last 8 bytes); its cells go
        after the act's plane cells, up to plane A's name table (0xC000) */
     mds_init(&sprites, *(const unsigned int *)(f + 56) == MDS_TAG ? f + *(const unsigned int *)(f + 60) : 0,
@@ -634,23 +698,35 @@ static void pause_frame()
     mds_record(&sprites, &o);
     uint16_t cIdx[64], cCol[64];
     int nc = 0;
+    /* REV R4D: the UNDERWATER switch on - the colours of line 0's bank above the water line (the engine leaves
+       activePalette at the last line's bank: R4C showed the water's colours on the whole screen) */
+    const unsigned short *pal = scdWaterSwitch ? fullPalette[gfxLineBuffer[0]] : activePalette;
     for (int i = 0; i < 64; ++i) {
-        if (slots[i] == 0xFFFF)
+        if (slots[i] == 0xFFFF) {
+            if (cramSync) /* REV R4D: the act's first record - all 64 (the 68000's shadow) */
+                cIdx[nc] = (uint16_t)i, cCol[nc++] = cramSent[i];
             continue;
-        uint16_t c565 = activePalette[slots[i]];
+        }
+        uint16_t c565 = pal[slots[i]];
         if (i < 48)
             c565 = sgb_fade565(c565, 0, 0, 0, 150); /* the planes at about 40 % */
         uint16_t c = sgb_md_color(c565);
-        if (c != cramSent[i]) {
+        if (c != cramSent[i] || cramSync) {
             cIdx[nc]    = (uint16_t)i;
             cCol[nc++]  = c;
             cramSent[i] = c;
         }
     }
-    if (sgb_out_end(&o, lastVA, lastVB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc) < 0) {
+    int n = sgb_out_end(&o, lastVA, lastVB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc);
+    if (n >= 0 && scdWaterSwitch)
+        n = water_out(&o, slots, true); /* REV R4D */
+    if (n < 0) {
+        colours_lost(slots, cIdx, nc);
         mds_forget(&sprites);
         return;
     }
+    cramSync = false;
+    wN       = 0;
     rec_handover();
 }
 static void planes_frame() SCD_HOT; /* PORT32X R1V: every frame - SDRAM (RetroEngine.hpp SCD_HOT) */
@@ -746,26 +822,37 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     const unsigned short *slots = (const unsigned short *)(f + *(const unsigned int *)(f + 16));
     uint16_t cIdx[64], cCol[64];
     int nc = 0;
+    /* REV R4D: the UNDERWATER switch on - line 0's bank above the water line (activePalette: the last line's) */
+    const unsigned short *pal = scdWaterSwitch ? fullPalette[gfxLineBuffer[0]] : activePalette;
     for (int i = 0; i < 64; ++i) {
-        if (slots[i] == 0xFFFF)
+        if (slots[i] == 0xFFFF) {
+            if (cramSync) /* REV R4D: the act's first record - all 64 (the 68000's shadow) */
+                cIdx[nc] = (uint16_t)i, cCol[nc++] = cramSent[i];
             continue;
-        uint16_t c565 = activePalette[slots[i]]; /* REV R4B: the active bank (Palmtree Panic's waterfalls cycle the banks) */
+        }
+        uint16_t c565 = pal[slots[i]]; /* REV R4B: the active bank (Palmtree Panic's waterfalls cycle the banks) */
         if (fadeMode > 0) /* REV R3: the engine's fade rectangle, on the palette - planes and sprites fade with it */
             c565 = sgb_fade565(c565, fadeR, fadeG, fadeB, fadeA);
         uint16_t c = sgb_md_color(c565);
-        if (c != cramSent[i]) {
+        if (c != cramSent[i] || cramSync) {
             cIdx[nc]    = (uint16_t)i;
             cCol[nc++]  = c;
             cramSent[i] = c;
         }
     }
-    if (sgb_out_end(&o, vA, vB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc) < 0) {
+    int recWords = sgb_out_end(&o, vA, vB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc);
+    if (recWords >= 0 && scdWaterSwitch)
+        recWords = water_out(&o, slots, false); /* REV R4D: the water line */
+    if (recWords < 0) {
+        colours_lost(slots, cIdx, nc); /* REV R4D */
         md_plane_reset(&sgbA); /* too big: both planes from scratch next frame */
         md_plane_reset(&sgbB);
         mds_forget(&sprites); /* REV R3: its pattern uploads never reached the VRAM */
         return;
     }
     lastVA = vA, lastVB = vB; /* REV R4B: the pause menu's records keep this scroll */
+    cramSync = false;
+    wN       = 0;
     rec_handover();
 }
 // ---------------------------------------------------------------- REV R4: the dev menu on plane A
@@ -930,6 +1017,66 @@ static inline int pm_div(int a, int b)
 #define PM_VERTS ((Vertex *)(0x24000000 + PM_FB_VERTS))
 #define PM_SCAN ((int *)(0x24000000 + PM_FB_SCAN))
 #define PM_LIST pmList
+/* REV R4D: the second SH2 (the Options Menu's 2ND SH2 switch, scdSh2Switch) - the floor, the tile layers and the big
+   faces of the picture mode drawn half by it (scd_pm.h PM_SPLIT: every other row; the same picture). The loader's
+   secondary() (cd32x/sh2_engboot.c) waits for a job in the mailbox after the boot record (cache-through): 'SLV1', a
+   sequence number, the function, its argument; done = the sequence once it returned (its cache purged before each:
+   this SH2 changed what it reads). Its half goes first, then this SH2 draws its own and waits for the other: at most 30
+   vertical blanks - then it draws that half too and leaves the second SH2 alone. The first job is a test (none from a
+   loader without the mailbox: boot record [11] 'SLV1'). Status codes: 5C1B the second SH2 answers, 5C1C it does not. */
+#define SLAVE_BOX ((volatile unsigned int *)0x26001F40)
+#define SLAVE_MAGIC 0x534C5631u
+static int slaveState = 0; /* 0 not tried yet, 1 it answers, -1 not there */
+static unsigned int slaveSeq = 0;
+static void slave_post(void (*fn)(unsigned int), unsigned int arg)
+{
+    SLAVE_BOX[2] = (unsigned int)fn;
+    SLAVE_BOX[3] = arg;
+    SLAVE_BOX[0] = SLAVE_MAGIC;
+    SLAVE_BOX[1] = ++slaveSeq; /* (last: the second SH2 starts when it sees it) */
+}
+static bool slave_wait(unsigned int vbls)
+{
+    const unsigned int v0 = VBLANK_COUNT;
+    while (SLAVE_BOX[4] != slaveSeq) {
+        if (VBLANK_COUNT - v0 > vbls)
+            return false;
+        for (volatile int k = 0; k < 8; ++k) {
+        }
+    }
+    return true;
+}
+static void slave_nop(unsigned int) {}
+static bool slave_ready()
+{
+    if (!scdSh2Switch || slaveState < 0)
+        return false;
+    if (slaveState == 0) {
+        if (SCD_BOOT_RECORD[11] != SLAVE_MAGIC)
+            slaveState = -1;
+        else {
+            slave_post(slave_nop, 0);
+            slaveState = slave_wait(3) ? 1 : -1;
+        }
+        STATE(slaveState > 0 ? 0x5C1B : 0x5C1C);
+    }
+    return slaveState > 0;
+}
+#define PM_SPLIT_FN(fn, J)                                                                                              \
+    static void fn##_slave(unsigned int a) { fn((const J *)a, 1, 2); }
+#define PM_SPLIT(fn, job)                                                                                               \
+    do {                                                                                                                \
+        if (slave_ready()) {                                                                                            \
+            slave_post(fn##_slave, (unsigned int)(job));                                                                \
+            fn(job, 0, 2);                                                                                              \
+            if (!slave_wait(30)) {                                                                                      \
+                slaveState = -1;                                                                                        \
+                fn(job, 1, 2);                                                                                          \
+            }                                                                                                           \
+        }                                                                                                               \
+        else                                                                                                            \
+            fn(job, 0, 1);                                                                                              \
+    } while (0)
 #include "scd_pm.h"
 void scd_pm_clear(int index)
 {
@@ -1395,6 +1542,13 @@ static unsigned int musicStopAt = 0;              /* the vertical blank a track 
 static unsigned char sfxMap[0x100];               /* the engine's effect number -> the bank's (0: none) */
 static unsigned char sfxQueue[4], sfxQueued = 0;
 static bool sfxBankLoaded = false;
+#ifdef SCD_SFX_BANKS
+/* REV R4D: the scenes' own banks (the Options Menu's STAGE SFX switch, scdSfxSwitch): the engine's effect number -> its
+   name in scdSfxNames (0xFF: none); the bank's own number is looked up when it plays (scdSfxBankMap: KOBOSFX.BIN is bank
+   0 - the switch off plays exactly R4C's numbers) */
+static unsigned char sfxName[0x100];            /* (the name's index + 1; 0: none) */
+static unsigned char sfxBank = 0;                 /* the bank in the PCM chip (0 KOBOSFX.BIN, n SFX<n>.BIN) */
+#endif
 static bool name_is(const char *a, const char *b) /* the same name, any case */
 {
     for (;; ++a, ++b) {
@@ -1444,6 +1598,14 @@ void plat_sfx_loaded(int sfx, const char *name, int, int, int, int) /* the engin
     if (sfx < 0 || sfx >= 0x100)
         return;
     sfxMap[sfx] = 0;
+#ifdef SCD_SFX_BANKS
+    sfxName[sfx] = 0;
+    for (int i = 0; i < SCD_SFX_NAMES; ++i)
+        if (name_is(name, scdSfxNames[i])) {
+            sfxName[sfx] = (unsigned char)(i + 1);
+            break;
+        }
+#endif
 #if SCD_HAVE_SFX
     for (int i = 0; i < scdSfxBankCount; ++i)
         if (name_is(name, scdSfxBank[i].name)) {
@@ -1465,17 +1627,42 @@ static void audio_before_load() /* REV R4: a scene load reads the CD - the drive
         sfxBankLoaded = SC_COMM12 > 0 && SC_COMM12 < 32;
         STATE(sfxBankLoaded ? 0x5C18 : 0x5C19); /* line 10: the effects are in (5C18) / not on the disc (5C19) */
     }
+#ifdef SCD_SFX_BANKS
+    /* REV R4D: the STAGE SFX switch on - the scene's own bank (SFX<n>.BIN); off, or the scene has none: KOBOSFX.BIN. A
+       bank that does not load leaves the chip as it was (sub_main.c pcm_load): the bank before it plays on */
+    int want = 0;
+    if (scdSfxSwitch && activeStageList >= 0 && activeStageList < 4 && stageListPosition >= 0 && stageListPosition < 0x80)
+        want = scdSfxScene[activeStageList][stageListPosition];
+    if (want >= SCD_SFX_BANKS)
+        want = 0;
+    if (sfxBankLoaded && want != sfxBank) {
+        SC_COMM12 = 0;
+        sub_cmd(53, (unsigned short)want); /* the bank -> the PCM chip; COMM12 = its number of effects (0: not loaded) */
+        if (SC_COMM12 > 0 && SC_COMM12 < 64)
+            sfxBank = (unsigned char)want;
+        else
+            STATE(0x5C1A); /* line 10: the bank did not load */
+    }
+#endif
     sfxQueued = 0;
 }
 void plat_sfx_play(int sfx, int)
 {
-    if (sfx < 0 || sfx >= 0x100 || !sfxMap[sfx] || !sfxBankLoaded)
+    if (sfx < 0 || sfx >= 0x100 || !sfxBankLoaded)
+        return;
+#ifdef SCD_SFX_BANKS
+    const int n            = sfxName[sfx]; /* REV R4D */
+    const unsigned char id = n && n <= SCD_SFX_NAMES ? scdSfxBankMap[sfxBank][n - 1] : 0;
+#else
+    const unsigned char id = sfxMap[sfx];
+#endif
+    if (!id)
         return;
     for (int i = 0; i < sfxQueued; ++i)
-        if (sfxQueue[i] == sfxMap[sfx])
+        if (sfxQueue[i] == id)
             return; /* already waiting */
     if (sfxQueued < 4)
-        sfxQueue[sfxQueued++] = sfxMap[sfx];
+        sfxQueue[sfxQueued++] = id;
 }
 // ---------------------------------------------------------------- REV R4C: the game's saves in the backup RAM
 // MicroNut99's option 2: the Sub-CPU keeps the file SONICCD32X_ (512 bytes) - command 56 reads it into its buffer, 57

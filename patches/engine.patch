@@ -614,14 +614,14 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      byte type;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Debug.cpp engine/Debug.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Debug.cpp	2026-10-17 09:13:50.842030512 -0700
++++ engine/Debug.cpp	2026-10-17 16:01:38.192374357 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +#include <stdarg.h> // PORT32X: was pulled in by SDL.h
  
  int touchFlags = 0;
  
-@@ -44,6 +45,113 @@
+@@ -44,6 +45,128 @@
      }
  }
  
@@ -631,14 +631,22 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +// (1-9) for either; the test switches: DEMO PAD (the scripted pad plays each stage from its start until a button is
 +// pressed) and DEBUG MODE (every stage with the game's debug mode); CREDITS. The platform's line (scdMenuNote): why the
 +// game came back here. A + B + C + START in a stage: back to this menu.
-+#define SCD_MENU_PLAYER  9
-+#define SCD_MENU_START   11
-+#define SCD_MENU_STAGES  13
-+#define SCD_MENU_LIVES   15
-+#define SCD_MENU_DEMOPAD 17
-+#define SCD_MENU_DEBUG   19
-+#define SCD_MENU_CREDITS 21 // REV R4: the credits screen (plat_credits)
++// REV R4D: three more switches before CREDITS, each off at power-on (off: as R4C) - 2ND SH2 (the 32X's second SH2 draws
++// half of each picture of the 32X picture mode: the special stages, the title, the menus), STAGE SFX (each scene's own
++// sound effects in the PCM chip, from its next load) and UNDERWATER (the act's underwater colours below the water line,
++// on the Genesis planes); the blank rows under the title and the version taken out (26 rows from y = 8)
++#define SCD_MENU_PLAYER  7
++#define SCD_MENU_START   9
++#define SCD_MENU_STAGES  11
++#define SCD_MENU_LIVES   13
++#define SCD_MENU_DEMOPAD 15
++#define SCD_MENU_DEBUG   17
++#define SCD_MENU_SH2     19 // REV R4D
++#define SCD_MENU_SFX     21 // REV R4D
++#define SCD_MENU_WATER   23 // REV R4D
++#define SCD_MENU_CREDITS 25 // REV R4: the credits screen (plat_credits)
 +int scdDebugSwitch                = 0;
++int scdSh2Switch = 0, scdSfxSwitch = 0, scdWaterSwitch = 0; // REV R4D (engine/plat.hpp)
 +static int scdPlayer              = 0; // REV R4B: 0 Sonic, 1 Tails
 +static int scdLives               = 3; // REV R4B: the lives a game starts with
 +char scdMenuNote[2][SCD_MENU_NOTE] = { "", "" };
@@ -649,6 +657,9 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +        case SCD_MENU_PLAYER: return scdPlayer ? "PLAYER     TAILS" : "PLAYER     SONIC";
 +        case SCD_MENU_LIVES: lives[11] = (char)('0' + scdLives); return lives;
 +        case SCD_MENU_DEMOPAD: return scdDemoPad ? "DEMO PAD   ON   " : "DEMO PAD   OFF  ";
++        case SCD_MENU_SH2: return scdSh2Switch ? "2ND SH2    ON   " : "2ND SH2    OFF  ";
++        case SCD_MENU_SFX: return scdSfxSwitch ? "STAGE SFX  ON   " : "STAGE SFX  OFF  ";
++        case SCD_MENU_WATER: return scdWaterSwitch ? "UNDERWATER ON   " : "UNDERWATER OFF  ";
 +        default: return scdDebugSwitch ? "DEBUG MODE ON   " : "DEBUG MODE OFF  ";
 +    }
 +}
@@ -656,14 +667,12 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +{
 +    SetupTextMenu(&gameMenu[0], 0);
 +    AddTextMenuEntry(&gameMenu[0], "OPTIONS MENU");
-+    AddTextMenuEntry(&gameMenu[0], " ");
 +    char version[0x80];
 +    StrCopy(version, Engine.gameWindowText);
 +    StrAdd(version, " Version");
 +    AddTextMenuEntry(&gameMenu[0], version);
 +    AddTextMenuEntry(&gameMenu[0], Engine.gameVersion);
 +    AddTextMenuEntry(&gameMenu[0], "SEGA CD32X");
-+    AddTextMenuEntry(&gameMenu[0], " ");
 +    AddTextMenuEntry(&gameMenu[0], scdMenuNote[0][0] ? scdMenuNote[0] : " ");
 +    AddTextMenuEntry(&gameMenu[0], scdMenuNote[1][0] ? scdMenuNote[1] : " ");
 +    AddTextMenuEntry(&gameMenu[0], " ");
@@ -678,6 +687,12 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_DEMOPAD));
 +    AddTextMenuEntry(&gameMenu[0], " ");
 +    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_DEBUG));
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_SH2));
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_SFX));
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_WATER));
 +    AddTextMenuEntry(&gameMenu[0], " ");
 +    AddTextMenuEntry(&gameMenu[0], "CREDITS");
 +    gameMenu[0].alignment        = 2;
@@ -735,7 +750,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void InitDevMenu()
  {
  #if RETRO_USE_MOD_LOADER
-@@ -70,6 +178,9 @@
+@@ -70,6 +193,9 @@
      SetPaletteEntry(-1, 0xF0, 0x00, 0x00, 0x00);
      SetPaletteEntry(-1, 0xFF, 0xFF, 0xFF, 0xFF);
      stageMode = DEVMENU_MAIN;
@@ -745,7 +760,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      SetupTextMenu(&gameMenu[0], 0);
      AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
      AddTextMenuEntry(&gameMenu[0], " ");
-@@ -102,6 +213,7 @@
+@@ -102,6 +228,7 @@
      gameMenu[0].selection2       = 9;
      gameMenu[1].visibleRowCount  = 0;
      gameMenu[1].visibleRowOffset = 0;
@@ -753,7 +768,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (renderType == RENDER_HW) {
          Engine.highResMode = false;
          render3DEnabled    = false;
-@@ -144,6 +256,9 @@
+@@ -144,6 +271,9 @@
  void ProcessStageSelect()
  {
      ClearScreen(0xF0);
@@ -763,7 +778,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      keyDown.start = false;
      keyDown.B     = false;
      keyDown.up    = false;
-@@ -210,7 +325,9 @@
+@@ -210,16 +340,88 @@
                  gameMenu[0].selection2 -= 2;
  
              int count = 13;
@@ -774,12 +789,20 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              count += 2;
  #endif
  
-@@ -219,7 +336,63 @@
++#if defined(SONICCD32X)
++            if (gameMenu[0].selection2 > count) // REV R4D: the first row is PLAYER (7)
++                gameMenu[0].selection2 = SCD_MENU_PLAYER;
++            if (gameMenu[0].selection2 < SCD_MENU_PLAYER)
++                gameMenu[0].selection2 = count;
++#else
+             if (gameMenu[0].selection2 > count)
+                 gameMenu[0].selection2 = 9;
              if (gameMenu[0].selection2 < 9)
                  gameMenu[0].selection2 = count;
++#endif
  
 +#if defined(SONICCD32X)
-+            DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 16); // REV R4B: 22 rows - from the top of the screen
++            DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 8); // REV R4B: 22 rows - from the top of the screen (REV R4D: 26 rows, from y = 8)
 +            {
 +                const int row = gameMenu[0].selection2;
 +                const bool go = keyPress.start || keyPress.A, side = keyPress.left || keyPress.right;
@@ -790,12 +813,19 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +                    }
 +                    break;
 +                }
-+                if (row == SCD_MENU_PLAYER || row == SCD_MENU_DEMOPAD || row == SCD_MENU_DEBUG) { // a switch
++                if (row == SCD_MENU_PLAYER || row == SCD_MENU_DEMOPAD || row == SCD_MENU_DEBUG || row == SCD_MENU_SH2 ||
++                    row == SCD_MENU_SFX || row == SCD_MENU_WATER) { // a switch
 +                    if (go || side) {
 +                        if (row == SCD_MENU_PLAYER)
 +                            scdPlayer ^= 1;
 +                        else if (row == SCD_MENU_DEMOPAD)
 +                            scdDemoPad ^= 1;
++                        else if (row == SCD_MENU_SH2)
++                            scdSh2Switch ^= 1;
++                        else if (row == SCD_MENU_SFX)
++                            scdSfxSwitch ^= 1;
++                        else if (row == SCD_MENU_WATER)
++                            scdWaterSwitch ^= 1;
 +                        else
 +                            scdDebugSwitch ^= 1;
 +                        EditTextMenuEntry(&gameMenu[0], scd_switch_text(row), row);
@@ -838,7 +868,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyPress.start || keyPress.A) {
                  if (gameMenu[0].selection2 == 9) {
                      ClearGraphicsData();
-@@ -326,6 +499,10 @@
+@@ -326,6 +528,10 @@
              }
              else if (keyPress.B) {
                  stageMode = DEVMENU_MAIN;
@@ -849,7 +879,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
                  AddTextMenuEntry(&gameMenu[0], " ");
-@@ -421,6 +598,11 @@
+@@ -421,6 +627,11 @@
                  stageMode                    = DEVMENU_STAGESEL;
              }
              else if (keyPress.B) {
@@ -861,7 +891,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "SELECT A PLAYER");
                  SetupTextMenu(&gameMenu[1], 0);
-@@ -437,6 +619,28 @@
+@@ -437,6 +648,28 @@
  
          case DEVMENU_STAGESEL: // Selecting Stage
          {
@@ -890,7 +920,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyDown.down) {
                  gameMenu[1].timer += 1;
                  if (gameMenu[1].timer > 8) {
-@@ -456,6 +660,7 @@
+@@ -456,6 +689,7 @@
                      gameMenu[1].timer = 0;
                  }
              }
@@ -898,7 +928,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyPress.down) {
                  gameMenu[1].selection1++;
                  if (gameMenu[1].selection1 - gameMenu[1].visibleRowOffset >= gameMenu[1].visibleRowCount) {
-@@ -480,7 +685,12 @@
+@@ -480,7 +714,12 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX - 4, 40);
              DrawTextMenu(&gameMenu[1], SCREEN_CENTERX + 100, 64);
              if (keyPress.start || keyPress.A) {
@@ -911,7 +941,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  stageMode         = STAGEMODE_LOAD;
                  Engine.gameMode   = ENGINE_MAINGAME;
                  stageListPosition = gameMenu[1].selection1;
-@@ -511,6 +721,10 @@
+@@ -511,6 +750,10 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 72);
              if (keyPress.start || keyPress.A) {
                  stageMode = DEVMENU_MAIN;
@@ -4894,8 +4924,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
-+++ engine/plat.hpp	2026-10-17 11:26:00.142217881 -0700
-@@ -0,0 +1,144 @@
++++ engine/plat.hpp	2026-10-17 16:01:38.193136420 -0700
+@@ -0,0 +1,148 @@
 +#ifndef PLAT_H
 +#define PLAT_H
 +// PORT32X: the platform layer of the Sega CD32X port.
@@ -4951,6 +4981,10 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +// REV R4: the dev menu's test switches (engine/Debug.cpp sets them, the platform reads them)
 +extern int scdDemoPad;     // 1: the scripted pad plays each stage from its start, until a button is pressed
 +extern int scdDebugSwitch; // 1: every stage started from the menu with the game's debug mode (B: object placement)
++// REV R4D: the Options Menu's three boot-stack switches, off at power-on (off: R4C's way)
++extern int scdSh2Switch;   // 1: the 32X's second SH2 draws half of each 32X picture-mode picture (scd_pm.h)
++extern int scdSfxSwitch;   // 1: each scene's own sound effects (SFX<n>.BIN, from the scene's load on)
++extern int scdWaterSwitch; // 1: the act's underwater colours below the water line on the Genesis planes (the 68000's H-int)
 +#define SCD_MENU_NOTE 40
 +extern char scdMenuNote[2][SCD_MENU_NOTE]; // two lines the dev menu shows: why the platform came back to it
 +// REV R4: the dev menu (engine/Debug.cpp). plat_boot_menu: true = the engine starts in the dev menu, not the first stage.

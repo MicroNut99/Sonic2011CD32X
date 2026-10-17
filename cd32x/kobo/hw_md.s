@@ -36,6 +36,17 @@
         .equ    SGB_BAD,   0xFF8006         /* w: R1G - 1 = a record id came with no valid record behind it */
         .equ    SGB_REC,   0xFF8010         /* the record: length word + up to SGB_RECMAX words */
         .equ    SGB_RECMAX,6000
+| SONIC REV R4D - the underwater colours (md/sgb.h: the records' water trailer; the Options Menu's UNDERWATER switch
+| on - off, no record has the trailer and nothing below touches the VDP). Vertical blank: the normal colours back into
+| CRAM (if the water ones went in), then this frame's H-int at the water line; the H-int writes the 64 water colours.
+| The VDP only while SGB_FLAG is 1 (the command loop does not use it then): a register written in the middle of
+| another routine's VDP address and data would send its data elsewhere.
+        .equ    SGB_HON,   0xFF8008         /* w: 1 = the H-int is set up for the water line (IE1 on) */
+        .equ    SGB_WON,   0xFF800A         /* w: 1 = CRAM holds the water colours (this frame's H-int wrote them) */
+        .equ    SGB_WLINE, 0xFF800C         /* w: the first line with the water colours (0: none) */
+        .equ    SGB_NCRAM, 0xFFB000         /* 64 w: the normal colours (every palette change, a shadow of CRAM) */
+        .equ    SGB_WCRAM, 0xFFB080         /* 64 w: the water colours (the trailers' changes) */
+        .equ    SGB_WTAG,  0x5741           /* the trailer's last word (md/sgb.h SGB_WATER_TAG) */
 
 
         .text
@@ -203,6 +214,9 @@ md_start:
         clr.w   SGB_READY               /* the planes stay off until the Sub-CPU loads an act  */
         clr.w   SGB_LAST
         clr.w   SGB_BAD
+        clr.w   SGB_HON                 /* SONIC REV R4D: no water line */
+        clr.w   SGB_WON
+        clr.w   SGB_WLINE
         move.l  #0,0xA12010
         move.l  #0,0xA12014
         move.l  #0,0xA12018
@@ -446,6 +460,10 @@ md_init_hw:
 
         lea     vblank_int(pc),a0
         move.l  a0,0xFFFD08
+        move.w  #0x4EF9,0xFFFD0C        /* SONIC REV R4D: the H-int (level 4) - the BIOS jump table's entry: */
+        lea     hint_int(pc),a0         /* jmp hint_int (the gate array's H-int vector register, 0xA12006,  */
+        move.l  a0,0xFFFD0E             /* points there: 0xFD0C). Off in the VDP (register 0 bit 4) until   */
+        move.w  #0xFD0C,0xA12006        /* sgb_water sets a water line                                       */
 
         move.w  #0x8174,(a4)
         movem.l (sp)+,d2-d7/a2-a5
@@ -1295,8 +1313,14 @@ message6:
 vblank_int:
         movem.l d0-d1/a0-a1,-(sp)
         tst.w   SGB_FLAG                /* SONIC REV R1: the planes first, early in vertical blank */
-        beq.b   vbl_pads
+        beq.b   vbl_dry
+        bsr.w   sgb_water               /* SONIC REV R4D: the water line first (the normal colours back) */
         bsr.w   sgb_vblank
+        bra.b   vbl_pads
+vbl_dry:
+        clr.w   SGB_HON                 /* SONIC REV R4D: the planes off - no water line (no VDP: the */
+        clr.w   SGB_WON                 /* command loop may be using it; the listener's VDP set-up    */
+        clr.w   SGB_WLINE               /* turns the H-int off)                                        */
 vbl_pads:
 
         pea     0.w
@@ -1560,18 +1584,120 @@ sgb_vblank:
         bsr.w   sgb_runs
         move.w  #0x8F02,(a2)
         move.w  (a0)+,d4                /* palette changes */
+        lea     SGB_NCRAM,a1            /* SONIC REV R4D: and into the normal colours' shadow */
         bra.b   5f
 4:      move.w  (a0)+,d0                /* CRAM index 0-63 */
         add.w   d0,d0
+        move.w  d0,d2
+        andi.w  #0x7E,d2
         swap    d0
         clr.w   d0
         ori.l   #0xC0000000,d0
         move.l  d0,(a2)
-        move.w  (a0)+,(a3)
+        move.w  (a0)+,d0
+        move.w  d0,(a3)
+        move.w  d0,0(a1,d2.w)
 5:      dbra    d4,4b
         clr.w   SGB_READY
         movem.l (sp)+,d2-d4/a2-a3
 99:     rts
+
+| SONIC REV R4D: sgb_water (vertical blank, before sgb_vblank; SGB_FLAG is 1). The waiting record's water trailer (md/sgb.h,
+| from the record's end): the water line and the water colours' changes - a record without one: no water line. CRAM
+| holding the water colours (the last frame's H-int): the normal ones back (the shadow; sgb_vblank's palette changes
+| come after). Then this frame's H-int: register 10 = the water line - 1 (the H-int at that line's end), IE1 on; no water
+| line: IE1 off, register 10 = 255 (no H-int counted out while it is off: one left over would come the moment IE1 went on).
+| Uses d0-d1 / a0-a1 (saved by vblank_int).
+sgb_water:
+        tst.w   SGB_READY
+        beq.b   2f
+        lea     SGB_REC,a0
+        move.w  (a0),d0                 /* length: words after the length word */
+        cmpi.w  #SGB_RECMAX,d0
+        bhi.b   1f
+        cmpi.w  #3,d0
+        blo.b   1f
+        add.w   d0,d0
+        lea     0(a0,d0.w),a0           /* the record's last word */
+        cmpi.w  #SGB_WTAG,(a0)
+        bne.b   1f
+        move.w  -(a0),SGB_WLINE         /* W */
+        move.w  -(a0),d0                /* Q */
+        cmpi.w  #64,d0
+        bhi.b   2f
+        move.w  d0,d1
+        add.w   d1,d1
+        add.w   d1,d1
+        suba.w  d1,a0                   /* the first of the Q changes */
+        lea     SGB_WCRAM,a1
+        bra.b   11f
+10:     move.w  (a0)+,d1                /* CRAM index */
+        andi.w  #63,d1
+        add.w   d1,d1
+        move.w  (a0)+,0(a1,d1.w)        /* its water colour */
+11:     dbra    d0,10b
+        bra.b   2f
+1:      clr.w   SGB_WLINE               /* no trailer: no water line */
+2:      lea     0xC00004,a1             /* VDP control */
+        tst.w   SGB_WON
+        beq.w   3f
+        move.w  #0x8F02,(a1)
+        move.l  #0xC0000000,(a1)        /* CRAM 0 */
+        lea     SGB_NCRAM,a0
+        .rept   32
+        move.l  (a0)+,-4(a1)            /* the normal colours back */
+        .endr
+        clr.w   SGB_WON
+3:      move.w  SGB_WLINE,d0
+        beq.b   4f
+        cmpi.w  #224,d0
+        bhs.b   4f
+        subq.w  #1,d0
+        ori.w   #0x8A00,d0
+        move.w  d0,(a1)                 /* register 10: the H-int at the end of line W - 1 */
+        move.w  #0x8014,(a1)            /* register 0: IE1 on (the listener's 0x04 + bit 4) */
+        move.w  #1,SGB_HON
+        rts
+4:      tst.w   SGB_HON
+        beq.b   5f
+        move.w  #0x8004,(a1)            /* IE1 off */
+        move.w  #0x8AFF,(a1)
+        clr.w   SGB_HON
+5:      rts
+
+| SONIC REV R4D: the H-int (level 4, through 0xFFFD0C): at the water line's start, the 64 water colours into CRAM - once a
+| frame (SGB_WON), and only at or below the line (the VDP's V counter): one left over from before the vertical blank's set-up
+| comes at once (in vertical blank, or above the line) and does nothing. Not wanted (SGB_HON 0, IE1 left on by an act
+| before): IE1 off. Planes off (SGB_FLAG 0): nothing - the command loop may be using the VDP.
+hint_int:
+        move.w  #0x2700,sr
+        tst.w   SGB_FLAG
+        beq.w   9f
+        tst.w   SGB_HON
+        bne.b   1f
+        move.w  #0x8004,0xC00004        /* IE1 off */
+        move.w  #0x8AFF,0xC00004
+        rte
+1:      tst.w   SGB_WON
+        bne.w   9f                      /* this frame's water colours are in */
+        movem.l d0/a0-a1,-(sp)
+        moveq   #0,d0
+        move.b  0xC00008,d0             /* V counter */
+        cmpi.w  #0xE0,d0
+        bhs.w   8f                      /* vertical blank: left over */
+        addq.w  #1,d0
+        cmp.w   SGB_WLINE,d0
+        blo.w   8f                      /* above line W - 1: left over */
+        lea     0xC00004,a1
+        move.w  #0x8F02,(a1)
+        move.l  #0xC0000000,(a1)        /* CRAM 0 */
+        lea     SGB_WCRAM,a0
+        .rept   32
+        move.l  (a0)+,-4(a1)
+        .endr
+        move.w  #1,SGB_WON
+8:      movem.l (sp)+,d0/a0-a1
+9:      rte
 
 | a0 -> runs (count, count x {lines, value}): each value lines times into the VDP data port (a3)
 sgb_runs:

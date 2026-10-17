@@ -18,6 +18,14 @@ console should show before you burn.
 Its timing matches the console (measured on R1S): the game speed it reports is the speed you will see. With
 `-profile` it shows where the SH2's time goes (section 4).
 
+**R4D:** it runs the 32X's **second SH2** too, from its own boot-table entry (Kobo's crt0, then the loader's
+`secondary()`): both SH2s on the 32X's one bus (an access waits for the other's), each with its own registers, cache,
+divider and interrupt mask. The engine's jobs for it (the Options Menu's `2ND SH2` switch) come through the loader's
+mailbox (SDRAM `0x06001F40`); while it waits for one it is not stepped (it costs no time). `-noslave` leaves it out
+(as sh2emu before R4D). It plays the Sub-CPU's command 53 with a bank number (`SFX<n>.BIN`, the `STAGE SFX` switch)
+and the 68000's underwater colours (the records' water trailer: the water colours below the water line in `-shot`
+pictures, the normal ones above).
+
 ## 1. Build it (once)
 
 ```bash
@@ -136,7 +144,10 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `plane records` | records the SH2 sent, the 68000 took, and the VDP got. `INCLUDING A JUNK RECORD` = COMM4 held a value when the planes came on, and the 68000 took it as a record: a dot in every blank cell (R1G, R1R). Listed as the problem `JUNK-RECORD` |
 | `record contents` | a CRC of the first 600 records (option `-reccrc N`). It depends only on the pictures, not on the speed: a speed change that keeps this CRC keeps every picture the same |
 | `controller` | (R4) the pad requests (command 48) the Sub-CPU answered - one a frame |
-| `audio` | (R4) sound effects played (command 48's upper byte; the first 40 are listed as `SUB: sound effect N`) and CD audio commands (45 play, 54 stop: `SUB: CMD 45 play track N`) |
+| `audio` | (R4) sound effects played (command 48's upper byte; the first 40 are listed as `SUB: sound effect N`) and CD audio commands (45 play, 54 stop: `SUB: CMD 45 play track N`); (R4D) sound banks loaded (command 53: `SUB: CMD 53 load SFX06.BIN -> 28 effects`). An effect number the bank in the PCM chip does not have is the warning `A-SFX` |
+| `second SH2` | (R4D) the jobs it ran for the engine (the `2ND SH2` switch), its instructions outside the loader, the cycles it waited for the bus, its stack's lowest point. "waits in a loop to itself": a loader before R4D (its `secondary()` does nothing) |
+| `pictures` | (R4D) frame buffer swaps - in the 32X picture mode one a picture: how many in the run's last 10 seconds |
+| `underwater` | (R4D) frames with a water line: the 68000's H-int writes the water colours from that line down (the `UNDERWATER` switch) |
 | `frame-buffer FIFO` | (only when it happens) words the SH2 wrote to the frame buffer that were still in the 32X's 4-word write FIFO when it gave the frame buffer to the 68000. The 32X does not guarantee them |
 | `line 10 now` | what line 10 would show at the end |
 | `PROBLEMS` | **do not burn.** Each kind of problem is listed with how many times it happened and where it happened first (the function and the offset into it); R4: and the places with the most, under it |
@@ -274,6 +285,7 @@ All options go after the build folder.
 -badrun N      (R4C) the Nth fast load run (0 = the first) answers a wrong checksum: the SH2 must load those chunks
                again one by one, the old way (the summary's "chunks one by one")
 -oldsub        (R4C) the Sub-CPU as R4B's: no fast command 46 - the SH2 must load everything the old way
+-noslave       (R4D) the second SH2 not run (sh2emu as before R4D)
 -h             this list
 ```
 

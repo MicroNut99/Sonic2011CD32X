@@ -284,7 +284,7 @@ static int bios_wait_ready(unsigned int max_ticks)
                                  into ON/OFF: channels switched on/off at random and never
                                  stopped cleanly - the shot kept looping (seen in Fusion). */
 #define PCM_WAVE   0xFF2001
-#define SFX_MAX    31
+#define SFX_MAX    63         /* SONIC REV R4D: 63 (the scenes' own banks; R4C 31 - KOBOSFX.BIN has 23) */
 typedef struct { uint8_t st, vol; uint16_t fd, loop, len; } sfx_t;
 static sfx_t sfx_tab[SFX_MAX + 1];            /* [1..count] */
 static int sfx_count = 0;
@@ -312,21 +312,35 @@ static void pcm_play(int id) {
     write_byte(PCM_ONOFF, pcm_onoff);
 }
 
-/* CMD 53: KOBOSFX.BIN -> PCM wave RAM.  Returns the number of effects (0 = failed). */
-static int pcm_load(void) {
-    int64_t fi = scd_open_file("KOBOSFX.BIN");
-    uint32_t len, lba, nsec, img, i, b;
+/* CMD 53: KOBOSFX.BIN -> PCM wave RAM.  Returns the number of effects (0 = failed).
+   SONIC REV R4D: bank (COMM2) 0 = KOBOSFX.BIN, 1-99 = SFX<bank>.BIN (a scene's own effects, tools/build_audio.py).
+   The table's 8-byte rows follow the 8-byte header; the image starts at the next 256 bytes ((8 + n * 8 + 255) & ~255:
+   256 for KOBOSFX.BIN, as before).  A file that is not there or not right changes nothing (0): the chip keeps what
+   it had. */
+static char pcm_bank_name[] = "SFX00.BIN";
+static int pcm_load(int bank) {
+    int64_t fi;
+    uint32_t len, lba, nsec, img, hdr, i, b, n;
     volatile uint8_t *buf = (volatile uint8_t *)0x0C0000;   /* Sub-CPU's Word RAM bank */
+    if (bank > 0 && bank < 100) {
+        pcm_bank_name[3] = (char)('0' + bank / 10);
+        pcm_bank_name[4] = (char)('0' + bank % 10);
+        fi = scd_open_file(pcm_bank_name);
+    } else
+        fi = scd_open_file("KOBOSFX.BIN");
     if (fi < 0) return 0;
     len = (uint32_t)(fi >> 32); lba = (uint32_t)(fi & 0xFFFFFFFF);
     nsec = (len + 2047) / 2048;
     if (nsec > 48) nsec = 48;
     scd_sub_read((void *)0x0C0000, lba, nsec);
     if (buf[0] != 'K' || buf[1] != 'S' || buf[2] != 'F' || buf[3] != 'X') return 0;
-    sfx_count = (buf[4] << 8) | buf[5];
+    n = (uint32_t)((buf[4] << 8) | buf[5]);
     img = (uint32_t)((buf[6] << 8) | buf[7]);
     if (img == 0) img = 65536;
-    if (sfx_count > SFX_MAX) sfx_count = SFX_MAX;
+    if (n == 0 || n > SFX_MAX) return 0;
+    hdr = (8 + n * 8 + 255) & ~255u;
+    if (hdr + img > nsec * 2048) return 0;                    /* (a short file: not loaded) */
+    sfx_count = (int)n;
     for (i = 0; i < (uint32_t)sfx_count; i++) {
         volatile uint8_t *t = buf + 8 + i * 8;
         sfx_tab[i + 1].st = t[0]; sfx_tab[i + 1].vol = t[1];
@@ -340,7 +354,7 @@ static int pcm_load(void) {
         write_byte(PCM_CTRL, (uint8_t)b);                      /* sound off, wave bank b */
         for (i = 0; i < 4096; i++) {
             uint32_t a = b * 4096 + i;
-            write_byte(PCM_WAVE + 2 * i, a < img ? buf[256 + a] : 0xFF);   /* unused = stop */
+            write_byte(PCM_WAVE + 2 * i, a < img ? buf[hdr + a] : 0xFF);   /* unused = stop */
         }
     }
     write_byte(PCM_CTRL, 0x80);                                /* sound on */
@@ -976,8 +990,9 @@ int main(void)
         }
         else if (cmd == 53) {
             /* K33 - CMD 53 "load sound effects": KOBOSFX.BIN -> PCM chip.  Reply in COMM12:
-               number of effects (0 = failed). */
-            int nfx = pcm_load();
+               number of effects (0 = failed).  SONIC REV R4D: COMM2 = the bank (0 KOBOSFX.BIN, n SFX<n>.BIN) */
+            int bank = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 0xFF;
+            int nfx = pcm_load(bank);
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, nfx);
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
         }

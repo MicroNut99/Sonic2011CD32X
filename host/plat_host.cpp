@@ -19,6 +19,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> // REV R4D: strcasecmp
 
 // the Mega Drive plane check (md_check.cpp)
 void md_check_init();
@@ -573,6 +574,26 @@ static int pmScan[6 * 224];
 static void pm_trace_face(const void *v, int sheetID);
 #define PM_HOOK_TEXFACE(v, sheet) pm_trace_face((v), (sheet))
 #define PM_SKY_FLIPY 224 /* the engine's own (224 lines: not quite the flipped row), so the PC check compares exactly */
+// REV R4D: SCD32X_PMSPLIT=1 - each draw call the console shares with its second SH2 drawn as the two halves (the other
+// SH2's first, then this one's): the halves must make the same picture
+static int pm_split_on()
+{
+    static int on = -1;
+    if (on < 0)
+        on = getenv("SCD32X_PMSPLIT") && atoi(getenv("SCD32X_PMSPLIT")) > 0;
+    return on;
+}
+static unsigned long pmSplitCalls = 0;
+#define PM_SPLIT(fn, job)                                                                                               \
+    do {                                                                                                                \
+        if (pm_split_on()) {                                                                                            \
+            pmSplitCalls++;                                                                                             \
+            fn(job, 1, 2);                                                                                              \
+            fn(job, 0, 2);                                                                                              \
+        }                                                                                                               \
+        else                                                                                                            \
+            fn(job, 0, 1);                                                                                              \
+    } while (0)
 #include "../cd32x/engine/scd_pm.h"
 static void pm_check_init()
 {
@@ -892,8 +913,9 @@ static void pm_check_frame(const unsigned short *frame, int pitch)
         pm_save_png(path, pmBuf[pmCur], NULL);
     }
     if (frameCount % 600 == 599)
-        fprintf(pmCheckLog, "%u ... %lu picture frames, %lu with differences (%lu pixels); %lu pixels approximated (%lu of them differ)\n",
-                frameCount, pmFrames, pmBadFrames, pmBadPixels, pmApxPixels, pmApxDiffer);
+        fprintf(pmCheckLog, "%u ... %lu picture frames, %lu with differences (%lu pixels); %lu pixels approximated (%lu of them differ)%s\n",
+                frameCount, pmFrames, pmBadFrames, pmBadPixels, pmApxPixels, pmApxDiffer,
+                pmSplitCalls ? "; draw calls in two halves (SCD32X_PMSPLIT)" : "");
     if (frameCount % 600 == 599) { /* which draw calls' pixels show (1 clear, 2 sprite, 3 scaled, 4 rotozoom, 5 rect, 6 face,
                                       7 textured face, 8 3D scene, 9 floor, 10+ the layer slots) */
         fprintf(pmCheckLog, "  pixels written / shown by draw call:");
@@ -1052,10 +1074,36 @@ void plat_music_play(const char *fileName, int loop, unsigned int loopPoint)
     ev("MUSIC %s loop=%d point=%u", fileName, loop, loopPoint);
 }
 void plat_music_stop() {}
+#if __has_include("../engine/SFXBank.inc")
+struct ScdSfx {
+    const char *name;
+    unsigned char id;
+};
+#include "../engine/SFXBank.inc"
+#endif
+static int sfxSceneBank = 0, sfxSceneList = 0, sfxScenePos = 0; // REV R4D: the bank the console loads for the scene
+static void sfx_scene_loading()
+{
+#ifdef SCD_SFX_BANKS
+    sfxSceneList = activeStageList, sfxScenePos = stageListPosition;
+    sfxSceneBank = activeStageList >= 0 && activeStageList < 4 && stageListPosition >= 0 && stageListPosition < 0x80
+                       ? scdSfxScene[activeStageList][stageListPosition] : 0;
+#endif
+}
 void plat_sfx_play(int sfx, int loop)
 {
     hostInit();
     ev("SFX %d %s%s", sfx, sfxList[sfx].name, loop ? " loop" : "");
+#ifdef SCD_SFX_BANKS
+    // REV R4D: the scene's own bank (the STAGE SFX switch on, tools/build_audio.py: the bank the console loaded with the
+    // scene - audio_before_load) has it?
+    int bank = sfxSceneBank, id = 0;
+    for (int i = 0; i < SCD_SFX_NAMES; ++i)
+        if (!strcasecmp(sfxList[sfx].name, scdSfxNames[i]))
+            id = scdSfxBankMap[bank][i];
+    if (!id)
+        ev("SFXBANK-MISS %s (scene %d:%d, bank %d)", sfxList[sfx].name, sfxSceneList, sfxScenePos, bank);
+#endif
 }
 
 static size_t sfxBytes = 0;
@@ -1195,6 +1243,7 @@ bool plat_stage_loading()
     const char *in = getenv("SCD32X_CARTIMG_IN");
     if (in && *in && !cart_read(in, cartLoads))
         ev("PORT32X: no cart image for stage load %d (kept the previous one)", cartLoads);
+    sfx_scene_loading(); // REV R4D
     pm_check_init(); // REV R4C: the 32X picture mode in the presentation and special stage lists (as the console's images)
     /* (the SH2 configuration always: its drawing is the picture mode's, as on the console) */
     scdPicture = (pmCheckOn || SCD32X_NODRAW) && (activeStageList == STAGELIST_PRESENTATION || activeStageList == STAGELIST_SPECIAL);

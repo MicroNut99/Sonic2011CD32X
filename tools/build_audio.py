@@ -45,6 +45,7 @@ EFFECTS = [("Global/Ring.wav", 11000, 0.40, 0xC0), ("Global/Jump.wav", 11000, 0.
            ("Global/MenuButton.wav", 8000, 0.20, 0xB0), ("Global/Select.wav", 8000, 0.35, 0xB0)]
 PCM_CLOCK = 32552.0  # the RF5C164's rate at step 0x800 (12.5 MHz / 384)
 PAGE, TAIL, RAM = 256, 16, 65536
+MAX_FX = 63  # REV R4D: the Sub-CPU's table (sub_main.c SFX_MAX; R4C: 31 - KOBOSFX.BIN has 23, its header is 256 bytes as before)
 
 
 def samples_of(data):
@@ -95,9 +96,13 @@ def sign_magnitude(v):
     return (0x80 | m) if v >= 0 else m
 
 
-def build_sfx(pk, out_dir):
+def make_bank(pk, effects, min_rate_of=None):
+    """the 64 KB wave-RAM image of these effects (name, rate Hz, longest seconds, volume): all rates scaled down
+    together until it fits -> (KSFX blob, table, scale, left out). min_rate_of: (rate, count) - REV R4D: while the
+    effects of 8000 Hz would play below rate, the last count effects are left out one at a time (a scene's long list).
+    The blob: 'KSFX', u16 effects n, u16 image bytes (0: 64 KB), n x 8 bytes, zeros to the next 256 bytes, the image"""
     clips = []
-    for name, rate, secs, vol in EFFECTS:
+    for name, rate, secs, vol in effects:
         d = pk.read("Data/SoundFX/" + name)
         if d is None:
             print("  (no Data/SoundFX/%s - left out)" % name)
@@ -114,19 +119,28 @@ def build_sfx(pk, out_dir):
             g = min(0.98 / peak, 4.0)
             a = [v * g for v in a]
         clips.append((name, a, r, rate, vol))
-    scale = 1.0
+    dropped = []
     while True:
-        total, plan = 0, []
-        for name, a, r, rate, vol in clips:
-            fd = max(1, int(round(rate * scale * 2048 / PCM_CLOCK)))
-            play = fd * PCM_CLOCK / 2048  # the rate the chip plays at this step: the sample is made at exactly it
-            n = max(1, int(len(a) * play / r))
-            need = ((n + TAIL + 1 + PAGE - 1) // PAGE) * PAGE
-            plan.append((name, a, r, fd, play, vol, n))
-            total += need
-        if total <= RAM:
+        scale = 1.0
+        while True:
+            total, plan = 0, []
+            for name, a, r, rate, vol in clips:
+                fd = max(1, int(round(rate * scale * 2048 / PCM_CLOCK)))
+                play = fd * PCM_CLOCK / 2048  # the rate the chip plays at this step: the sample is made at exactly it
+                n = max(1, int(len(a) * play / r))
+                need = ((n + TAIL + 1 + PAGE - 1) // PAGE) * PAGE
+                plan.append((name, a, r, fd, play, vol, n))
+                total += need
+            if total <= RAM and len(plan) <= MAX_FX:
+                break
+            if total <= RAM:  # (too many: only dropping helps)
+                scale = 0.0
+                break
+            scale *= 0.99  # (fine steps: as much of the 64 KB as fits)
+        if not min_rate_of or (scale * 8000 >= min_rate_of[0] and scale > 0) or min_rate_of[1] <= 0:
             break
-        scale *= 0.99  # (fine steps: as much of the 64 KB as fits)
+        dropped.append(clips.pop()[0])  # the list's last (a stage effect)
+        min_rate_of = (min_rate_of[0], min_rate_of[1] - 1)
     image, table = bytearray(), []
     for name, a, r, fd, play, vol, n in plan:
         page = len(image) // PAGE
@@ -137,22 +151,104 @@ def build_sfx(pk, out_dir):
         image += bytes([0x80]) * TAIL + b"\xff"
         image += b"\xff" * ((-len(image)) % PAGE)
         table.append((page, vol, fd, loop & 0xFFFF, (loop - start) & 0xFFFF, name, play, len(s) / play))
-    assert len(image) <= RAM and len(table) <= 31
+    assert len(image) <= RAM and len(table) <= MAX_FX
     blob = bytearray(b"KSFX" + struct.pack(">HH", len(table), len(image) & 0xFFFF))
     for page, vol, fd, loop, length, name, play, dur in table:
         blob += struct.pack(">BBHHH", page, vol, fd, loop, length)
-    blob += bytes(0x100 - len(blob))
+    blob += bytes((-len(blob)) % 0x100)  # (the Sub-CPU: the image at (8 + n * 8 + 255) & ~255)
     blob += image
+    return blob, table, scale, dropped
+
+
+# REV R4D: the scenes' own banks (the Options Menu's STAGE SFX switch; off: KOBOSFX.BIN everywhere, as R4C). Each scene
+# gets the shared effects its kind of scene plays and its own (StageConfig.bin), at most STAGE_SECS[list] each; a scene
+# with a long list (the sound test's) leaves its last ones out while the rates would fall below MIN_RATE. Scenes with
+# the same list share a bank: SFX01.BIN, SFX02.BIN ... (the Sub-CPU's command 53 with the bank number). In the acts the
+# longest shared effects are cut shorter than in KOBOSFX.BIN (room for the stage's own).
+ACT_CUT = {"Global/TimeWarp.wav": 0.70, "Global/LoseRings.wav": 0.60, "Global/Release.wav": 0.60, "Global/Charge.wav": 0.55}
+ACT_SHARED = [(n, r, ACT_CUT.get(n, s), v) for n, r, s, v in EFFECTS if n not in ("Global/MenuButton.wav", "Global/Select.wav")] + [
+    ("Global/SpecialRing.wav", 8000, 0.60, 0xD0), ("Global/SpecialWarp.wav", 8000, 0.60, 0xD0)]
+SS_SHARED = [("Global/Ring.wav", 11000, 0.40, 0xC0), ("Global/Jump.wav", 11000, 0.33, 0xC0), ("Global/ScoreAdd.wav", 8000, 0.10, 0xB0),
+             ("Global/ScoreTotal.wav", 8000, 0.40, 0xC0), ("Global/Explosion.wav", 8000, 0.45, 0xE0),
+             ("Global/1Up.wav", 8000, 0.42, 0xC0), ("Global/SpecialWarp.wav", 8000, 0.80, 0xD0)]
+MENU_SHARED = [("Global/MenuButton.wav", 8000, 0.20, 0xB0), ("Global/Select.wav", 8000, 0.35, 0xB0)]
+STAGE_RATE, STAGE_VOL, MIN_RATE = 8000, 0xD0, 4000
+STAGE_SECS = {0: 3.0, 1: 0.40, 3: 1.20}  # the menus' few effects (the title's "SEGA") whole; the acts' cut short
+
+
+def scene_lists(pk):
+    """GameConfig.bin's stage lists -> {list: [(folder, its StageConfig's effect names)]}"""
+    import scd_report as sr
+    gc = sr.parse_gameconfig(pk.read("Data/Game/GameConfig.bin"))
+    out = {}
+    for cat in (0, 1, 3):
+        rows = []
+        for folder, sid, name in gc["lists"].get(cat, []):
+            d = pk.read("Data/Stages/%s/StageConfig.bin" % folder)
+            sfx = list(dict.fromkeys(sr.parse_stageconfig(d)[2])) if d else []
+            rows.append((folder, sfx))
+        out[cat] = rows
+    return out
+
+
+def build_sfx(pk, out_dir):
+    blob, table, scale, _ = make_bank(pk, EFFECTS)
     open(os.path.join(out_dir, "KOBOSFX.BIN"), "wb").write(blob)
+    print("KOBOSFX.BIN: %d effects, %d of %d bytes of wave RAM (rates x %.2f)" % (len(table), len(blob) - 0x100, RAM, scale))
+    for k, (page, vol, fd, loop, length, name, play, dur) in enumerate(table):
+        print("  %2d %-24s %6.0f Hz (step 0x%04X)  %.2f s" % (k + 1, name, play, fd, dur))
+    # REV R4D: the scenes' banks
+    for f in os.listdir(out_dir):
+        if f.startswith("SFX") and f.endswith(".BIN"):
+            os.remove(os.path.join(out_dir, f))
+    banks, bank_tables, scene_bank, notes = {}, [table], {}, []
+    for cat, rows in scene_lists(pk).items():
+        shared = ACT_SHARED if cat == 1 else SS_SHARED if cat == 3 else MENU_SHARED
+        for pos, (folder, sfx) in enumerate(rows):
+            secs = STAGE_SECS[cat] if len(sfx) <= 8 else STAGE_SECS[1]  # (a long list: as an act's)
+            effs = list(shared) + [(n, STAGE_RATE, secs, STAGE_VOL) for n in sfx if n not in [e[0] for e in shared]]
+            key = tuple(effs)
+            if key not in banks:
+                if len(banks) >= 99:
+                    scene_bank[(cat, pos)] = 0
+                    continue
+                b, t, sc, dropped = make_bank(pk, effs, (MIN_RATE, len(effs) - len(shared)))
+                n = len(banks) + 1
+                open(os.path.join(out_dir, "SFX%02d.BIN" % n), "wb").write(b)
+                banks[key] = n
+                bank_tables.append(t)
+                notes.append("SFX%02d.BIN: %s (%d:%d) - %d effects, rates x %.2f (%.0f Hz)%s" % (
+                    n, folder, cat, pos, len(t), sc, 8000 * sc, "; left out: " + ", ".join(dropped) if dropped else ""))
+            scene_bank[(cat, pos)] = banks[key]
+    names = []
+    for t in bank_tables:
+        for row in t:
+            if row[5] not in names:
+                names.append(row[5])
     with open(os.path.join(ROOT, "engine", "SFXBank.inc"), "w") as f:
         f.write("// REV R4: the sound effects in KOBOSFX.BIN (tools/build_audio.py) - made from the game's data, not published\n")
         f.write("static const ScdSfx scdSfxBank[] = {\n")
         for k, (page, vol, fd, loop, length, name, play, dur) in enumerate(table):
             f.write('    { "%s", %d }, /* %.0f Hz (step 0x%04X), %.2f s */\n' % (name, k + 1, play, fd, dur))
         f.write("};\nstatic const int scdSfxBankCount = %d;\n" % len(table))
-    print("KOBOSFX.BIN: %d effects, %d of %d bytes of wave RAM (rates x %.2f)" % (len(table), len(image), RAM, scale))
-    for k, (page, vol, fd, loop, length, name, play, dur) in enumerate(table):
-        print("  %2d %-24s %6.0f Hz (step 0x%04X)  %.2f s" % (k + 1, name, play, fd, dur))
+        f.write("// REV R4D: every scene's own bank (SFX<nn>.BIN; 0: KOBOSFX.BIN) - the effects' names, the scenes' banks,\n")
+        f.write("// each bank's effect number of each name (0: not in it)\n")
+        f.write("#define SCD_SFX_BANKS %d\n#define SCD_SFX_NAMES %d\n" % (len(bank_tables), len(names)))
+        f.write("static const char *const scdSfxNames[SCD_SFX_NAMES] = {\n")
+        for n in names:
+            f.write('    "%s",\n' % n)
+        f.write("};\nstatic const unsigned char scdSfxScene[4][0x80] = {\n")
+        for cat in range(4):
+            vals = [scene_bank.get((cat, pos), 0) for pos in range(0x80)]
+            f.write("    { %s },\n" % ", ".join(str(v) for v in vals))
+        f.write("};\nstatic const unsigned char scdSfxBankMap[SCD_SFX_BANKS][SCD_SFX_NAMES] = {\n")
+        for t in bank_tables:
+            ids = {row[5]: k + 1 for k, row in enumerate(t)}
+            f.write("    { %s },\n" % ", ".join(str(ids.get(n, 0)) for n in names))
+        f.write("};\n")
+    print("scene banks: %d files (SFX01.BIN - SFX%02d.BIN), %d effect names" % (len(banks), len(banks), len(names)))
+    for n in notes:
+        print("  " + n)
 
 
 def build_music(pk, out_dir, max_minutes):
