@@ -78,6 +78,23 @@ longer than 8 frames, the menu repeats it) - and `S`. Each key as `FRAME:KEY,FRA
 (the 15th act, 14 `D`s) as Sonic:
 `-f 3000 -pad "600:D,610:-,620:D,630:-,640:A,650:-,660:U,670:-,680:A,690:-,700:A,710:-,720:D,730:-,740:A,750:-,760:D,764:-,770:D,774:-,780:D,784:-,790:D,794:-,800:D,804:-,810:D,814:-,820:D,824:-,830:D,834:-,840:D,844:-,850:D,854:-,860:D,864:-,870:D,874:-,880:D,884:-,890:D,894:-,900:S,910:-"`
 
+**R4C builds boot into the game's own title screen** (the scene `L0S000.IMG`, at about frame 370; the main menu at
+about 1570). This pad presses Start on the title, then A on `START GAME`, on the first save file and on Sonic -
+Palmtree Panic 1 loads at about frame 3830 and the act starts (nothing moves Sonic: the act's own start, the HUD's
+clock running). **This is the R4C check before burning**; `-bram` gives the run a backup RAM file (made if it is
+not there): `backup RAM ... 1 saves` in the summary is the new game's save (`SONICCD32X_`, 512 bytes):
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 6000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -bram /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+```
+
+In the scenes the 32X draws itself (R4C's picture mode: the title, the menus, time attack, the special stages)
+`-shot` saves the 32X picture; in the acts, the Genesis picture as before. The Options Menu of R4A / R4B is A + B + C
++ Start from anywhere: e.g. `1300:ABCS,1320:-` on the title (it shows at about frame 1400), then the R4B menu's keys
+as above (`D`, `A`, `D` for the `SPECIAL` list, `A`, `S`: the first special stage at about frame 1720).
+
 The build folder must hold:
 
 - `SCDSH2.BIN`, `sh2.map`, `engine.map` and `engine_symbols.txt`;
@@ -124,7 +141,7 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `line 10 now` | what line 10 would show at the end |
 | `PROBLEMS` | **do not burn.** Each kind of problem is listed with how many times it happened and where it happened first (the function and the offset into it); R4: and the places with the most, under it |
 | `warnings` | reads of memory nothing has written; worth a look, not a reason to stop. About 116 in `scd_fopen` / `LoadFile` at start-up are normal (local variables read before they are set, in code the console has always run); millions are not (R4: the foreground's line scroll entries) |
-| `information` | normal register traffic, and the engine's expected writes into the loader's area (`W-SAMPLING`: the sampler switch, `W-VECTOR`: its exception handlers, `W-BOOTREC` (R3): the number of the scene image now in the cart, after a scene change), listed for reference |
+| `information` | normal register traffic, and the engine's expected writes into the loader's area (`W-SAMPLING`: the sampler switch, `W-VECTOR`: its exception handlers, `W-BOOTREC` (R3): the number of the scene image now in the cart, after a scene change; `DIVU` (R4C): the 32X picture mode's divisions on the SH2's own divider, 39 cycles each), listed for reference |
 | `VERDICT` | `no problems found` = safe to burn as far as the SH2 and the plane records go |
 
 Emulated time is counted in frames: 60 frames are 1 second on the console.
@@ -252,6 +269,11 @@ All options go after the build folder.
 -fbread N      frame buffer read cost (default 8); -k68word N the 68000's cycles per record word (default 75)
 -nofifo        no frame-buffer write FIFO model; -fbword N = SH2 cycles per FIFO word (default 5)
 -novbistop     keep running after line 10 freezes
+-bram FILE     (R4C) the backup RAM's SONICCD32X_ file (512 bytes): read by command 56, written by command 59, kept in
+               FILE between runs (a power cycle with the save in place); no FILE yet: an empty backup RAM
+-badrun N      (R4C) the Nth fast load run (0 = the first) answers a wrong checksum: the SH2 must load those chunks
+               again one by one, the old way (the summary's "chunks one by one")
+-oldsub        (R4C) the Sub-CPU as R4B's: no fast command 46 - the SH2 must load everything the old way
 -h             this list
 ```
 

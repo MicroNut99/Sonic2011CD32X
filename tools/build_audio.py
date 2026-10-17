@@ -40,7 +40,9 @@ EFFECTS = [("Global/Ring.wav", 11000, 0.40, 0xC0), ("Global/Jump.wav", 11000, 0.
            ("Global/SignPost.wav", 8000, 0.60, 0xC0), ("Global/ScoreAdd.wav", 8000, 0.10, 0xB0),
            ("Global/ScoreTotal.wav", 8000, 0.40, 0xC0), ("Global/Explosion.wav", 8000, 0.45, 0xE0),
            ("Global/1Up.wav", 8000, 0.42, 0xC0), ("Global/Flying.wav", 8000, 0.20, 0xA0),
-           ("Global/Tired.wav", 8000, 0.20, 0xA0)]
+           ("Global/Tired.wav", 8000, 0.20, 0xA0),
+           # REV R4C: the game's own menus (the title, the main menu, save select, time attack): the cursor and the choice
+           ("Global/MenuButton.wav", 8000, 0.20, 0xB0), ("Global/Select.wav", 8000, 0.35, 0xB0)]
 PCM_CLOCK = 32552.0  # the RF5C164's rate at step 0x800 (12.5 MHz / 384)
 PAGE, TAIL, RAM = 256, 16, 65536
 
