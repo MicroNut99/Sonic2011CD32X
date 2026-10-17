@@ -13,8 +13,11 @@ extern "C" {
 #include "../md/md_planes.h"
 #include "../md/md_record.h"
 #include "../md/sgb.h"
+#include "../md/md_sprites.h"
+#include "../md/md_sprites.c" // REV R3: compiled here (no Makefile change)
 }
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <map>
 #include <set>
@@ -72,6 +75,9 @@ struct Stage {
     std::vector<bool> tileUsed;
     std::vector<std::vector<uint16_t>> layoutSnap;   // per layer, at conversion
     int animUpdates = 0, animCells = 0, layoutChanges = 0;
+    std::set<int> palCycles;  // REV R3: engine palette indices whose colour changed in the stage's first frames
+    std::vector<ushort> pal0; // ... compared with this
+    int palWatch = 0;         // frames left before the act's file (sprite pack) is made
 };
 Stage st;
 MdPlane planeA, planeB;
@@ -655,8 +661,493 @@ int plane_pixel(uint16_t nameBase, int16_t hs, uint16_t vs, int x, int y)
 //   SCD32X_SGBTEST=1      every frame: stream both planes with md_planes.c from the MDG FILE's tables (as
 //                         the SH2 does), build the record (sgb_out_*), apply it to a second VRAM model
 //                         with sgb_apply (what the 68000 does) and compare that picture with the engine's
+// ---------------------------------------------------------------- REV R3: the act's sprite pack (md/md_sprites.h)
+// Every sprite frame the act's objects and animation files define, as the Genesis draws them: the frame's opaque
+// box in 4bpp cells on one palette line, cut into hardware sprites of up to 4 x 4 cells. The sprite colours go into
+// the palette lines' free slots (line 3 is free in Palmtree Panic 1; the level's lines have a few); a frame whose
+// colours fit no line is drawn with the nearest colours of the line that fits it best (counted as "remapped").
+// Frames the animations rotate are drawn on the PC by the engine's own DrawSpriteRotated for each direction and
+// quarter turn (and the pivot one pixel off in x and in y, for how the picture follows the pivot).
+struct SprImg {
+    int w = 0, h = 0;
+    std::vector<uint8_t> px; // engine palette indices, 0 = transparent
+    bool operator==(const SprImg &o) const { return w == o.w && h == o.h && px == o.px; }
+};
+struct SprPiece {
+    int cx, cy, size, cell;
+};
+struct SprSet {
+    SprImg img;
+    int sheet = 0, line = 3, cw = 0, ch = 0;
+    bool player = false, remapped = false;
+    std::vector<uint8_t> cells; // 32 bytes each, pieces' cells column by column
+    std::vector<SprPiece> pieces;
+};
+struct SprCombo {
+    int set = 0, flips = 0, ox = 0, oy = 0, kxx = 0, kxy = 0, kyx = 0, kyy = 0;
+};
+struct SprFrame {
+    int sheet, sx, sy, w, h;
+    int set = 0, bx = 0, by = 0, cw = 0, ch = 0;
+    bool rotates = false;
+    int pivotX = 0, pivotY = 0; // the rotation table's pivot arguments
+    int rot = -1;               // rotation table
+};
+struct SprPack {
+    std::vector<SprFrame> frames;
+    std::vector<SprSet> sets;
+    std::vector<std::array<SprCombo, 8>> rots;
+    int remapped = 0, cells = 0, pieces = 0;
+    double palError = 0;
+    std::vector<uint8_t> bytes;
+};
+
+SprImg spr_rect(int sheet, int sx, int sy, int w, int h)
+{
+    SprImg m;
+    m.w = w, m.h = h;
+    m.px.assign(w * h, 0);
+    const GFXSurface &s = gfxSurface[sheet];
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            if (sx + x < s.width && sy + y < s.height)
+                m.px[y * w + x] = graphicData[s.dataPosition + (sy + y) * s.width + sx + x];
+    return m;
+}
+// the opaque box (b = x, y, w, h); empty image -> w = 0
+SprImg spr_crop(const SprImg &m, int b[4])
+{
+    int x0 = m.w, y0 = m.h, x1 = -1, y1 = -1;
+    for (int y = 0; y < m.h; ++y)
+        for (int x = 0; x < m.w; ++x)
+            if (m.px[y * m.w + x]) {
+                x0 = std::min(x0, x), x1 = std::max(x1, x);
+                y0 = std::min(y0, y), y1 = std::max(y1, y);
+            }
+    SprImg c;
+    if (x1 < 0) {
+        b[0] = b[1] = b[2] = b[3] = 0;
+        return c;
+    }
+    b[0] = x0, b[1] = y0, b[2] = x1 - x0 + 1, b[3] = y1 - y0 + 1;
+    c.w = b[2], c.h = b[3];
+    c.px.resize(c.w * c.h);
+    for (int y = 0; y < c.h; ++y)
+        for (int x = 0; x < c.w; ++x) c.px[y * c.w + x] = m.px[(y0 + y) * m.w + x0 + x];
+    return c;
+}
+SprImg spr_flip(const SprImg &m, int flips)
+{
+    SprImg f = m;
+    for (int y = 0; y < m.h; ++y)
+        for (int x = 0; x < m.w; ++x)
+            f.px[y * m.w + x] = m.px[((flips & 2) ? m.h - 1 - y : y) * m.w + ((flips & 1) ? m.w - 1 - x : x)];
+    return f;
+}
+// the engine's DrawSpriteRotated, drawn into a scratch frame with the identity palette: the picture (cropped) and
+// where its box lies on the screen
+SprImg spr_capture(const SprFrame &f, int dir, int rot, int px, int py, int cx, int cy, int &L, int &T)
+{
+    static std::vector<ushort> buf;
+    buf.assign((size_t)GFX_LINESIZE * SCREEN_YSIZE, 0);
+    static ushort savePal[PALETTE_COUNT][PALETTE_SIZE];
+    static byte saveLines[SCREEN_YSIZE];
+    memcpy(savePal, fullPalette, sizeof(savePal));
+    memcpy(saveLines, gfxLineBuffer, sizeof(saveLines));
+    for (int b = 0; b < PALETTE_COUNT; ++b)
+        for (int i = 0; i < PALETTE_SIZE; ++i) fullPalette[b][i] = (ushort)i;
+    memset(gfxLineBuffer, 0, sizeof(saveLines));
+    ushort *fb         = Engine.frameBuffer;
+    ushort *ap         = activePalette;
+    Engine.frameBuffer = buf.data();
+    DrawSpriteRotated(dir, cx, cy, px, py, f.sx, f.sy, f.w, f.h, rot, f.sheet);
+    Engine.frameBuffer = fb;
+    activePalette      = ap;
+    memcpy(fullPalette, savePal, sizeof(savePal));
+    memcpy(gfxLineBuffer, saveLines, sizeof(saveLines));
+    SprImg full;
+    full.w = SCREEN_XSIZE, full.h = SCREEN_YSIZE;
+    full.px.resize(full.w * full.h);
+    for (int y = 0; y < SCREEN_YSIZE; ++y)
+        for (int x = 0; x < SCREEN_XSIZE; ++x) full.px[y * full.w + x] = (uint8_t)buf[(size_t)y * GFX_LINESIZE + x];
+    int b[4];
+    SprImg c = spr_crop(full, b);
+    L = b[0], T = b[1];
+    return c;
+}
+inline int g9_of(int idx) { return rgb9_of565(fullPalette[0][idx]); }
+inline int g9_dist(int a, int b)
+{
+    int dr = (a >> 6 & 7) - (b >> 6 & 7), dg = (a >> 3 & 7) - (b >> 3 & 7), db = (a & 7) - (b & 7);
+    return dr * dr * 3 + dg * dg * 4 + db * db * 2;
+}
+
+SprPack spr;
+
+void spr_build()
+{
+    spr = SprPack();
+    std::map<std::array<int, 5>, int> byKey;
+    auto add = [&](int sheet, const SpriteFrame &sf, bool rotates, bool player) {
+        if (sheet < 0 || sheet >= SURFACE_COUNT || sf.width <= 0 || sf.height <= 0 || sf.width > 255 || sf.height > 255)
+            return;
+        std::array<int, 5> k = { sheet, sf.sprX, sf.sprY, sf.width, sf.height };
+        auto it              = byKey.find(k);
+        if (it != byKey.end()) {
+            SprFrame &f = spr.frames[it->second];
+            if (rotates && !f.rotates)
+                f.rotates = true, f.pivotX = -sf.pivotX, f.pivotY = -sf.pivotY;
+            if (player)
+                spr.sets[f.set].player = true;
+            return;
+        }
+        SprFrame f;
+        f.sheet = sheet, f.sx = sf.sprX, f.sy = sf.sprY, f.w = sf.width, f.h = sf.height;
+        f.rotates = rotates;
+        f.pivotX = -sf.pivotX, f.pivotY = -sf.pivotY;
+        int b[4];
+        SprSet s;
+        s.img    = spr_crop(spr_rect(sheet, f.sx, f.sy, f.w, f.h), b);
+        s.player = player;
+        s.sheet  = sheet;
+        f.bx = b[0], f.by = b[1];
+        f.set = (int)spr.sets.size();
+        spr.sets.push_back(s);
+        byKey[k] = (int)spr.frames.size();
+        spr.frames.push_back(f);
+    };
+    // the animation files' frames (the player first: its colours lead the palette); rotation styles other than none
+    for (int a = 0; a < ANIFILE_COUNT; ++a) {
+        AnimationFile &af = animationFileList[a];
+        if (!af.fileName[0])
+            continue;
+        bool player = strstr(af.fileName, "Sonic") || strstr(af.fileName, "Tails") || strstr(af.fileName, "Knuckles");
+        for (int n = 0; n < af.animCount; ++n) {
+            SpriteAnimation &an = animationList[af.aniListOffset + n];
+            int count           = an.frameCount * (an.rotationStyle == ROTSTYLE_STATICFRAMES ? 2 : 1);
+            for (int i = 0; i < count && an.frameListOffset + i < animFrameCount; ++i) {
+                SpriteFrame &sf = animFrames[an.frameListOffset + i];
+                add(sf.sheetID, sf, an.rotationStyle != ROTSTYLE_NONE, player);
+            }
+        }
+    }
+    // the objects' frames: the sheet is the object type's
+    for (int t = 0; t < OBJECT_COUNT; ++t) {
+        ObjectScript &os = objectScriptList[t];
+        for (int i = 0; i < os.frameCount && os.frameListOffset + i < scriptFrameCount; ++i)
+            add(os.spriteSheetID, scriptFrames[os.frameListOffset + i], false, false);
+    }
+    // rotations: the engine's own drawing, 2 directions x 4 quarter turns, the pivot as captured and one pixel off
+    const int CX = SCREEN_XSIZE / 2, CY = SCREEN_YSIZE / 2;
+    for (SprFrame &f : spr.frames) {
+        if (!f.rotates)
+            continue;
+        std::array<SprCombo, 8> t;
+        std::vector<int> mine = { f.set }; // the sets this frame's turns are drawn with
+        for (int c = 0; c < 8; ++c) {
+            int dir = c >> 2, rot = (c & 3) * 0x80, L, T, L1, T1, L2, T2;
+            SprImg m  = spr_capture(f, dir, rot, f.pivotX, f.pivotY, CX, CY, L, T);
+            SprImg m1 = spr_capture(f, dir, rot, f.pivotX + 1, f.pivotY, CX, CY, L1, T1);
+            SprImg m2 = spr_capture(f, dir, rot, f.pivotX, f.pivotY + 1, CX, CY, L2, T2);
+            SprCombo &k = t[c];
+            k.kxx = L1 - L, k.kxy = T1 - T, k.kyx = L2 - L, k.kyy = T2 - T;
+            int found = -1, flips = 0;
+            for (int s : mine) {
+                for (int fl = 0; fl < 4 && found < 0; ++fl)
+                    if (spr_flip(spr.sets[s].img, fl) == m)
+                        found = s, flips = fl;
+                if (found >= 0)
+                    break;
+            }
+            if (found < 0) { // a picture of its own (the quarter turn)
+                SprSet s;
+                s.img    = m;
+                s.player = spr.sets[f.set].player;
+                s.sheet  = f.sheet;
+                found    = (int)spr.sets.size();
+                spr.sets.push_back(s);
+                mine.push_back(found);
+            }
+            const SprImg &im = spr.sets[found].img;
+            int cw = (im.w + 7) / 8, ch = (im.h + 7) / 8;
+            k.set   = found;
+            k.flips = flips;
+            k.ox    = L - ((flips & 1) ? cw * 8 - im.w : 0) - CX; // the padded image's top-left from the centre
+            k.oy    = T - ((flips & 2) ? ch * 8 - im.h : 0) - CY;
+        }
+        f.rot = (int)spr.rots.size();
+        spr.rots.push_back(t);
+    }
+    // palette: the level's lines keep their colours. The free slots (line 3 in Palmtree Panic 1, a few in the level's
+    // lines) get the sprite colours that matter most: chosen one at a time, each the colour (and line) that lowers the
+    // whole error most - the error of a set is its pixels' colour distance to its line's nearest colours, weighted by
+    // how much it is seen (the HUD always, the player nearly always, rings and items often). A set then takes the line
+    // that shows it best. A sprite colour may sit in a level slot only as the same palette index (level colours can
+    // cycle: PaletteAnimation); as a nearest colour a level slot counts three times its distance.
+    std::set<int> levelIdx;
+    for (auto &ls : st.lineSets) levelIdx.insert(ls.begin(), ls.end());
+    auto pdist = [&](int idx, int slotIdx) -> int { // the cost of showing engine colour idx with a slot's colour
+        if (slotIdx < 0)
+            return 1 << 20;
+        if (slotIdx == idx)
+            return 0;
+        bool cycles = levelIdx.count(slotIdx) && st.palCycles.count(slotIdx); // a level colour that changes (seen)
+        int d = g9_dist(g9_of(idx), g9_of(slotIdx));
+        if (!d && !cycles)
+            return 0;      // the same Genesis colour
+        if (cycles)
+            return 1 << 18; // never shown as another colour
+        return 64 + (levelIdx.count(slotIdx) ? 3 * d : d); // any other colour is a visible change; the nearest is best
+    };
+    // a set takes the line that holds all its colours (the same index, or the same Genesis colour in a slot that does not
+    // cycle); else one with room for the missing ones (they go in); else the line whose nearest colours show it best.
+    // In order of how much a set is seen: the HUD, the player, rings and items, the rest (bigger first).
+    auto line_has = [&](int l, int idx) {
+        for (int k = 1; k < 16; ++k)
+            if (st.slotIndex[l][k] >= 0 && pdist(idx, st.slotIndex[l][k]) == 0)
+                return k;
+        return 0;
+    };
+    auto free_slots = [&](int l) {
+        int n = 0;
+        for (int k = 1; k < 16; ++k) n += st.slotIndex[l][k] < 0;
+        return n;
+    };
+    auto weight = [&](const SprSet &x) -> int {
+        const char *n = gfxSurface[x.sheet].fileName;
+        return strstr(n, "Display") ? 3 : x.player ? 2 : strstr(n, "Items") ? 1 : 0;
+    };
+    // line 3 (when free): the 15 colours the always-seen sets use most - the player x4, the HUD x4, rings and items x2
+    if (st.lines <= 3 && free_slots(3) == 15) {
+        std::map<int, long> use;
+        for (const SprSet &x : spr.sets) {
+            int w = weight(x);
+            if (!w)
+                continue;
+            for (uint8_t q : x.img.px)
+                if (q)
+                    use[q] += w >= 2 ? 4 : 2;
+        }
+        std::vector<std::pair<long, int>> top;
+        for (auto &kv : use) top.push_back({ -kv.second, kv.first });
+        std::sort(top.begin(), top.end());
+        {
+            std::string t;
+            for (auto &x : top) {
+                char b[24];
+                snprintf(b, sizeof(b), " %02X:%ld", x.second, -x.first);
+                t += b;
+            }
+            md_log("SPRITES colour use (player/HUD x4, items x2):%s", t.c_str());
+        }
+        int k = 1;
+        for (auto &t : top) {
+            if (k > 15)
+                break;
+            bool same = false; // the same Genesis colour already chosen
+            for (int j = 1; j < k; ++j) same |= pdist(t.second, st.slotIndex[3][j]) == 0;
+            if (!same)
+                st.slotIndex[3][k++] = t.second;
+        }
+    }
+    std::vector<int> order(spr.sets.size());
+    for (size_t q = 0; q < order.size(); ++q) order[q] = (int)q;
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        int wa = weight(spr.sets[a]), wb = weight(spr.sets[b]);
+        if (wa != wb)
+            return wa > wb;
+        return spr.sets[a].img.px.size() > spr.sets[b].img.px.size();
+    });
+    long errAll = 0, pixAll = 0;
+    for (int si : order) {
+        SprSet &sset = spr.sets[si];
+        std::set<int> used(sset.img.px.begin(), sset.img.px.end());
+        used.erase(0);
+        if (used.empty())
+            continue;
+        int best = -1, bestMissing = 99;
+        for (int l = 3; l >= 0; --l) { // line 3 first: the sprite line
+            int missing = 0;
+            for (int idx : used) missing += !line_has(l, idx);
+            if (missing <= free_slots(l) && missing < bestMissing)
+                best = l, bestMissing = missing;
+        }
+        if (best >= 0) {
+            for (int idx : used)
+                if (!line_has(best, idx))
+                    for (int k = 1; k < 16; ++k)
+                        if (st.slotIndex[best][k] < 0) {
+                            st.slotIndex[best][k] = idx;
+                            break;
+                        }
+            sset.line = best;
+            continue;
+        }
+        long bestErr = -1; // the nearest colours
+        for (int l = 0; l < 4; ++l) {
+            long err = 0;
+            for (uint8_t q : sset.img.px) {
+                if (!q)
+                    continue;
+                int d = 1 << 20;
+                for (int k = 1; k < 16; ++k) d = std::min(d, pdist(q, st.slotIndex[l][k]));
+                err += d;
+            }
+            if (bestErr < 0 || err < bestErr)
+                bestErr = err, best = l;
+        }
+        sset.line     = best;
+        sset.remapped = true;
+        spr.remapped++;
+        errAll += bestErr;
+        pixAll += (long)sset.img.px.size();
+    }
+    spr.palError = pixAll ? (double)errAll / pixAll : 0;
+    {
+        std::string cyc;
+        for (int c : st.palCycles) {
+            char b[8];
+            snprintf(b, sizeof(b), " %02X", c);
+            cyc += b;
+        }
+        md_log("SPRITES stage %s: palette colours that cycled in the first 60 frames:%s", st.key.c_str(), cyc.c_str());
+        for (int l = 0; l < 4; ++l) {
+            std::string t;
+            for (int k = 1; k < 16; ++k) {
+                char b[16];
+                int si = st.slotIndex[l][k];
+                snprintf(b, sizeof(b), si < 0 ? " --" : " %02X", si);
+                t += b;
+            }
+            md_log("SPRITES line %d:%s", l, t.c_str());
+        }
+    }
+    // cells and pieces
+    for (SprSet &s : spr.sets) {
+        s.cw = (s.img.w + 7) / 8, s.ch = (s.img.h + 7) / 8;
+        if (!s.img.w)
+            continue;
+        auto slot = [&](uint8_t idx) -> int {
+            if (!idx)
+                return 0;
+            int bestK = 1, bd = 1 << 30;
+            for (int j = 1; j < 16; ++j) {
+                int d = pdist(idx, st.slotIndex[s.line][j]);
+                if (d < bd)
+                    bd = d, bestK = j;
+            }
+            return bestK;
+        };
+        std::vector<uint8_t> sl(s.cw * 8 * s.ch * 8, 0);
+        for (int y = 0; y < s.img.h; ++y)
+            for (int x = 0; x < s.img.w; ++x) sl[y * s.cw * 8 + x] = (uint8_t)slot(s.img.px[y * s.img.w + x]);
+        auto cell_empty = [&](int cx, int cy) {
+            for (int y = 0; y < 8; ++y)
+                for (int x = 0; x < 8; ++x)
+                    if (sl[(cy * 8 + y) * s.cw * 8 + cx * 8 + x])
+                        return false;
+            return true;
+        };
+        for (int py = 0; py < s.ch; py += 4)
+            for (int px = 0; px < s.cw; px += 4) {
+                int x0 = 99, y0 = 99, x1 = -1, y1 = -1; // the block's non-empty cells
+                for (int cy = py; cy < std::min(py + 4, s.ch); ++cy)
+                    for (int cx = px; cx < std::min(px + 4, s.cw); ++cx)
+                        if (!cell_empty(cx, cy))
+                            x0 = std::min(x0, cx), x1 = std::max(x1, cx), y0 = std::min(y0, cy), y1 = std::max(y1, cy);
+                if (x1 < 0)
+                    continue;
+                SprPiece p;
+                p.cx = x0, p.cy = y0, p.size = (x1 - x0) << 2 | (y1 - y0), p.cell = (int)s.cells.size() / 32;
+                for (int cx = x0; cx <= x1; ++cx)
+                    for (int cy = y0; cy <= y1; ++cy)
+                        for (int y = 0; y < 8; ++y)
+                            for (int x = 0; x < 8; x += 2) {
+                                size_t at = (size_t)(cy * 8 + y) * s.cw * 8 + cx * 8 + x;
+                                s.cells.push_back((uint8_t)(sl[at] << 4 | sl[at + 1]));
+                            }
+                s.pieces.push_back(p);
+            }
+        spr.cells += (int)s.cells.size() / 32;
+        spr.pieces += (int)s.pieces.size();
+    }
+    for (SprFrame &f : spr.frames) {
+        f.cw = spr.sets[f.set].cw;
+        f.ch = spr.sets[f.set].ch;
+    }
+    // the pack (md/md_sprites.h)
+    std::vector<uint8_t> &v = spr.bytes;
+    v.assign(64, 0);
+    v[0] = 'S', v[1] = 'P', v[2] = 'R', v[3] = 'S';
+    set16(v, 4, MDS_VERSION);
+    set16(v, 6, (unsigned)spr.frames.size());
+    set16(v, 8, (unsigned)spr.sets.size());
+    int bits = 4;
+    while ((1u << bits) < spr.frames.size() * 2) bits++;
+    set16(v, 10, (unsigned)bits);
+    set32(v, 12, (uint32_t)v.size());
+    for (SprFrame &f : spr.frames) {
+        v.push_back((uint8_t)f.sheet);
+        v.push_back(f.rot >= 0 ? 1 : 0);
+        put16(v, (unsigned)f.sx), put16(v, (unsigned)f.sy), put16(v, (unsigned)f.w), put16(v, (unsigned)f.h);
+        put16(v, (unsigned)f.set);
+        v.push_back((uint8_t)f.bx), v.push_back((uint8_t)f.by), v.push_back((uint8_t)f.cw), v.push_back((uint8_t)f.ch);
+        put16(v, f.rot >= 0 ? (unsigned)f.rot : 0xFFFF);
+        put16(v, (unsigned)(uint16_t)f.pivotX), put16(v, (unsigned)(uint16_t)f.pivotY);
+        put16(v, 0); // 24 bytes
+    }
+    set32(v, 16, (uint32_t)v.size());
+    std::vector<uint16_t> hash(1u << bits, 0);
+    for (size_t i = 0; i < spr.frames.size(); ++i) {
+        SprFrame &f = spr.frames[i];
+        unsigned h  = mds_hash(f.sheet, f.sx, f.sy, f.w, f.h) & ((1u << bits) - 1);
+        while (hash[h]) h = (h + 1) & ((1u << bits) - 1);
+        hash[h] = (uint16_t)(i + 1);
+    }
+    for (uint16_t e : hash) put16(v, e);
+    while (v.size() & 3) v.push_back(0);
+    set32(v, 20, (uint32_t)v.size());
+    size_t setsAt = v.size();
+    v.resize(v.size() + 12 * spr.sets.size(), 0);
+    set32(v, 24, (uint32_t)v.size());
+    int firstPiece = 0;
+    for (size_t i = 0; i < spr.sets.size(); ++i) {
+        SprSet &s = spr.sets[i];
+        set16(v, setsAt + 12 * i + 6, (unsigned)firstPiece);
+        v[setsAt + 12 * i + 8]  = (uint8_t)s.pieces.size();
+        v[setsAt + 12 * i + 9]  = (uint8_t)s.line;
+        v[setsAt + 12 * i + 10] = (uint8_t)s.cw;
+        v[setsAt + 12 * i + 11] = (uint8_t)s.ch;
+        for (SprPiece &p : s.pieces) {
+            v.push_back((uint8_t)p.cx), v.push_back((uint8_t)p.cy), v.push_back((uint8_t)p.size), v.push_back((uint8_t)p.cell);
+            firstPiece++;
+        }
+    }
+    set32(v, 28, (uint32_t)v.size());
+    for (auto &t : spr.rots)
+        for (SprCombo &k : t) {
+            put16(v, (unsigned)k.set);
+            v.push_back((uint8_t)k.flips), v.push_back(0);
+            put16(v, (unsigned)(uint16_t)k.ox), put16(v, (unsigned)(uint16_t)k.oy);
+            v.push_back((uint8_t)(int8_t)k.kxx), v.push_back((uint8_t)(int8_t)k.kxy);
+            v.push_back((uint8_t)(int8_t)k.kyx), v.push_back((uint8_t)(int8_t)k.kyy);
+        }
+    while (v.size() & 3) v.push_back(0);
+    for (size_t i = 0; i < spr.sets.size(); ++i) { // the cells last: 4-byte aligned, read as words by the SH2
+        set32(v, setsAt + 12 * i, (uint32_t)v.size());
+        set16(v, setsAt + 12 * i + 4, (unsigned)(spr.sets[i].cells.size() / 32));
+        v.insert(v.end(), spr.sets[i].cells.begin(), spr.sets[i].cells.end());
+    }
+    set32(v, 40, (uint32_t)v.size());
+    md_log("SPRITES stage %s: %d frames (%d turned), %d cell sets (%d with colours of the nearest line, mean weighted error %.3f a pixel), "
+           "%d cells, %d hardware sprites, pack %d bytes; free colour slots left %d / %d / %d / %d",
+           st.key.c_str(), (int)spr.frames.size(), (int)spr.rots.size(), (int)spr.sets.size(), spr.remapped, spr.palError, spr.cells,
+           spr.pieces, (int)v.size(), free_slots(0), free_slots(1), free_slots(2), free_slots(3));
+}
+
 std::vector<uint8_t> mdg_build()
 {
+    spr_build(); // REV R3: the sprite pack; its colours go into the palette lines' free slots first
     std::vector<uint8_t> h(SGB_HEADER, 0);
     h[0] = 'S', h[1] = 'C', h[2] = 'M', h[3] = 'G';
     set16(h, 4, SGB_VERSION);
@@ -679,9 +1170,15 @@ std::vector<uint8_t> mdg_build()
     uint16_t c[64];
     cram_now(c);
     for (int i = 0; i < 64; ++i) put16(h, c[i]);
+    if (!spr.bytes.empty()) { // REV R3: the sprite pack, its offset in the header's last 8 bytes
+        while (h.size() & 3) h.push_back(0);
+        set32(h, 56, MDS_TAG);
+        set32(h, 60, (uint32_t)h.size());
+        h.insert(h.end(), spr.bytes.begin(), spr.bytes.end());
+    }
     set32(h, 8, (uint32_t)h.size());
     std::string k = st.key;
-    for (size_t i = 0; i < k.size() && i < 27; ++i) h[36 + i] = (uint8_t)k[i];
+    for (size_t i = 0; i < k.size() && i < 19; ++i) h[36 + i] = (uint8_t)k[i]; // R3: 19 characters (56-63: the pack)
     return h;
 }
 
@@ -695,6 +1192,11 @@ struct Sgb {
     uint16_t sent[64], shown[64];
     long frames = 0, different = 0, pixels = 0, overflow = 0, words = 0, maxWords = 0, waterFrames = 0, bankPixels = 0;
     long exported = 0;
+    // REV R3: the sprites through the same record, and the whole picture compared with the engine's
+    std::vector<uint8_t> mdg;
+    MdSprites spr;
+    bool sprOn = false;
+    long sprFrames = 0, sprDifferent = 0, sprPixels = 0, sprSkipped = 0, sprSaved = 0;
 } sgb;
 
 void sgb_vram_w(void *, uint16_t addr, uint16_t word)
@@ -735,6 +1237,8 @@ void sgb_stage()
     int ncells = be16(f, 6);
     for (int i = 0; i < ncells * 32; ++i) sgb.vram[i] = f[be32(f, 12) + i]; // the 68000's copy_vram of the cells
     for (int i = 0; i < 64; ++i) sgb.sent[i] = sgb.shown[i] = sgb.cram0[i];
+    sgb.mdg   = f; // REV R3: the sprite pack, as the SH2 finds it (the header's last 8 bytes)
+    sgb.sprOn = be32(f, 56) == MDS_TAG && mds_init(&sgb.spr, sgb.mdg.data() + be32(f, 60), (uint16_t)ncells, 0xC000 / 32);
     md_plane_reset(&sgb.pA);
     md_plane_reset(&sgb.pB);
     sgb.bLayer = -1;
@@ -756,6 +1260,113 @@ int sgb_pixel(uint16_t nameBase, int16_t hs, uint16_t vs, int x, int y)
     if (!c)
         return 0;
     return (n >> 15) << 8 | ((n >> 13) & 3) << 4 | c;
+}
+
+// REV R3: the VDP's sprites on line y from the model's VRAM (H40: the table at 0xF800, 80 sprites, 20 and 320 dots a
+// line), the front sprite first. pix[x]: -1 none, else priority << 8 | line << 4 | colour
+void sgb_sprite_line(int y, int16_t *pix)
+{
+    for (int x = 0; x < SCREEN_XSIZE; ++x) pix[x] = -1;
+    const std::vector<uint8_t> &v = sgb.vram;
+    int i = 0, onLine = 0, dots = 0;
+    for (int n = 0; n < 80; ++n) {
+        int at   = MDS_SAT + 8 * i;
+        int sy   = (v[at] << 8 | v[at + 1]) & 0x1FF;
+        int size = v[at + 2] & 0xF, link = v[at + 3] & 0x7F;
+        int attr = v[at + 4] << 8 | v[at + 5];
+        int sx   = (v[at + 6] << 8 | v[at + 7]) & 0x1FF;
+        int w = (size >> 2 & 3) + 1, h = (size & 3) + 1, ly = y + 128 - sy;
+        if (ly >= 0 && ly < h * 8) {
+            if (++onLine > 20)
+                break;
+            for (int px = 0; px < w * 8 && dots < 320; ++px, ++dots) {
+                int x = sx - 128 + px;
+                if (x < 0 || x >= SCREEN_XSIZE || pix[x] >= 0)
+                    continue;
+                int cx = px >> 3, cy = ly >> 3, fx = px & 7, fy = ly & 7;
+                if (attr & 0x800)
+                    cx = w - 1 - cx, fx = 7 - fx;
+                if (attr & 0x1000)
+                    cy = h - 1 - cy, fy = 7 - fy;
+                int tile  = (attr & 0x7FF) + cx * h + cy;
+                uint8_t b = v[(tile * 32 + fy * 4 + (fx >> 1)) & 0xFFFF];
+                int c     = fx & 1 ? b & 15 : b >> 4;
+                if (c)
+                    pix[x] = (int16_t)((attr >> 15) << 8 | ((attr >> 13) & 3) << 4 | c);
+            }
+        }
+        if (!link)
+            break;
+        i = link;
+    }
+}
+// the VDP's choice: high priority before low; within each, sprite, plane A, plane B; then the backdrop (0)
+inline int vdp_pick(int a, int b, int sp)
+{
+    if (sp >= 0 && (sp >> 8))
+        return sp;
+    if (a && (a >> 8))
+        return a;
+    if (b && (b >> 8))
+        return b;
+    if (sp >= 0)
+        return sp;
+    return a ? a : b;
+}
+void sgb_sprite_compare(const int16_t *gA, const int16_t *gB, uint16_t gvA, uint16_t gvB, int bgLayer)
+{
+    if (fadeMode > 0) { // a fade rectangle over everything: the model has no such layer
+        sgb.sprSkipped++;
+        return;
+    }
+    static std::vector<unsigned char> img;
+    static const char *only = getenv("SCD32X_SPRSAVE"); // SCD32X_SPRSAVE=4556,12259: just these frames' pictures
+    bool save = md_frames_dir() && (only ? strstr(only, std::to_string(md_frame_number()).c_str()) != 0
+                                         : sgb.sprSaved < 16 && (sgb.sprDifferent < 4 || sgb.sprDifferent % 60 == 0));
+    if (save)
+        img.assign(SCREEN_XSIZE * 3 * SCREEN_YSIZE * 3, 0);
+    long diff = 0;
+    int16_t sl[1024];
+    for (int y = 0; y < SCREEN_YSIZE; ++y) {
+        sgb_sprite_line(y, sl);
+        for (int x = 0; x < SCREEN_XSIZE; ++x) {
+            int a   = sgb_pixel(SGB_NAME_A, gA[y], gvA, x, y);
+            int b   = bgLayer >= 0 ? sgb_pixel(SGB_NAME_B, gB[y], gvB, x, y) : 0;
+            int pix = vdp_pick(a, b, sl[x]);
+            int k   = pix ? ((pix >> 4) & 3) * 16 + (pix & 15) : 0;
+            uint16_t w = sgb.shown[k];
+            int model  = ((w >> 1) & 7) << 6 | ((w >> 5) & 7) << 3 | ((w >> 9) & 7);
+            int ref    = rgb9_of565(Engine.frameBuffer[y * GFX_LINESIZE + x]);
+            bool bad   = gfxLineBuffer[y] == 0 && ref != model;
+            diff += bad;
+            if (save) {
+                auto put = [&](int panel, int c9) {
+                    unsigned char *p = &img[(y * SCREEN_XSIZE * 3 + panel * SCREEN_XSIZE + x) * 3];
+                    p[0] = (unsigned char)(((c9 >> 6) & 7) * 255 / 7);
+                    p[1] = (unsigned char)(((c9 >> 3) & 7) * 255 / 7);
+                    p[2] = (unsigned char)((c9 & 7) * 255 / 7);
+                };
+                put(0, ref);
+                put(1, model);
+                unsigned char *p = &img[(y * SCREEN_XSIZE * 3 + 2 * SCREEN_XSIZE + x) * 3];
+                p[0] = p[1] = p[2] = bad ? 255 : 0;
+            }
+        }
+    }
+    sgb.sprFrames++;
+    if (diff) {
+        sgb.sprDifferent++;
+        sgb.sprPixels += diff;
+        static int every = getenv("SCD32X_SPRDEBUG") != 0; // SCD32X_SPRDEBUG: every frame with differences
+        if (sgb.sprDifferent <= 10 || every)
+            md_log("SPR frame %u: %ld pixels different (sprites drawn %d)", md_frame_number(), diff, (int)sgb.spr.hwMax);
+        if (save) {
+            char name[64];
+            snprintf(name, sizeof(name), "spr_%06u.png", md_frame_number());
+            md_save_png(name, img.data(), SCREEN_XSIZE * 3, SCREEN_YSIZE);
+            sgb.sprSaved++;
+        }
+    }
 }
 
 // one frame the way the console does it: SH2 (record) -> 68000 (apply) -> VDP model
@@ -780,6 +1391,20 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
     };
     SgbOut o;
     sgb_out_begin(&o, recw, SGB_REC_MAX);
+    if (sgb.sprOn) {
+        long before = sgb.spr.uploadWords, ev0 = sgb.spr.evicted;
+        mds_record(&sgb.spr, &o); // REV R3: the patterns and the sprite table first (vertical blank)
+        long up = sgb.spr.uploadWords - before;
+        if (getenv("SCD32X_SPRDEBUG") && sgb.spr.evicted - ev0 > 2) // the frames that evict more than 2 cell sets
+            md_log("SPR frame %u: %ld sets evicted, %ld pattern words, %d sets in VRAM", md_frame_number(), sgb.spr.evicted - ev0, up, sgb.spr.nres);
+        static long hist[8];
+        hist[up == 0 ? 0 : up <= 128 ? 1 : up <= 256 ? 2 : up <= 512 ? 3 : up <= 768 ? 4 : up <= 1024 ? 5 : up <= 1600 ? 6 : 7]++;
+        if (up > 768)
+            md_log("SPR frame %u: %ld pattern words uploaded, %d sets in VRAM", md_frame_number(), up, sgb.spr.nres);
+        if (md_frame_number() % 600 == 0)
+            md_log("SPR uploads per frame: none %ld, <=128 %ld, <=256 %ld, <=512 %ld, <=768 %ld, <=1024 %ld, <=1600 %ld, more %ld", hist[0], hist[1],
+                   hist[2], hist[3], hist[4], hist[5], hist[6], hist[7]);
+    }
     MdLayer LA = layer(0, fgSlots);
     md_plane_update(&sgb.pA, &LA, SGB_NAME_A, rec[fgSlot].tileYPos, rec[fgSlot].x, SCREEN_YSIZE, SCREEN_XSIZE, hsA, &vA, sgb_write, &o);
     if (bgLayer >= 0) {
@@ -798,7 +1423,10 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
     for (int i = 0; i < 64; ++i) {
         if (sgb.slots[i] == 0xFFFF)
             continue;
-        uint16_t c = sgb_md_color(fullPalette[0][sgb.slots[i]]);
+        uint16_t c565 = fullPalette[0][sgb.slots[i]];
+        if (fadeMode > 0) // REV R3: the engine's fade, on the palette (as plat_mars.cpp)
+            c565 = sgb_fade565(c565, fadeR, fadeG, fadeB, fadeA);
+        uint16_t c = sgb_md_color(c565);
         if (c != sgb.sent[i]) {
             cIdx[nc]   = (uint16_t)i;
             cCol[nc++] = c;
@@ -810,6 +1438,7 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
         sgb.overflow++;
         md_plane_reset(&sgb.pA);
         md_plane_reset(&sgb.pB);
+        mds_forget(&sgb.spr); // REV R3: its pattern uploads never reached the VRAM
         return;
     }
     sgb.words += n;
@@ -845,10 +1474,12 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
             }
             ushort r = refBuf[y * GFX_LINESIZE + x];
             int ref  = r == sentinel ? -1 : rgb9_of565(r);
-            if (ref != model)
+            if (ref != model && fadeMode <= 0) // R3: in a fade the model's colours are faded, the layer reference is not
                 diff++;
         }
     }
+    if (sgb.sprOn)
+        sgb_sprite_compare(gA, gB, gvA, gvB, bgLayer); // REV R3
     sgb.frames++;
     if (water)
         sgb.waterFrames++;
@@ -1031,6 +1662,24 @@ void compare_frame()
 } // namespace
 
 // ---------------------------------------------------------------- hooks (plat_host.cpp calls these)
+// REV R3: a sprite draw call of the engine -> the model's sprite list (as plat_mars.cpp on the SH2)
+int md_sprite_high(int layer)
+{
+    int last = -1;
+    for (int t = 3; t >= 0 && t >= tLayerMidPoint; --t)
+        if (activeTileLayers[t] < LAYER_COUNT) {
+            last = t;
+            break;
+        }
+    static const int after[4] = { 1, 2, 3, 5 }; // the first draw list after tile slot 0, 1, 2, 3 (DrawStageGFX)
+    return last < 0 || layer >= after[last];
+}
+void md_sprite_draw(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py)
+{
+    if (!enabled || !sgb.sprOn || sgb.key != st.key)
+        return;
+    mds_sprite(&sgb.spr, kind, sheet, sx, sy, w, h, x, y, dir, rot, px, py, md_sprite_high(scdDrawLayer));
+}
 void md_check_init()
 {
     const char *v = getenv("SCD32X_MDCHECK");
@@ -1275,13 +1924,26 @@ void md_check_frame()
         if (ex.active)
             export_stop("the stage changed");
         convert_stage();
-        if (st.ok && (sgb.test || !sgb.exportDir.empty()))
+        // REV R3: the act's file waits 60 frames: the palette colours that cycle in them (PaletteAnimation) are then known,
+        // and the sprite colours keep off them
+        st.pal0.assign(fullPalette[0], fullPalette[0] + PALETTE_SIZE);
+        st.palWatch = 60;
+        sgb.key.clear(); // REV R3: no act file until this stage's is made (the same act again as Tails: not Sonic's file)
+    }
+    if (st.ok && st.palWatch > 0) {
+        for (int i = 0; i < PALETTE_SIZE; ++i)
+            if (fullPalette[0][i] != st.pal0[i])
+                st.palCycles.insert(i);
+        if (--st.palWatch == 0 && (sgb.test || !sgb.exportDir.empty()))
             sgb_stage(); // REV R1
     }
-    if (!st.ok)
+    if (!st.ok) {
+        sgb.spr.ndraw = 0; // REV R3
         return;
+    }
     follow_changes();
     compare_frame();
+    sgb.spr.ndraw = 0; // REV R3: a frame without a record (unsupported layers) leaves nothing behind
     test_camera(); // after the comparison: it changes the camera and palette for the NEXT frame
 }
 
@@ -1308,4 +1970,10 @@ void md_check_summary()
                "%ld records too big; record words avg %ld max %ld (limit %d); pixels whose colour needs a second palette bank: %ld",
                sgb.frames, sgb.different, sgb.pixels, sgb.waterFrames, sgb.overflow, sgb.frames ? sgb.words / sgb.frames : 0, sgb.maxWords,
                SGB_REC_MAX, sgb.bankPixels);
+    if (sgb.test && sgb.sprOn) // REV R3
+        md_log("SPR summary: %ld frames of the whole picture (planes + sprites) compared, %ld with differences (%ld pixels), %ld skipped "
+               "(fades); hardware sprites at most %ld, pattern words uploaded %ld (%ld a frame), draws waiting a frame %ld, cell sets "
+               "evicted %ld",
+               sgb.sprFrames, sgb.sprDifferent, sgb.sprPixels, sgb.sprSkipped, sgb.spr.hwMax, sgb.spr.uploadWords,
+               sgb.sprFrames ? sgb.spr.uploadWords / sgb.sprFrames : 0, sgb.spr.dropped, sgb.spr.evicted);
 }

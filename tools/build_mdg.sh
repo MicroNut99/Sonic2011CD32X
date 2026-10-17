@@ -2,6 +2,7 @@
 # REV R1: the act files for the disc - G<list>S<pos>.MDG (md/sgb.h "SCMG") for every scene asked for,
 # made by the PC host engine from the act as it starts (host/md_check.cpp, SCD32X_MDGEXPORT).
 #   tools/build_mdg.sh <Data.rsdk> <out dir, e.g. game_data> <scenes: "1:0" or "1:0,1:1" or "1:*">
+# "1:0@1" = scene 1:0 played as Tails (REV R3): its file is G1S128.MDG (pos + 128), with Tails's sprites.
 # A scene without tile layers the Genesis can show gets no file (the console then shows it as before).
 # Checks: each file fits the cart slot 0x380000-0x3EFFFF; SCDDATA.PAK (cart 0x300000) ends below 0x380000.
 set -e
@@ -15,25 +16,29 @@ import sys; sys.path.insert(0,'tools')
 import scd_report as sr
 gc=sr.parse_gameconfig(sr.Data('$DATA').read('Data/Game/GameConfig.bin'))
 print(' '.join('%d:%d'%(l,len(v)) for l,v in gc['lists'].items()))")
-expand() { # "1:*" -> 1:0 1:1 ...
+expand() { # "1:*" -> 1:0 1:1 ...; "1:0@1" -> 1:0@1
     for item in $(echo "$SCENES" | tr ',' ' '); do
+        pl=0
+        case "$item" in *@*) pl=${item#*@}; item=${item%@*} ;; esac
         l=${item%%:*}; p=${item#*:}
         if [ "$p" = "*" ]; then
             n=$(echo "$COUNT" | tr ' ' '\n' | sed -n "s/^$l://p")
-            i=0; while [ "$i" -lt "${n:-0}" ]; do echo "$l:$i"; i=$((i + 1)); done
-        else echo "$l:$p"; fi
+            i=0; while [ "$i" -lt "${n:-0}" ]; do echo "$l:$i@$pl"; i=$((i + 1)); done
+        else echo "$l:$p@$pl"; fi
     done
 }
 T=$(mktemp -d)
 made=0
 for s in $(expand); do
+    pl=${s#*@}; s=${s%@*}
     l=${s%%:*}; p=${s#*:}
+    case "$pl" in 0|1) ;; *) echo "*** scene $s@$pl: player 0 (Sonic) or 1 (Tails)"; exit 1 ;; esac
     rm -rf "$T/run" && mkdir -p "$T/run/mdg"
     printf "[Dev]\nStartingCategory=%s\nStartingScene=%s\nDataFile=%s\n" "$l" "$p" "$DATA" > "$T/run/settings.ini"
-    ( cd "$T/run" && SCD32X_MDCHECK=1 SCD32X_MDGEXPORT="$T/run/mdg" SCD32X_MAX_FRAMES=120 SCD32X_EVENT_LOG=events.txt \
+    ( cd "$T/run" && SCD32X_PLAYER=$pl SCD32X_MDCHECK=1 SCD32X_MDGEXPORT="$T/run/mdg" SCD32X_MAX_FRAMES=120 SCD32X_EVENT_LOG=events.txt \
         "$OLDPWD/host/soniccd_host" > out.txt 2>&1 ) || true
     f=$(ls "$T/run/mdg"/*.MDG 2>/dev/null | head -1)
-    name=$(printf "G%dS%03d.MDG" "$l" "$p")
+    name=$(printf "G%dS%03d.MDG" "$l" "$((p + 128 * pl))")
     if [ -z "$f" ]; then
         echo "  $name: no file (scene $s has no plane layers the check converted)"
         continue

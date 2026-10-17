@@ -10,6 +10,8 @@ extern "C" {
 #if SCD_PLANES
 #include "../../md/md_planes.h"
 #include "../../md/sgb.h"
+#include "../../md/md_sprites.h"
+#include "../../md/md_sprites.c" /* REV R3: compiled here (no Makefile change) */
 #endif
 }
 
@@ -183,6 +185,7 @@ static int xA[SCREEN_YSIZE], xB[SCREEN_YSIZE];
 static int16_t hsA[SCREEN_YSIZE], hsB[SCREEN_YSIZE];
 static unsigned short cramSent[64];
 static unsigned short recId = 0;
+static MdSprites sprites; /* REV R3: the act's sprites as Genesis hardware sprites (md/md_sprites.h) */
 static void sgb_pause()
 {
     for (volatile int k = 0; k < 64; ++k) {
@@ -216,9 +219,17 @@ static void planes_off()
     planesOn = false;
     sgb_cmd(2, 0); /* the listener's own picture back (text, for the loading lines) */
 }
+/* REV R3: Tails. A scene played as Tails (the game's character choice: playerListPos 1) has files of its own,
+   numbered 128 on: its scene image L<list>S<pos + 128>.IMG (the cart image holds the scene's animation files and
+   sprite sheets in the order the scripts load them - Tails's) and its act file G<list>S<pos + 128>.MDG (its sprite
+   pack has Tails's frames). tools/build_game_data.py and tools/build_mdg.sh make them ("1:0@1"). */
+static unsigned int player_files()
+{
+    return (playerListPos == 1 && stageListPosition >= 0 && stageListPosition < 0x80) ? 0x80u : 0u;
+}
 static void planes_load() /* the scene's MDG: on the disc? then into the cart and the VDP */
 {
-    unsigned int file  = 0x1000 + (((unsigned int)activeStageList + 1) << 8) + (unsigned int)stageListPosition;
+    unsigned int file  = 0x1000 + (((unsigned int)activeStageList + 1) << 8) + (unsigned int)stageListPosition + player_files();
     unsigned int bytes = 0;
     STATE(0x5C60); /* R1C: the MDG load starts */
     int bad            = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
@@ -244,6 +255,10 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
     }
     const unsigned short *cram0 = (const unsigned short *)(f + *(const unsigned int *)(f + 32));
     for (int i = 0; i < 64; ++i) cramSent[i] = cram0[i];
+    /* REV R3: the sprite pack after the plane data ('SPRP' + offset in the header's last 8 bytes); its cells go
+       after the act's plane cells, up to plane A's name table (0xC000) */
+    mds_init(&sprites, *(const unsigned int *)(f + 56) == MDS_TAG ? f + *(const unsigned int *)(f + 60) : 0,
+             *(const unsigned short *)(f + 6), 0xC000 / 32);
     md_plane_reset(&sgbA);
     md_plane_reset(&sgbB);
     sgbBLayer = -1;
@@ -283,8 +298,10 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     for (int s = 0; s < 4; ++s) slotUsed[s] = false;
     int bgSeen = frameBg;
     frameBg    = -1;
-    if (unsupported || !fgSlots || bgLayer != bgSeen)
-        return; /* the planes keep the last picture */
+    if (unsupported || !fgSlots || bgLayer != bgSeen) {
+        sprites.ndraw = 0; /* REV R3: the sprites keep the last picture too */
+        return;            /* the planes keep the last picture */
+    }
     const unsigned char *f = SGB_FILE;
     MdLayer LA, LB;
     LA.chunks       = (const uint16_t *)(f + *(const unsigned int *)(f + 24));
@@ -298,6 +315,7 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     LA.showFront    = sgb_shows(fgSlots, true);
     SgbOut o;
     sgb_out_begin(&o, SGB_FB_REC, SGB_REC_MAX);
+    mds_record(&sprites, &o); /* REV R3: the patterns and the sprite table first - vertical blank */
     uint16_t vA = 0, vB = 0;
     md_plane_update(&sgbA, &LA, SGB_NAME_A, tileYA, xA, SCREEN_YSIZE, SCREEN_XSIZE, hsA, &vA, sgb_write, &o);
     if (bgLayer >= 0) {
@@ -321,7 +339,10 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     for (int i = 0; i < 64; ++i) {
         if (slots[i] == 0xFFFF)
             continue;
-        uint16_t c = sgb_md_color(fullPalette[0][slots[i]]);
+        uint16_t c565 = fullPalette[0][slots[i]];
+        if (fadeMode > 0) /* REV R3: the engine's fade rectangle, on the palette - planes and sprites fade with it */
+            c565 = sgb_fade565(c565, fadeR, fadeG, fadeB, fadeA);
+        uint16_t c = sgb_md_color(c565);
         if (c != cramSent[i]) {
             cIdx[nc]    = (uint16_t)i;
             cCol[nc++]  = c;
@@ -331,6 +352,7 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     if (sgb_out_end(&o, vA, vB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc) < 0) {
         md_plane_reset(&sgbA); /* too big: both planes from scratch next frame */
         md_plane_reset(&sgbB);
+        mds_forget(&sprites); /* REV R3: its pattern uploads never reached the VRAM */
         return;
     }
     /* hand it over: give_fb, COMM4 = id; the 68000 copies it and answers COMM6 = id; take_fb */
@@ -517,7 +539,24 @@ int *plat_layer_lines(int slot) /* R1T: as plat_layer_line - layer 0 into xA, th
         return xB;
     return 0; /* a second background layer: no record this frame (planes_frame) - its lines are not used */
 }
+// REV R3: an engine sprite draw call -> the act's sprite list (md/md_sprites.c). The draw lists after the stage's
+// last front tile layer are in front of it (priority bit); the others behind, as DrawStageGFX draws them.
+void plat_sprite(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py) SCD_HOT;
+void plat_sprite(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py)
+{
+    if (!planesOn || !sprites.pack)
+        return;
+    int last = -1;
+    for (int t = 3; t >= 0 && t >= tLayerMidPoint; --t)
+        if (activeTileLayers[t] < LAYER_COUNT) {
+            last = t;
+            break;
+        }
+    static const int after[4] = { 1, 2, 3, 5 }; /* the first draw list after tile slot 0, 1, 2, 3 */
+    mds_sprite(&sprites, kind, sheet, sx, sy, w, h, x, y, dir, rot, px, py, last < 0 || scdDrawLayer >= after[last]);
+}
 #else
+void plat_sprite(int, int, int, int, int, int, int, int, int, int, int, int) {}
 unsigned short *plat_layer_begin(int, int, int, unsigned short *frame) { return frame; }
 void plat_layer_line(int, int, int) {}
 void plat_layer_end(int) {}
@@ -577,12 +616,9 @@ static uint16_t cart_scene16(uint32_t off) /* S7d2: CartRead16's own types (uint
     return *(volatile uint16_t *)(0x22080000 + off);
 }
 #endif
-void plat_stage_loading()
+static unsigned int scene_file() /* the disc file of the scene the engine is about to load */
 {
-#if SCD_PLANES
-    planes_off(); /* REV R1: the loading lines need the Genesis text again */
-#endif
-    unsigned int file = 0x100 + ((unsigned int)activeStageList << 8) + (unsigned int)stageListPosition;
+    unsigned int file = 0x100 + ((unsigned int)activeStageList << 8) + (unsigned int)stageListPosition + player_files();
 #if defined(SCD32X_START_LIST)
     /* R1Q: no double load. The boot stack loads disc file 0x100 ("L0S000.IMG") as the first scene image. On a
        disc that starts in another scene, that file holds the START scene's image instead (game data, see
@@ -596,36 +632,71 @@ void plat_stage_loading()
             file = startFile;
     }
 #endif
+    return file;
+}
+static int scene_load(unsigned int file) /* the scene's image into the cart: 0 = there, -1 = not on the disc */
+{
+    if (file == SCD_BOOT_RECORD[5])
+        return 0; /* in the cart already */
+    unsigned int bytes = 0;
+    int bad = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
+    if (bad < 0)
+        return -1; /* the Sub-CPU found no such file: nothing was copied, the cart holds the last image */
+    if (bad > 0)
+        scene_stop(0x5CE2, "BAD LOAD ", file);
+    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
+    SCD_BOOT_RECORD[5] = file;
+    STATE(0x5C14); /* R1C: the scene is in the cart */
+#if SCD_SCENE_CHECK
+    CartCheck r;
+    if (cart_verify(cart_scene16, &r) != 0)
+        scene_stop(0x5CE3, "BAD IMAGE ", file);
+#endif
+    /* R1D: as OpenJazz REV's level packs (port/plat_mars.c plat_load_pack): no check of the image
+       from the engine. The Sub-CPU has read every chunk back already ("CART I4 Cnn ... OK"); this
+       whole-image check, never run from the cart before, is where R1C's SH2 died (5C14 -> 101).
+       SCD_SCENE_CHECK=1 puts it back (line 10 58nn while it reads). */
+    STATE(0x5C15); /* R1C: its image checked (R1D: not checked) */
+    const unsigned int *h = (const unsigned int *)CART_STAGE;
+    for (int k = 0; k < (int)h[2] && k < 32; ++k)
+        if (h[3 + 5 * k] != firstOffsets[k])
+            scene_stop(0x5CE9, "LAYOUT ", file); /* not the fixed layout */
+    return 0;
+}
+void plat_stage_loading()
+{
+#if SCD_PLANES
+    planes_off(); /* REV R1: the loading lines need the Genesis text again */
+#endif
     const unsigned int *h = (const unsigned int *)CART_STAGE;
     if (!haveOffsets) { /* the layout the engine bound at start-up (the first scene, loaded by the loader) */
         for (int k = 0; k < (int)h[2] && k < 32; ++k) firstOffsets[k] = h[3 + 5 * k];
         haveOffsets = true;
     }
     STATE(0x5C13);
-    if (file != SCD_BOOT_RECORD[5]) {
-        unsigned int bytes = 0;
-        int bad = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
-        if (bad < 0)
-            scene_stop(0x5CE8, "NO SCENE ", file); /* the scene's .IMG is not on the disc */
-        if (bad > 0)
-            scene_stop(0x5CE2, "BAD LOAD ", file);
-        *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
-        SCD_BOOT_RECORD[5] = file;
-        STATE(0x5C14); /* R1C: the scene is in the cart */
-#if SCD_SCENE_CHECK
-        CartCheck r;
-        if (cart_verify(cart_scene16, &r) != 0)
-            scene_stop(0x5CE3, "BAD IMAGE ", file);
-#endif
-        /* R1D: as OpenJazz REV's level packs (port/plat_mars.c plat_load_pack): no check of the image
-           from the engine. The Sub-CPU has read every chunk back already ("CART I4 Cnn ... OK"); this
-           whole-image check, never run from the cart before, is where R1C's SH2 died (5C14 -> 101).
-           SCD_SCENE_CHECK=1 puts it back (line 10 58nn while it reads). */
-        STATE(0x5C15); /* R1C: its image checked (R1D: not checked) */
-        for (int k = 0; k < (int)h[2] && k < 32; ++k)
-            if (h[3 + 5 * k] != firstOffsets[k])
-                scene_stop(0x5CE9, "LAYOUT ", file); /* not the fixed layout */
+    unsigned int file = scene_file();
+    int bad           = scene_load(file);
+#if defined(SCD32X_START_LIST)
+    if (bad < 0) {
+        /* REV R3: the scene is not on the disc - the act's end (R1X stopped here: NO SCENE 204), a time warp or a
+           special stage. The start scene again, with the other character: Sonic, then Tails, then Sonic... The
+           whole stage loads again (its folder is the one already loaded, so the engine would only reload the
+           act): the other character's scripts load the other animation files, from the other image. */
+        activeStageList   = SCD32X_START_LIST;
+        stageListPosition = SCD32X_START_STAGE;
+        playerListPos     = playerListPos == 1 ? 0 : 1;
+        ResetCurrentStageFolder();
+        file = scene_file();
+        bad  = scene_load(file);
+        if (bad < 0 && playerListPos == 1) { /* no Tails files on this disc: Sonic again */
+            playerListPos = 0;
+            file          = scene_file();
+            bad           = scene_load(file);
+        }
     }
+#endif
+    if (bad < 0)
+        scene_stop(0x5CE8, "NO SCENE ", file); /* the scene's .IMG is not on the disc */
     STATE(0x5C16); /* R1C: the engine's own stage load runs from here (until 5Lnn) */
     scd_sampling(1);
 }

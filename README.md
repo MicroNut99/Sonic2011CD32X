@@ -19,9 +19,9 @@ drawing everything with the SH2s was far too slow.
 | Layer | Drawn by | How |
 |---|---|---|
 | far background (per-line parallax, water ripple) | Genesis plane B | the act's patterns in VRAM, h-scroll per line |
-| level (the foreground layer, behind the sprites) | Genesis plane A | the act's patterns, scrolled with the camera |
-| sky gradients, effects the VDP has no form for | 32X, behind the planes | see-through ("through" bit) colours |
-| Sonic, Tails, badniks, rings, HUD, tiles in front of the sprites | 32X, in front | 256 colours |
+| level (the foreground layer; its front tiles with the priority bit) | Genesis plane A | the act's patterns, scrolled with the camera |
+| Sonic, Tails, badniks, rings, HUD (R3) | Genesis sprites | the act's sprite frames as patterns, made on the PC; uploaded and placed by the SH2 through the same record |
+| later: effects the VDP has no form for (rotation, scaling, translucency, more colours) | 32X | the 32X layer is off so far |
 
 - **The SH2 runs the 2011 engine** (scripts, physics, objects) from the cart, as before.
 - **The Genesis VDP draws the level for free**, line by line, and scrolls it at 60 Hz – the way the
@@ -31,8 +31,9 @@ drawing everything with the SH2s was far too slow.
   for the plane maths (17 fps); so the engine's own scroll goes through `md_planes.c` on the SH2,
   and the 68000 copies the frame's record (new cells, scroll table, colours) into the VDP in
   vertical blank. The conversion of the art is done on the PC.
-- **The 32X draws only what moves** and the few tiles that must be in front of the sprites
-  (loops, tunnels: 20–320 such 16 × 16 tiles per act).
+- **The sprites are Genesis hardware sprites (R3)**, as in the 1993 game: the SH2 puts the frame's new sprite
+  patterns and the sprite table into the same record (no 68000 or boot-stack change). The 32X frame buffer holds the
+  engine's layouts and menus, so a 32X sprite layer would need more memory than the SH2 has; it is for later effects.
 
 Why it fits: RSDK tiles are 16 × 16 = exactly 2 × 2 Genesis patterns on the 8-pixel grid, and
 every act's layers are one foreground and one per-line-scrolled background – two Genesis planes.
@@ -44,7 +45,8 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | Every act converted and checked against the engine on the PC (R0) | **done** – [docs/R0_SURVEY.md](docs/R0_SURVEY.md): 68 of 70 acts; 332–801 patterns per act (room for 1,535); 2–4 palette lines; 0 layers the VDP cannot show; 46 acts identical frame by frame, 22 with small local differences to explain |
 | Genesis planes streamed by the 68000 from SH2-made records | S3c / S4b: 60 fps in **Fusion** (a standalone 68000 program). Not yet run on the console. |
 | The 2011 engine on the SH2 from the cart | proven on the console in rounds S5–S7 (title scene starts; 30 fps with drawing off) |
-| R1: the engine drives the planes (records through the frame buffer, the listener copies them in vblank) | **On the console (R1S)**: Palmtree Panic 1 on the Genesis planes, scrolling with the engine - at 27-29 frames a second, half the game's speed. Speed rounds R1T-R1W (native scripts, hot code in SDRAM, ...): **60 frames a second in sh2emu**, every engine frame under one vertical blank - next: the console. [docs/R1_NOTES.md](docs/R1_NOTES.md) (*Speed*). |
+| R1: the engine drives the planes (records through the frame buffer, the listener copies them in vblank) | **On the console (R1X): Palmtree Panic 1 on the Genesis planes at 60 frames a second** (measured on MicroNut99's video, 16 Oct), the whole act to its end. R1S was 27-29; the speed rounds R1T-R1X: native scripts, hot code in SDRAM, ... [docs/R1_NOTES.md](docs/R1_NOTES.md) (*Speed*). |
+| R3: the sprites, and Tails | **In sh2emu and the PC model**: Sonic, Tails, rings, badniks and the HUD as Genesis sprites at 59.9 frames a second; the act as Sonic, then as Tails, then as Sonic again - next: the console. [docs/R3_NOTES.md](docs/R3_NOTES.md) |
 
 ## Rounds
 
@@ -53,9 +55,9 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | R0 | PC survey: every act through the Mega Drive plane model (`tools/survey_md.sh`). |
 | R1 | The level on the Genesis planes, driven by the engine: the act's Genesis file (`G<list>S<pos>.MDG`) in the cart; each frame the SH2 streams both planes from the engine's own layer scroll (`md_planes.c`, proven in S3a) into a record; the listener copies it into the VDP in vertical blank. 32X layer off, scripted pad. [docs/R1_NOTES.md](docs/R1_NOTES.md) |
 | R2 | Animated tiles as pattern rewrites (R5xD, R6x, R8x need it – see R0); layout changes (broken walls, moved blocks). |
-| R3 | The 32X layer: sprites, HUD and front tiles, with the through bit for the sky; priority set-up as SuperTux REV7. |
+| R3 | The sprites as Genesis hardware sprites, through the plane record: Sonic, rings, badniks, HUD, title card, results. Tails playable: his own scene image and act file; the act restarts with the other character. [docs/R3_NOTES.md](docs/R3_NOTES.md) |
 | R4 | Water (palette per line), palette effects, the 22 acts that differ in R0. |
-| later | Special stages (32X, rotating floor), menus, music (CD audio) and sound effects, time travel without loading (all four periods of an act fit the cart together – S2). |
+| later | The pad (the scripted pad plays so far), special stages (32X, rotating floor), menus, music (CD audio) and sound effects, time travel without loading (all four periods of an act fit the cart together – S2), 32X effects (rotation, scaling, translucency). |
 
 ## Command numbers
 
@@ -77,7 +79,7 @@ SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 6800
 ```
 
 The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
-the R1 disc's steps are in [docs/R1_NOTES.md](docs/R1_NOTES.md). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
+the disc's steps are in [docs/R3_NOTES.md](docs/R3_NOTES.md) (R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
 
 ## Checking a build before burning: tools/sh2emu
 

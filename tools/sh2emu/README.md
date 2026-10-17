@@ -12,7 +12,8 @@ whether the build is safe to burn.
 
 When the Genesis planes are on, it also plays the 68000's part: it takes each plane record the SH2 hands over, as
 `sgb_poll` does, and writes it into a model of the Genesis VDP in vertical blank, as `sgb_vblank` does. With `-shot`
-it saves the Genesis picture as a `.bmp` file, so you can see what the console should show before you burn.
+it saves the Genesis picture - the two planes and, from R3, the sprites - as a `.bmp` file, so you can see what the
+console should show before you burn.
 
 Its timing matches the console (measured on R1S): the game speed it reports is the speed you will see. With
 `-profile` it shows where the SH2's time goes (section 4).
@@ -49,6 +50,10 @@ tail -25 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
 
 The planes come on at about frame 590. Frame 700 is the start of Palmtree Panic 1. The scripted pad starts moving
 about 4 seconds later, so frame 1300 is further into the act.
+
+R3 builds: Sonic's act ends at about frame 5400 and the results end at about 6080; then the SH2 looks for the next
+act (`L1S004.IMG NOT FOUND`), loads Tails's files and starts the act again as Tails (title card at about frame 6300).
+`-f 7000` covers the switch; after Tails's results (about frame 14090) Sonic's act comes back (`-f 16500`).
 
 The build folder must hold:
 
@@ -94,7 +99,7 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `line 10 now` | what line 10 would show at the end |
 | `PROBLEMS` | **do not burn.** Each kind of problem is listed with how many times it happened and where it happened first (the function and the offset into it) |
 | `warnings` | reads of memory nothing has written; worth a look, not a reason to stop |
-| `information` | normal register traffic, listed for reference |
+| `information` | normal register traffic, and the engine's expected writes into the loader's area (`W-SAMPLING`: the sampler switch, `W-VECTOR`: its exception handlers, `W-BOOTREC` (R3): the number of the scene image now in the cart, after a scene change), listed for reference |
 | `VERDICT` | `no problems found` = safe to burn as far as the SH2 and the plane records go |
 
 Emulated time is counted in frames: 60 frames are 1 second on the console.
@@ -230,9 +235,11 @@ cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
   or hang the bus. So the first problem is what counts, not what the program does after it.
 - **The 68000 and the VDP are models.** The model follows `sgb_poll` and `sgb_vblank` exactly. When the 68000 takes
   an id while the SH2 still holds the frame buffer, the console reads undefined data; the model then uses what the
-  console copied on R1H (`REC 0004 0004 0006 ...`). The VDP model draws the two planes, their scroll and the colours.
-  It has no sprites, no window, and no 32X layer. The 68000's copy takes 75 SH2 cycles a word, and it does not take a
-  record while its vertical blank handler runs (`-k68word`).
+  console copied on R1H (`REC 0004 0004 0006 ...`). The VDP model draws the two planes, their scroll, the colours and
+  (R3) the sprites: the sprite table at `0xF800`, the links, 20 sprites and 320 dots a line, the flips and the
+  priority bits (high before low; sprite, plane A, plane B). It has no window, no sprite masking, no shadow /
+  highlight and no 32X layer. The 68000's copy takes 75 SH2 cycles a word, and it does not take a record while its
+  vertical blank handler runs (`-k68word`).
 - **Loading speed.** The Sub-CPU answers at once. On the console a 32 KB chunk takes about a second, so the loading
   part of the timeline is much shorter here.
 
@@ -266,3 +273,10 @@ record contents CRC as R1S.
 blank. R1W (`-pcprof` on the hot loops, the slowest-frames list): the empty-slot scan, a script sub that fell back to
 the interpreter for 87,000 cycles in one frame, the foreground's line positions without a frame-buffer read per line,
 the plane rows' name lookups and record writes: 0.59 on average, the slowest frame 0.83 - every frame in one.
+
+**R3 (sprites, Tails).** The VDP model draws the sprites now, so `-shot` shows Sonic, Tails, the rings, the badniks
+and the HUD as the SH2's records put them in VRAM. Two acts and two switches in one run (16,500 frames): `no problems
+found`. Its profile found the slowest frame (1.13 vertical blanks) in the sprites' VRAM allocator: when 22 cell sets
+had to make room, it evicted the least recently used one at a time and searched again after each. It now evicts one
+run of neighbouring sets in one pass: the slowest frame 1.03, the same pictures (PC model: identical pixels), and 6%
+fewer pattern uploads.

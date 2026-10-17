@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """PORT32X S7d: the game's data for the engine disc.
   tools/build_game_data.py Data.rsdk [out dir, default game_data] [--scenes 0:*,1:0] [-j cores]
---scenes: which scenes go on the disc - "list:pos" or "list:*" (default 0:0: the game's first scene).
+--scenes: which scenes go on the disc - "list:pos" or "list:*" (default 0:0: the game's first scene);
+          "list:pos@1" = that scene played as Tails (REV R3): its image is L<list>S<pos + 128>.IMG
 Output (cd32x/Makefile ENGINE=1 puts it on the disc):
   L<list>S<pos>.IMG   every scene's console cart image in the FIXED layout: each part at the same
                       offset in every image (sized to the largest INCLUDED scene), because the
@@ -71,53 +72,67 @@ def main():
     out = os.path.abspath(args[1] if len(args) > 1 else os.path.join(ROOT, "game_data"))
     os.makedirs(out, exist_ok=True)
     gc = sr.parse_gameconfig(sr.Data(data).read("Data/Game/GameConfig.bin"))
-    want = set()
+    want = set()  # (list, pos, player)
     for item in scenes_arg.split(","):
+        player = 0
+        if "@" in item:  # REV R3: "1:0@1" = scene 1:0 played as Tails
+            item, pl = item.split("@")
+            player = int(pl)
+            assert player in (0, 1), f"--scenes {item}@{pl}: player 0 (Sonic) or 1 (Tails)"
         l, p = item.split(":")
         l = int(l)
         for pos, _ in enumerate(gc["lists"].get(l, [])):
             if p == "*" or int(p) == pos:
-                want.add((l, pos))
+                want.add((l, pos, player))
+    players = sorted({w[2] for w in want})
     subprocess.run(["gcc", "-std=c99", "-O2", os.path.join(ROOT, "tools", "cartimg", "cart_verify_host.c"), os.path.join(ROOT, "md", "cart_verify.c"),
                     "-o", os.path.join(ROOT, "host", "cart_verify_host")], check=True)
     tmp = tempfile.mkdtemp()
-    imgdir, packdir = os.path.join(tmp, "img"), os.path.join(tmp, "packs")
-    # 1. every stage's image (the fixed layout must fit ALL of them)
-    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "build_cart_images.py"), data, imgdir] + jobs, check=True)
+    # 1. every stage's image (the fixed layout must fit ALL of them); REV R3: the Tails scenes' images too
     all_parts = {}
-    for cat in (0, 1, 2, 3):
-        for pos, (folder, sid, name) in enumerate(gc["lists"].get(cat, [])):
-            f = os.path.join(imgdir, f"{folder}_{sid}.bin")
-            if os.path.exists(f):
-                all_parts[(cat, pos)] = read_image(f)
+    for pl in players:
+        imgdir = os.path.join(tmp, f"img{pl}")
+        extra = ["--player", str(pl), "--only", ",".join(sorted({gc["lists"][l][p][0] for (l, p, q) in want if q == pl}))] if pl else []
+        subprocess.run([sys.executable, os.path.join(ROOT, "tools", "build_cart_images.py"), data, imgdir] + jobs + extra, check=True)
+        for cat in (0, 1, 2, 3):
+            for pos, (folder, sid, name) in enumerate(gc["lists"].get(cat, [])):
+                f = os.path.join(imgdir, f"{folder}_{sid}.bin")
+                if os.path.exists(f):
+                    all_parts[(cat, pos, pl)] = read_image(f)
     n = len(next(iter(all_parts.values())))
     # S7e: the fixed layout over the INCLUDED scenes (pixel parts make all 87 together far too big)
     incl = [all_parts[w] for w in want if w in all_parts]
     caps = [max(len(p[k][0]) for p in incl) for k in range(n)]
     # 2. the included scenes' data packs (each checked: SH2 configuration identical on it)
-    folders = sorted({gc["lists"][l][p][0] for (l, p) in want})
-    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "build_stage_packs.py"), data, packdir, "900", "--only", ",".join(folders)] + jobs,
-                   check=True)
-    report = open(os.path.join(packdir, "stage_packs.md")).read()
-    bad = re.search(r"mini-pack not identical on (\d+)", report)
+    reports, bads = [], []
+    for pl in players:
+        packdir = os.path.join(tmp, f"packs{pl}")
+        folders = sorted({gc["lists"][l][p][0] for (l, p, q) in want if q == pl})
+        subprocess.run([sys.executable, os.path.join(ROOT, "tools", "build_stage_packs.py"), data, packdir, "900", "--only", ",".join(folders)] + jobs +
+                       (["--player", str(pl)] if pl else []), check=True)
+        reports.append((pl, os.path.join(packdir, "stage_packs.md")))
+        m = re.search(r"mini-pack not identical on (\d+)", open(reports[-1][1]).read())
+        bads.append(int(m.group(1)) if m else -1)
     # 3. fixed-layout images of the included scenes
     rows, sizes = [], set()
-    for (l, p) in sorted(want):
+    for (l, p, pl) in sorted(want):
         folder, sid, name = gc["lists"][l][p]
-        if (l, p) not in all_parts:
-            rows.append(f"| L{l}S{p:03d} | {folder}/{sid} | no image |")
+        fname = f"L{l}S{p + 128 * pl:03d}"  # REV R3: Tails's image of scene p is number p + 128
+        who = " (Tails)" if pl else ""
+        if (l, p, pl) not in all_parts:
+            rows.append(f"| {fname} | {folder}/{sid}{who} | no image |")
             continue
-        img, hdr = fixed_image(all_parts[(l, p)], caps)
+        img, hdr = fixed_image(all_parts[(l, p, pl)], caps)
         sizes.add(len(img))
-        fn = os.path.join(out, f"L{l}S{p:03d}.IMG")
+        fn = os.path.join(out, f"{fname}.IMG")
         open(fn, "wb").write(img)
         r = subprocess.run([os.path.join(ROOT, "host", "cart_verify_host"), fn], capture_output=True, text=True)
-        rows.append(f"| L{l}S{p:03d} | {folder}/{sid} | {len(img) // 1024} KB, {r.stdout.strip()} |")
+        rows.append(f"| {fname} | {folder}/{sid}{who} | {len(img) // 1024} KB, {r.stdout.strip()} |")
     # 4. one data pack: every file of the included scenes, at its longest prefix
     files = {}
-    for (l, p) in sorted(want):
+    for (l, p, pl) in sorted(want):
         folder, sid, name = gc["lists"][l][p]
-        pk = os.path.join(packdir, f"{folder}_{sid}.rsdk")
+        pk = os.path.join(tmp, f"packs{pl}", f"{folder}_{sid}.rsdk")
         if os.path.exists(pk):
             pack = rp.Pack(pk)
             for fname, off, size in pack.files:
@@ -131,10 +146,11 @@ def main():
         w.write("# Game data for the engine disc\n\n")
         w.write(f"Scene image (fixed layout, every scene the same): {size} bytes of {SCENE_MAX} - {'OK' if size <= SCENE_MAX else 'TOO BIG'}\n\n")
         w.write(f"SCDDATA.PAK: {len(files)} files, {dsize} bytes of {DATA_MAX} - {'OK' if dsize <= DATA_MAX else 'TOO BIG'}\n\n")
-        w.write(f"Mini-packs of the included scenes: {'all identical' if bad and bad.group(1) == '0' else 'NOT ALL IDENTICAL - see stage_packs.md'}\n\n")
+        w.write(f"Mini-packs of the included scenes: {'all identical' if bads and all(b == 0 for b in bads) else 'NOT ALL IDENTICAL - see stage_packs*.md'}\n\n")
         w.write("Part capacities (largest over all stages): " + ", ".join(str(c) for c in caps) + "\n\n")
         w.write("| File | Scene | Check |\n|---|---|---|\n" + "\n".join(rows) + "\n")
-    shutil.copyfile(os.path.join(packdir, "stage_packs.md"), os.path.join(out, "stage_packs.md"))  # S7d2: /tmp and S: are different file systems
+    for pl, rp_ in reports:  # S7d2: /tmp and S: are different file systems
+        shutil.copyfile(rp_, os.path.join(out, "stage_packs.md" if not pl else f"stage_packs_p{pl}.md"))
     print(open(os.path.join(out, "game_data.md")).read())
 
 

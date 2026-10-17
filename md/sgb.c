@@ -15,6 +15,20 @@ void sgb_write_run(void *ctx, uint16_t addr, const uint16_t *words, int n) SCD_M
 int sgb_out_end(SgbOut *o, uint16_t vA, uint16_t vB, const int16_t *hsA, const int16_t *hsB, int lines,
                 const uint16_t *cramIdx, const uint16_t *cramCol, int ncram) SCD_MD_HOT;
 
+uint16_t sgb_fade565(uint16_t c, int r, int g, int b, int a)
+{
+    int r5 = c >> 11, g6 = (c >> 5) & 63, b5 = c & 31, k;
+    if (a <= 0)
+        return c;
+    if (a > 255)
+        a = 255;
+    k  = 255 - a;
+    r5 = (r5 * k + (r >> 3) * a) / 255;
+    g6 = (g6 * k + (g >> 2) * a) / 255;
+    b5 = (b5 * k + (b >> 3) * a) / 255;
+    return (uint16_t)(r5 << 11 | g6 << 5 | b5);
+}
+
 void sgb_out_begin(SgbOut *o, uint16_t *out, int max)
 {
     o->out      = out;

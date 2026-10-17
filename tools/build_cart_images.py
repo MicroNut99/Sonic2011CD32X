@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """PORT32X: S6a - build the console cart image of every stage and report the cart budget.
-  tools/build_cart_images.py Data.rsdk [out dir, default cart_images] [-j cores]
+  tools/build_cart_images.py Data.rsdk [out dir, default cart_images] [-j cores] [--player N] [--only R11A,...]
+--player N: the stages played as player N (REV R3: 1 = Tails - the image holds that character's files);
+--only: just these stage folders.
 For each stage the PC host build loads it (a few frames) and writes its PC cart image; host/cart_build
 converts that to the SH2 image (big-endian, trimmed) - out/<folder>_<id>.bin. The report
 (out/cart_budget.md) gives each image's size, each act's total over its time periods (A-D: time
@@ -30,10 +32,13 @@ def parts_of(path):
 
 
 def one(job):
-    cat, pos, folder, sid, data, tmp, outdir = job
+    cat, pos, folder, sid, data, tmp, outdir, player = job
     d = os.path.join(tmp, f"{cat}_{pos}")
     img = os.path.join(d, "cart.img")
-    ms.run("soniccd_host", d, data, cat, pos, 3, {"SCD32X_CARTIMG_OUT": img})
+    env = {"SCD32X_CARTIMG_OUT": img}
+    if player:
+        env["SCD32X_PLAYER"] = str(player)  # REV R3
+    ms.run("soniccd_host", d, data, cat, pos, 3, env)
     if not os.path.exists(img + ".0"):
         return (folder, sid, None, "no stage load")
     out = os.path.join(outdir, f"{folder}_{sid}.bin")
@@ -49,6 +54,15 @@ def main():
     if "-j" in args:
         i = args.index("-j")
         jobsN = int(args[i + 1])
+        del args[i:i + 2]
+    player, only = 0, None
+    if "--player" in args:  # REV R3
+        i = args.index("--player")
+        player = int(args[i + 1])
+        del args[i:i + 2]
+    if "--only" in args:
+        i = args.index("--only")
+        only = set(args[i + 1].upper().split(","))
         del args[i:i + 2]
     if not args:
         print(__doc__)
@@ -66,7 +80,8 @@ def main():
         sys.exit(1)
     gc = sr.parse_gameconfig(sr.Data(data).read("Data/Game/GameConfig.bin"))
     tmp = tempfile.mkdtemp()
-    jobs = [(cat, pos, folder, sid, data, tmp, outdir) for cat in (1, 3, 0) for pos, (folder, sid, name) in enumerate(gc["lists"].get(cat, []))]
+    jobs = [(cat, pos, folder, sid, data, tmp, outdir, player) for cat in (1, 3, 0) for pos, (folder, sid, name) in enumerate(gc["lists"].get(cat, []))
+            if not only or folder.upper() in only]
     with ThreadPoolExecutor(max_workers=jobsN) as pool:
         results = list(pool.map(one, jobs))
     rows, hashes = [], {}

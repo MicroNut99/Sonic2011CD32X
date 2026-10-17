@@ -26,6 +26,7 @@ ushort *md_layer_begin(int slot, int layer, int tileYPos, ushort *frame);
 void md_layer_line(int slot, int line, int x);
 void md_layer_end(int slot);
 void md_check_frame();
+void md_sprite_draw(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py); // REV R3
 void md_check_summary();
 
 static unsigned int frameCount = 0;
@@ -367,6 +368,23 @@ unsigned int plat_pad()
 {
     hostInit();
     unsigned int now = plat_ticks_ms(), pad = 0;
+    static int demo = -1;
+    if (demo < 0) {
+        const char *v = getenv("SCD32X_PAD");
+        demo          = v && !strcmp(v, "demo");
+    }
+    if (demo) { // REV R3: SCD32X_PAD=demo - the console's demo pad (cd32x/engine/plat_mars.cpp, DEMO_PAD=1), for ever
+        if (now < 4000)
+            return 0;
+        unsigned int t = (now - 4000) % 4000;
+        if (t < 150) return PAD_DOWN;
+        if (t < 300) return PAD_DOWN | PAD_C;
+        if (t < 900) return PAD_DOWN;
+        if (t < 2400) return PAD_RIGHT;
+        if (t < 2700) return PAD_RIGHT | PAD_C;
+        if (t < 3900) return PAD_RIGHT;
+        return 0;
+    }
     for (int i = 0; i < padSteps && padScript[i].ms <= now; i++) pad = padScript[i].pad;
     return pad;
 }
@@ -481,6 +499,42 @@ void *plat_cart_data(int kind)
 // image <n> before the n-th stage load; the normal build writes image <n> after it.
 void plat_stage_loading()
 {
+    { // REV R3: SCD32X_PLAYER=n - the run starts with player n (0 Sonic, 1 Tails), as the game's character choice
+        static int forced = -2;
+        if (forced == -2) {
+            const char *p = getenv("SCD32X_PLAYER");
+            forced        = p && *p ? atoi(p) : -1;
+        }
+        if (forced >= 0 && cartLoads == 0)
+            playerListPos = forced;
+    }
+    { // REV R3: SCD32X_DISC_SCENES=1:0 - the scenes on the disc (the first one is the start scene). A scene that is
+      // not on it restarts the start scene with the other character, as the console does (cd32x/engine/plat_mars.cpp)
+        const char *v = getenv("SCD32X_DISC_SCENES");
+        if (v && *v) {
+            int startList = -1, startPos = -1, found = 0;
+            for (const char *p = v; *p;) {
+                int l = (int)strtol(p, (char **)&p, 10), s = -1;
+                if (*p == ':')
+                    s = (int)strtol(p + 1, (char **)&p, 10);
+                if (startList < 0)
+                    startList = l, startPos = s;
+                if (l == activeStageList && s == stageListPosition)
+                    found = 1;
+                while (*p && *p != ',') p++;
+                if (*p == ',')
+                    p++;
+            }
+            if (!found && startList >= 0) {
+                ev("PORT32X: scene %d:%d is not on the disc - the start scene %d:%d again, player %d -> %d", activeStageList,
+                   stageListPosition, startList, startPos, playerListPos, playerListPos == 1 ? 0 : 1);
+                activeStageList   = startList;
+                stageListPosition = startPos;
+                playerListPos     = playerListPos == 1 ? 0 : 1;
+                ResetCurrentStageFolder();
+            }
+        }
+    }
     const char *in = getenv("SCD32X_CARTIMG_IN");
     if (in && *in && !cart_read(in, cartLoads))
         ev("PORT32X: no cart image for stage load %d (kept the previous one)", cartLoads);
@@ -625,6 +679,11 @@ static void draw_log_write()
     fprintf(f, "sheetbytes %d\n", gfxDataPosition);
     fprintf(f, "maxfaces %ld maxvertices %ld\n", drawMaxFaces, drawMaxVertices);
     fclose(f);
+}
+// REV R3: the engine's sprite draw calls -> the PC check's model of the Genesis hardware sprites (SCD32X_SGBTEST)
+void plat_sprite(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py)
+{
+    md_sprite_draw(kind, sheet, sx, sy, w, h, x, y, dir, rot, px, py);
 }
 void plat_draw_log(const char *function, int sheet, int pixels)
 {

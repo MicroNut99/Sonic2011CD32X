@@ -240,7 +240,7 @@ static void count_kind(const char *kind)
 /* 2 = a problem (on hardware this can hang or corrupt), 1 = a warning, 0 = information */
 static int kind_severity(const char *k)
 {
-    static const char *info[] = { "W-COMM", "W-SYSREG", "W-VDP", "W-SAMPLING", "CCR", "VBR", "W-VECTOR", 0 };
+    static const char *info[] = { "W-COMM", "W-SYSREG", "W-VDP", "W-SAMPLING", "CCR", "VBR", "W-VECTOR", "W-BOOTREC", 0 };
     static const char *warn[] = { "R-UNDEF", 0 };
     for (int i = 0; info[i]; ++i)
         if (!strcmp(k, info[i]))
@@ -1277,8 +1277,12 @@ static void check_data_access(u32 a, int size, int write, u32 v)
                 ok = 2; /* scdSampling (the engine switches it) */
             if (off < 0x400 && cur_pc >= ENG_TEXT_LO && cur_pc < ENG_TEXT_LO + 0x100)
                 ok = 3; /* scd_engine_entry puts its exception handlers in the vector table */
+            if (off >= 0x1F14 && off < 0x1F18 && size == 4)
+                ok = 4; /* REV R3: boot record [5], the scene image now in the cart - the engine sets it after it loaded
+                           another scene (cd32x/engine/plat_mars.cpp scene_load) */
             if (!ok || ok >= 2)
-                evlog(ok == 2 ? "W-SAMPLING" : ok == 3 ? "W-VECTOR" : "W-LOADER", "addr=%08X size=%d val=%08X", a, size, v);
+                evlog(ok == 2 ? "W-SAMPLING" : ok == 3 ? "W-VECTOR" : ok == 4 ? "W-BOOTREC" : "W-LOADER", "addr=%08X size=%d val=%08X", a,
+                      size, v);
         }
         if (rg == RG_SDRAM && sdt_ran && off >= sdt_lo - 0x06000000u && off < sdt_hi - 0x06000000u)
             evlog("W-SDCODE", "addr=%08X size=%d val=%08X (into the engine's code in SDRAM)", a, size, v);
@@ -1758,6 +1762,45 @@ static int plane_pixel(u32 base, int hs, int vs, int x, int y, int *pri)
     *pri = e >> 15;
     return nib ? (((e >> 13) & 3) * 16 + nib) : -1;
 }
+static int vram_byte(u32 a) { u16 w = vram[(a >> 1) & 0x7FFF]; return (a & 1) ? (w & 0xFF) : (w >> 8); }
+/* REV R3: the sprites on line y (H40: the table at 0xF800 - SH2 command 68 sets register 5 to 0x7C -, the list from
+   entry 0 through the links, 80 at most, 20 sprites and 320 dots a line). pix[x]: -1 none, else priority << 8 |
+   palette line << 4 | colour; the first sprite in the list is in front. As host/md_check.cpp sgb_sprite_line. */
+static void sprite_line(int y, int *pix)
+{
+    for (int x = 0; x < 320; ++x) pix[x] = -1;
+    int i = 0, onLine = 0, dots = 0;
+    for (int n = 0; n < 80; ++n) {
+        u32 at   = 0xF800 + 8 * (u32)i;
+        int sy   = (vram_byte(at) << 8 | vram_byte(at + 1)) & 0x1FF;
+        int size = vram_byte(at + 2) & 0xF, link = vram_byte(at + 3) & 0x7F;
+        int attr = vram_byte(at + 4) << 8 | vram_byte(at + 5);
+        int sx   = (vram_byte(at + 6) << 8 | vram_byte(at + 7)) & 0x1FF;
+        int w = (size >> 2 & 3) + 1, h = (size & 3) + 1, ly = y + 128 - sy;
+        if (ly >= 0 && ly < h * 8) {
+            if (++onLine > 20)
+                break;
+            for (int px = 0; px < w * 8 && dots < 320; ++px, ++dots) {
+                int x = sx - 128 + px;
+                if (x < 0 || x >= 320 || pix[x] >= 0)
+                    continue;
+                int cx = px >> 3, cy = ly >> 3, fx = px & 7, fy = ly & 7;
+                if (attr & 0x800)
+                    cx = w - 1 - cx, fx = 7 - fx;
+                if (attr & 0x1000)
+                    cy = h - 1 - cy, fy = 7 - fy;
+                int tile = (attr & 0x7FF) + cx * h + cy;
+                int b    = vram_byte(((u32)tile * 32 + (u32)fy * 4 + (u32)(fx >> 1)) & 0xFFFF);
+                int c    = fx & 1 ? b & 15 : b >> 4;
+                if (c)
+                    pix[x] = (attr >> 15) << 8 | ((attr >> 13) & 3) << 4 | c;
+            }
+        }
+        if (!link)
+            break;
+        i = link;
+    }
+}
 static void write_shot(const char *path)
 {
     FILE *f = fopen(path, "wb");
@@ -1773,17 +1816,22 @@ static void write_shot(const char *path)
     hdr[26] = 1, hdr[28] = 24;
     fwrite(hdr, 1, 54, f);
     static u8 line[320 * 3];
+    static int spr[320];
     for (int y = H - 1; y >= 0; --y) {
         int hA = (s16)vram[(0xFC00 + y * 4) >> 1], hB = (s16)vram[(0xFC02 + y * 4) >> 1];
+        sprite_line(y, spr);
         for (int x = 0; x < W; ++x) {
             int pa, pb;
             int ca = plane_pixel(0xC000, hA, (s16)vsram[0], x, y, &pa);
             int cb = plane_pixel(0xE000, hB, (s16)vsram[1], x, y, &pb);
-            int c  = 0; /* backdrop: CRAM 0 */
+            int cs = spr[x] >= 0 ? (((spr[x] >> 4) & 3) * 16 + (spr[x] & 15)) : -1, ps = spr[x] >= 0 && (spr[x] >> 8);
+            int c  = 0; /* backdrop: CRAM 0; then low before high, and sprite before plane A before plane B */
             if (cb >= 0 && !pb) c = cb;
             if (ca >= 0 && !pa) c = ca;
+            if (cs >= 0 && !ps) c = cs;
             if (cb >= 0 && pb) c = cb;
             if (ca >= 0 && pa) c = ca;
+            if (cs >= 0 && ps) c = cs;
             u16 g = vcram[c & 63];
             line[x * 3 + 0] = (u8)(((g >> 9) & 7) * 36);
             line[x * 3 + 1] = (u8)(((g >> 5) & 7) * 36);
@@ -1792,7 +1840,7 @@ static void write_shot(const char *path)
         fwrite(line, 1, row, f);
     }
     fclose(f);
-    printf("[f%5d] the Genesis picture (planes model) -> %s\n", frame_no(), path);
+    printf("[f%5d] the Genesis picture (planes and sprites model) -> %s\n", frame_no(), path);
 }
 static int sub_boot_stage;
 static u32 comm32(int n) { return ((u32)COMM(n) << 16) | COMM(n + 2); }
@@ -2710,7 +2758,7 @@ int main(int argc, char **argv)
                    "  -hook ADDR     print registers whenever the SH2 reaches ADDR (up to -hookmax, default 50)\n"
                    "  -trace N COUNT print COUNT instructions from instruction N\n"
                    "  -dumpsdram FRAME FILE   write the 256 KB SDRAM at FRAME\n"
-                   "  -shot FRAME FILE.bmp   the Genesis picture at FRAME (planes model: records into a VDP model), up to 64\n"
+                   "  -shot FRAME FILE.bmp   the Genesis picture at FRAME (planes and sprites: records into a VDP model), up to 64\n"
                    "  -shots A B STEP PREFIX a picture every STEP frames from A to B (PREFIX_<frame>.bmp)\n"
                    "  -records N     print the first N plane records (default 3)\n"
                    "  -reccrc N      CRC of the first N records' contents (default 600): the same pictures at any speed\n"

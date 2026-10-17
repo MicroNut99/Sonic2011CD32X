@@ -2,6 +2,7 @@
 """PORT32X: S7a - every stage's data-pack subset for the cart (the SH2 has no file system).
   tools/build_stage_packs.py Data.rsdk [out dir, default stage_packs] [frames, default 900] [-j cores]
                              [--only R11A,R71A,...]   (just these stages)
+                             [--player N]             (REV R3: played as player N, 1 = Tails)
 Per stage, three runs of the host builds:
   1. normal build: the stage's cart image + camera log
   2. SH2 configuration on the full Data.rsdk (cart image from 1): logs every file it reads and the
@@ -26,14 +27,15 @@ def same(a, b):
 
 
 def one(job):
-    cat, pos, folder, sid, data, frames, tmp, outdir = job
+    cat, pos, folder, sid, data, frames, tmp, outdir, player = job
     d = os.path.join(tmp, f"{cat}_{pos}")
     img = os.path.join(d, "cart.img")
     log = os.path.join(d, "files.txt")
-    ms.run("soniccd_host", os.path.join(d, "n"), data, cat, pos, frames, {"SCD32X_CARTIMG_OUT": img})
+    pl = {"SCD32X_PLAYER": str(player)} if player else {}  # REV R3: every run as that character
+    ms.run("soniccd_host", os.path.join(d, "n"), data, cat, pos, frames, dict(pl, SCD32X_CARTIMG_OUT=img))
     if not os.path.exists(img + ".0"):
         return (f"{folder}/{sid}", None, 0, 0, "no stage load", "")
-    ms.run("soniccd_host_sh2cfg_asan", os.path.join(d, "s"), data, cat, pos, frames, {"SCD32X_CARTIMG_IN": img, "SCD32X_FILELOG": log})
+    ms.run("soniccd_host_sh2cfg_asan", os.path.join(d, "s"), data, cat, pos, frames, dict(pl, SCD32X_CARTIMG_IN=img, SCD32X_FILELOG=log))
     full = same(os.path.join(d, "n", "camlog.txt"), os.path.join(d, "s", "camlog.txt"))
     src = sr.Data(data)
     files = {}
@@ -47,7 +49,7 @@ def one(job):
             files[src.index[path.lower()][0]] = src.read_range(path, 0, min(int(n), src.size(path)))
     pack = os.path.join(outdir, f"{folder}_{sid}.rsdk")
     rp.write_pack(pack, files)
-    ms.run("soniccd_host_sh2cfg_asan", os.path.join(d, "m"), pack, cat, pos, frames, {"SCD32X_CARTIMG_IN": img})
+    ms.run("soniccd_host_sh2cfg_asan", os.path.join(d, "m"), pack, cat, pos, frames, dict(pl, SCD32X_CARTIMG_IN=img))
     mini = same(os.path.join(d, "n", "camlog.txt"), os.path.join(d, "m", "camlog.txt"))
     out = open(os.path.join(d, "m", "out.txt"), errors="replace").read()
     asan = "ERROR: AddressSanitizer" in out
@@ -76,6 +78,11 @@ def main():
         i = args.index("-j")
         jobsN = int(args[i + 1])
         del args[i:i + 2]
+    player = 0
+    if "--player" in args:  # REV R3
+        i = args.index("--player")
+        player = int(args[i + 1])
+        del args[i:i + 2]
     if not args:
         print(__doc__)
         sys.exit(1)
@@ -87,7 +94,7 @@ def main():
     subprocess.run(["make", "-s", "-C", os.path.join(ROOT, "host"), "SH2CFG=1", "ASAN=1"], check=True)
     gc = sr.parse_gameconfig(sr.Data(data).read("Data/Game/GameConfig.bin"))
     tmp = tempfile.mkdtemp()
-    jobs = [(cat, pos, folder, sid, data, frames, tmp, outdir) for cat in (1, 3, 0) for pos, (folder, sid, name) in enumerate(gc["lists"].get(cat, []))
+    jobs = [(cat, pos, folder, sid, data, frames, tmp, outdir, player) for cat in (1, 3, 0) for pos, (folder, sid, name) in enumerate(gc["lists"].get(cat, []))
             if not only or folder.upper() in only]
     print(f"{len(jobs)} stages, {jobsN} at a time", flush=True)
     rows = []

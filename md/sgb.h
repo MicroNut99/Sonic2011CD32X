@@ -52,6 +52,9 @@ int sgb_out_end(SgbOut *o, uint16_t vA, uint16_t vB, const int16_t *hsA, const i
 
 /* engine colour (RGB565) -> Genesis CRAM word, as host/md_check.cpp's md_color */
 uint16_t sgb_md_color(uint16_t rgb565);
+/* REV R3: the engine's fade (DrawStageGFX's whole-screen rectangle, fadeMode) applied to a colour (RGB565) instead:
+   the same mix per channel, done on the palette - the planes and the sprites fade with it */
+uint16_t sgb_fade565(uint16_t c, int r, int g, int b, int a);
 
 /* PC model of the 68000 side (the test): applies one record. vram_w(ctx, addr, word) for name words,
    hsA/hsB[lines] and vA/vB get the scroll, cram[64] the colour changes. Returns words consumed. */

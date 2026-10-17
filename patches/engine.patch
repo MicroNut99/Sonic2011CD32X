@@ -601,7 +601,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp engine/Drawing.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.cpp	2026-10-16 15:29:54.138724723 -0700
++++ engine/Drawing.cpp	2026-10-16 19:47:55.596612392 -0700
 @@ -15,9 +15,15 @@
  // it rather than remove it outright.
  #define DONT_USE_VIEW_ANGLE (1)
@@ -833,16 +833,20 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      for (int i = 0; i < SURFACE_COUNT; ++i) {
          if (gfxSurface[i].texStartY + gfxSurface[i].height <= HW_TEXTURE_SIZE && gfxSurface[i].texStartX > -1) {
              int gfxPos = gfxSurface[i].dataPosition;
-@@ -1874,6 +1950,8 @@
+@@ -1874,8 +1950,12 @@
      }
  }
  
 +// PORT32X R1V: runs every frame - SDRAM on the console (RetroEngine.hpp SCD_HOT)
++int scdDrawLayer = 0; // REV R3
 +void DrawObjectList(int Layer) SCD_HOT;
  void DrawObjectList(int Layer)
  {
++    scdDrawLayer = Layer; // REV R3: for the sprites' priority (plat_sprite)
      int size = drawListEntries[Layer].listSize;
-@@ -1888,11 +1966,13 @@
+     for (int i = 0; i < size; ++i) {
+         objectLoop = drawListEntries[Layer].entityRefs[i];
+@@ -1888,11 +1968,13 @@
  
          if (type) {
              activePlayer = 0;
@@ -857,7 +861,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void DrawStageGFX()
  {
      waterDrawPos = waterLevel - yScrollOffset;
-@@ -2037,6 +2117,7 @@
+@@ -2037,6 +2119,7 @@
  #if !RETRO_USE_ORIGINAL_CODE
  void DrawDebugOverlays()
  {
@@ -865,7 +869,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (showHitboxes) {
          for (int i = 0; i < debugHitboxCount; ++i) {
              DebugHitboxInfo *info = &debugHitboxList[i];
-@@ -2127,8 +2208,92 @@
+@@ -2127,8 +2210,92 @@
  }
  #endif
  
@@ -958,7 +962,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer   = &stageLayouts[activeTileLayers[layerID]];
          int screenwidth16  = (GFX_LINESIZE >> 4) - 1;
-@@ -2157,7 +2322,16 @@
+@@ -2157,7 +2324,16 @@
              lastXSize     = layer->xsize;
              yscrollOffset = yScrollOffset;
              lineScroll    = layer->lineScroll;
@@ -975,7 +979,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
              deformationData  = &bgDeformationData0[(byte)(yscrollOffset + layer->deformationOffset)];
              deformationDataW = &bgDeformationData1[(byte)(yscrollOffset + waterDrawPos + layer->deformationOffsetW)];
          }
-@@ -2165,6 +2339,9 @@
+@@ -2165,6 +2341,9 @@
          if (layer->type == LAYER_HSCROLL) {
              if (lastXSize != layerwidth) {
                  int fullLayerwidth = layerwidth << 7;
@@ -985,7 +989,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  for (int i = 0; i < hParallax.entryCount; ++i) {
                      hParallax.linePos[i] = xScrollOffset * hParallax.parallaxFactor[i] >> 8;
                      hParallax.scrollPos[i] += hParallax.scrollSpeed[i];
-@@ -2173,7 +2350,24 @@
+@@ -2173,7 +2352,24 @@
                      if (hParallax.scrollPos[i] < 0)
                          hParallax.scrollPos[i] += fullLayerwidth << 16;
                      hParallax.linePos[i] += hParallax.scrollPos[i] >> 16;
@@ -1010,7 +1014,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  }
              }
              lastXSize = layerwidth;
-@@ -2184,6 +2378,13 @@
+@@ -2184,6 +2380,13 @@
          int tileYPos           = yscrollOffset % (layerheight << 7);
          if (tileYPos < 0)
              tileYPos += layerheight << 7;
@@ -1024,7 +1028,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          byte *scrollIndex = &lineScroll[tileYPos];
          int tileY16       = tileYPos & 0xF;
          int chunkY        = tileYPos >> 7;
-@@ -2191,6 +2392,22 @@
+@@ -2191,6 +2394,22 @@
  
          // Draw Above Water (if applicable)
          int drawableLines[2] = { waterDrawPos, SCREEN_YSIZE - waterDrawPos };
@@ -1047,7 +1051,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          for (int i = 0; i < 2; ++i) {
              while (drawableLines[i]--) {
                  activePalette   = fullPalette[*lineBuffer];
-@@ -2203,8 +2420,9 @@
+@@ -2203,8 +2422,9 @@
                          deform = *deformationData;
  
                      // Fix for SS5 mobile bug
@@ -1059,7 +1063,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                          deform >>= 4;
  
                      chunkX += deform;
-@@ -2221,6 +2439,10 @@
+@@ -2221,6 +2441,10 @@
                      chunkX += fullLayerwidth;
                  if (chunkX >= fullLayerwidth)
                      chunkX -= fullLayerwidth;
@@ -1070,7 +1074,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  int chunkXPos         = chunkX >> 7;
                  int tilePxXPos        = chunkX & 0xF;
                  int tileXPxRemain     = TILE_SIZE - tilePxXPos;
-@@ -2637,6 +2859,7 @@
+@@ -2637,6 +2861,7 @@
                      }
                  }
  
@@ -1078,7 +1082,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
                  if (++tileY16 > TILE_SIZE - 1) {
                      tileY16 = 0;
                      ++tileY;
-@@ -2650,8 +2873,22 @@
+@@ -2650,8 +2875,22 @@
                  }
              }
          }
@@ -1101,7 +1105,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          TileLayer *layer      = &stageLayouts[activeTileLayers[layerID]];
          byte *lineScrollPtr   = NULL;
          int chunkPosX         = 0;
-@@ -3481,6 +3718,7 @@
+@@ -3481,6 +3720,7 @@
  }
  void DrawVLineScrollLayer(int layerID)
  {
@@ -1109,7 +1113,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
          if (!layer->xsize || !layer->ysize)
-@@ -3535,6 +3773,7 @@
+@@ -3535,6 +3775,7 @@
          ushort *frameBufferPtr = Engine.frameBuffer;
          activePalette          = fullPalette[gfxLineBuffer[0]];
          activePalette32        = fullPalette32[gfxLineBuffer[0]];
@@ -1117,7 +1121,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
          int tileXPos           = xscrollOffset % (layerheight << 7);
          if (tileXPos < 0)
              tileXPos += layerheight << 7;
-@@ -4064,6 +4303,8 @@
+@@ -4064,6 +4305,8 @@
  }
  void Draw3DFloorLayer(int layerID)
  {
@@ -1126,7 +1130,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4644,6 +4885,8 @@
+@@ -4644,6 +4887,8 @@
  }
  void Draw3DSkyLayer(int layerID)
  {
@@ -1135,7 +1139,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
      if (!layer->xsize || !layer->ysize)
          return;
-@@ -4727,6 +4970,8 @@
+@@ -4727,6 +4972,8 @@
  
  void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
  {
@@ -1144,7 +1148,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A > 0xFF)
          A = 0xFF;
      if (renderType == RENDER_SW) {
-@@ -4828,6 +5073,7 @@
+@@ -4828,6 +5075,7 @@
  
  void SetFadeHQ(int R, int G, int B, int A)
  {
@@ -1152,7 +1156,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (A <= 0)
          return;
      if (A > 0xFF)
-@@ -4871,6 +5117,8 @@
+@@ -4871,6 +5119,8 @@
  
  void DrawTintRectangle(int XPos, int YPos, int width, int height)
  {
@@ -1161,7 +1165,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -4907,6 +5155,8 @@
+@@ -4907,6 +5157,8 @@
  void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                          int sheetID)
  {
@@ -1170,34 +1174,38 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5008,6 +5258,8 @@
+@@ -5008,6 +5260,9 @@
  
  void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
 +    SCD_DRAWLOG("DrawSprite", sheetID, width * height);
++    SCD_SPRITE(0, sheetID, sprX, sprY, width, height, XPos, YPos, FLIP_NONE, 0, 0, 0); // REV R3
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -5102,6 +5354,8 @@
+@@ -5102,6 +5357,9 @@
  
  void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
  {
 +    SCD_DRAWLOG("DrawSpriteFlipped", sheetID, width * height);
++    SCD_SPRITE(0, sheetID, sprX, sprY, width, height, XPos, YPos, direction, 0, 0, 0); // REV R3
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          int widthFlip  = width;
          int heightFlip = height;
-@@ -5399,6 +5653,8 @@
+@@ -5399,6 +5657,10 @@
  void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                        int sheetID)
  {
 +    SCD_DRAWLOG("DrawSpriteScaled", sheetID, width * height);
++    if (scaleX == 0x200 && scaleY == 0x200) // REV R3: at its own size only (the VDP does not scale)
++        SCD_SPRITE(1, sheetID, sprX, sprY, width, height, XPos, YPos, direction, 0, pivotX, pivotY);
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          int roundedYPos = 0;
          int roundedXPos = 0;
-@@ -5558,6 +5814,8 @@
+@@ -5558,6 +5820,8 @@
  void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                      int sheetID)
  {
@@ -1206,16 +1214,17 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      // Not avaliable in SW Render mode
  
      if (renderType == RENDER_HW) {
-@@ -5616,6 +5874,8 @@
+@@ -5616,6 +5880,9 @@
  void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                         int sheetID)
  {
 +    SCD_DRAWLOG("DrawSpriteRotated", sheetID, width * height);
++    SCD_SPRITE(1, sheetID, sprX, sprY, width, height, XPos, YPos, direction, rotation, pivotX, pivotY); // REV R3
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          int sprXPos    = (pivotX + sprX) << 9;
          int sprYPos    = (pivotY + sprY) << 9;
-@@ -5880,6 +6140,8 @@
+@@ -5880,6 +6147,8 @@
  void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
                          int sheetID)
  {
@@ -1224,34 +1233,39 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (scale == 0)
          return;
  
-@@ -6148,6 +6410,8 @@
+@@ -6148,6 +6417,9 @@
  
  void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
  {
 +    SCD_DRAWLOG("DrawBlendedSprite", sheetID, width * height);
++    SCD_SPRITE(2, sheetID, sprX, sprY, width, height, XPos, YPos, FLIP_NONE, 0, 0, 0); // REV R3: half see-through: every other frame
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6236,6 +6500,8 @@
+@@ -6236,6 +6508,10 @@
  }
  void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
 +    SCD_DRAWLOG("DrawAlphaBlendedSprite", sheetID, width * height);
++    if (alpha >= 0x40) // REV R3: drawn plain when (nearly) opaque, else every other frame (see-through, as the Genesis games)
++        SCD_SPRITE(alpha >= 0xF0 ? 0 : 2, sheetID, sprX, sprY, width, height, XPos, YPos, FLIP_NONE, 0, 0, 0);
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (disableTouchControls) {
          if (StrComp(gfxSurface[sheetID].fileName, "Data/Sprites/Global/DPad.gif"))
              return;
-@@ -6359,6 +6625,8 @@
+@@ -6359,6 +6635,10 @@
  }
  void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
 +    SCD_DRAWLOG("DrawAdditiveBlendedSprite", sheetID, width * height);
++    if (alpha >= 0x40) // REV R3: every other frame (a glow on the Genesis: no adding colours)
++        SCD_SPRITE(2, sheetID, sprX, sprY, width, height, XPos, YPos, FLIP_NONE, 0, 0, 0);
 +    SCD_NODRAW_RETURN(); // PORT32X S5b: no pixels in the no-draw build
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6459,6 +6727,8 @@
+@@ -6459,6 +6739,8 @@
  }
  void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
  {
@@ -1260,7 +1274,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (renderType == RENDER_SW) {
          if (width + XPos > GFX_LINESIZE)
              width = GFX_LINESIZE - XPos;
-@@ -6664,6 +6934,8 @@
+@@ -6664,6 +6946,8 @@
  
  void DrawFace(void *v, uint colour)
  {
@@ -1269,7 +1283,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -6849,6 +7121,8 @@
+@@ -6849,6 +7133,8 @@
  }
  void DrawTexturedFace(void *v, byte sheetID)
  {
@@ -1278,7 +1292,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      Vertex *verts = (Vertex *)v;
  
      if (renderType == RENDER_SW) {
-@@ -7022,6 +7296,7 @@
+@@ -7022,6 +7308,7 @@
  
  void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
  {
@@ -1286,7 +1300,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int Y           = YPos << 9;
      if (rowCount < 0)
-@@ -7052,6 +7327,7 @@
+@@ -7052,6 +7339,7 @@
  
  void DrawTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1294,7 +1308,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7062,6 +7338,7 @@
+@@ -7062,6 +7350,7 @@
  }
  void DrawStageTextEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1302,7 +1316,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7077,6 +7354,7 @@
+@@ -7077,6 +7366,7 @@
  }
  void DrawBlendedTextMenuEntry(void *menu, int rowID, int XPos, int YPos, int textHighlight)
  {
@@ -1310,7 +1324,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      TextMenu *tMenu = (TextMenu *)menu;
      int id          = tMenu->entryStart[rowID];
      for (int i = 0; i < tMenu->entrySize[rowID]; ++i) {
-@@ -7087,6 +7365,8 @@
+@@ -7087,6 +7377,8 @@
  }
  void DrawTextMenu(void *menu, int XPos, int YPos)
  {
@@ -1321,8 +1335,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      if (tMenu->visibleRowCount > 0) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp engine/Drawing.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Drawing.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Drawing.hpp	2026-10-15 21:43:01.364910970 -0700
-@@ -12,8 +12,14 @@
++++ engine/Drawing.hpp	2026-10-16 18:36:03.015989588 -0700
+@@ -12,14 +12,26 @@
  enum InkFlags { INK_NONE, INK_BLEND, INK_ALPHA, INK_ADD, INK_SUB };
  enum DrawFXFlags { FX_SCALE, FX_ROTATE, FX_ROTOZOOM, FX_INK, FX_TINT, FX_FLIP };
  
@@ -1338,7 +1352,20 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      int listSize;
  };
  
-@@ -28,9 +34,15 @@
++// PORT32X R3: the SH2's sheet names are at most 39 characters (Data.rsdk's longest .gif path) - 2.5 KB of SDRAM
++#if defined(__sh__) && SCD32X_SH2
++#define SCD_SURFACE_NAME 0x30
++#else
++#define SCD_SURFACE_NAME 0x80
++#endif
+ struct GFXSurface {
+     // char fileName[0x40];
+-    char fileName[0x80]; // originally 0x40, updated to 0x80 in sega forever vers
++    char fileName[SCD_SURFACE_NAME]; // originally 0x40, updated to 0x80 in sega forever vers (PORT32X R3: SH2 0x30)
+     int height;
+     int width;
+     int widthShifted;
+@@ -28,9 +40,15 @@
      int dataPosition;
  };
  
@@ -1357,7 +1384,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  extern int SCREEN_XSIZE;
  extern int SCREEN_CENTERX;
-@@ -42,8 +54,17 @@
+@@ -42,8 +60,22 @@
  extern DrawListEntry drawListEntries[DRAWLAYER_COUNT];
  
  extern int gfxDataPosition;
@@ -1365,6 +1392,11 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +#define SCD_DRAWLOG(fn, sheet, pixels) plat_draw_log(fn, sheet, pixels) // PORT32X S7e
 +#else
 +#define SCD_DRAWLOG(fn, sheet, pixels)
++#endif
++#if RETRO_PLATFORM == RETRO_SCD32X // REV R3: the sprite draw calls, for the Genesis hardware sprites
++#define SCD_SPRITE(kind, sheet, sx, sy, w, h, x, y, dir, rot, px, py) plat_sprite(kind, sheet, sx, sy, w, h, x, y, dir, rot, px, py)
++#else
++#define SCD_SPRITE(kind, sheet, sx, sy, w, h, x, y, dir, rot, px, py)
 +#endif
  extern GFXSurface gfxSurface[SURFACE_COUNT];
 -extern byte graphicData[GFXDATA_SIZE];
@@ -1376,7 +1408,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  #if RETRO_USE_ORIGINAL_CODE
  #define VERTEX_COUNT (0x2000)
-@@ -77,18 +98,18 @@
+@@ -77,18 +109,18 @@
      Colour colour;
  };
  
@@ -1399,7 +1431,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern float floor3DXPos;
  extern float floor3DYPos;
  extern float floor3DZPos;
-@@ -96,7 +117,7 @@
+@@ -96,7 +128,7 @@
  extern bool render3DEnabled;
  extern bool hq3DFloorEnabled;
  
@@ -1943,9 +1975,13 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      switch (player->controlMode) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Reader.cpp engine/Reader.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Reader.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Reader.cpp	2026-10-15 21:43:01.366058606 -0700
-@@ -4,7 +4,39 @@
- char rsdkName[0x400];
++++ engine/Reader.cpp	2026-10-16 18:29:08.119449684 -0700
+@@ -1,10 +1,42 @@
+ #include "RetroEngine.hpp"
+ #include <string>
+ 
+-char rsdkName[0x400];
++char rsdkName[SCD_RSDKNAME_SIZE]; // PORT32X R3 (Reader.hpp)
  
  char fileName[0x100];
 -byte fileBuffer[0x2000];
@@ -2018,7 +2054,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  size_t GetFilePosition()
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Reader.hpp engine/Reader.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Reader.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Reader.hpp	2026-10-15 21:43:01.366208117 -0700
++++ engine/Reader.hpp	2026-10-16 18:29:08.119134311 -0700
 @@ -1,6 +1,26 @@
  #ifndef READER_H
  #define READER_H
@@ -2054,8 +2090,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  struct FileInfo {
      char fileName[0x100];
-@@ -55,7 +76,9 @@
- extern char rsdkName[0x400];
+@@ -52,10 +73,18 @@
+ #endif
+ };
+ 
+-extern char rsdkName[0x400];
++// PORT32X R3: the SH2's data pack name is "Data.rsdk" - 1 KB of SDRAM back
++#if defined(__sh__) && SCD32X_SH2
++#define SCD_RSDKNAME_SIZE 0x40
++#else
++#define SCD_RSDKNAME_SIZE 0x400
++#endif
++extern char rsdkName[SCD_RSDKNAME_SIZE];
  
  extern char fileName[0x100];
 -extern byte fileBuffer[0x2000];
@@ -2065,7 +2111,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern int fileSize;
  extern int vFileSize;
  extern int readPos;
-@@ -89,8 +112,18 @@
+@@ -89,8 +118,18 @@
  bool CheckRSDKFile(const char *filePath);
  
  bool LoadFile(const char *filePath, FileInfo *fileInfo);
@@ -2084,7 +2130,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      int result = 0;
      if (cFileHandle)
          result = fClose(cFileHandle);
-@@ -105,8 +138,8 @@
+@@ -105,8 +144,8 @@
  
  inline size_t FillFileBuffer()
  {
@@ -2095,7 +2141,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      else
          readSize = fileSize - readPos;
  
-@@ -118,6 +151,9 @@
+@@ -118,6 +157,9 @@
  
  inline void GetFileInfo(FileInfo *fileInfo)
  {
@@ -4036,7 +4082,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  void LoadTextFile(TextMenu *menu, const char *filePath, byte mapCode);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp engine/Userdata.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Userdata.cpp	2026-10-15 22:40:49.696185476 -0700
++++ engine/Userdata.cpp	2026-10-16 18:29:08.118738804 -0700
 @@ -53,10 +53,30 @@
  
  int globalVariablesCount;
@@ -4138,10 +4184,26 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
      // Loaded here so it can be disabled
  #if RETRO_PLATFORM == RETRO_WIN && _MSC_VER
      if (Engine.useSteamDir) {
+@@ -733,6 +800,7 @@
+         WriteUserdata();
+     }
+ 
++#if SCD_ACHIEVEMENT_NAME == 0x40 // PORT32X R3: not on the SH2
+     StrCopy(achievements[0].name, "88 Miles Per Hour");
+     StrCopy(achievements[1].name, "Just One Hug is Enough");
+     StrCopy(achievements[2].name, "Paradise Found");
+@@ -745,6 +813,7 @@
+     StrCopy(achievements[9].name, "Dr Eggman Got Served");
+     StrCopy(achievements[10].name, "Just In Time");
+     StrCopy(achievements[11].name, "Saviour of the Planet");
++#endif
+ }
+ 
+ void WriteSettings()
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp engine/Userdata.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/Userdata.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Userdata.hpp	2026-10-15 21:43:01.369295145 -0700
-@@ -8,7 +8,30 @@
++++ engine/Userdata.hpp	2026-10-16 18:29:08.118012618 -0700
+@@ -8,15 +8,44 @@
  
  #define MOD_COUNT (0x100)
  
@@ -4173,7 +4235,22 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  
  enum OnlineMenuTypes {
      ONLINEMENU_ACHIEVEMENTS = 0,
-@@ -26,7 +49,11 @@
+     ONLINEMENU_LEADERBOARDS = 1,
+ };
+ 
++// PORT32X R3: the SH2 keeps no achievement names (nothing shows them on the console) - 4 KB of SDRAM for the sprites
++#if defined(__sh__) && SCD32X_SH2
++#define SCD_ACHIEVEMENT_NAME 4
++#else
++#define SCD_ACHIEVEMENT_NAME 0x40
++#endif
+ struct Achievement {
+-    char name[0x40];
++    char name[SCD_ACHIEVEMENT_NAME];
+     int status;
+ };
+ 
+@@ -26,7 +55,11 @@
  
  extern int globalVariablesCount;
  extern int globalVariables[GLOBALVAR_COUNT];
@@ -4247,8 +4324,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
-+++ engine/plat.hpp	2026-10-16 12:35:07.662964573 -0700
-@@ -0,0 +1,71 @@
++++ engine/plat.hpp	2026-10-16 18:23:27.949616334 -0700
+@@ -0,0 +1,76 @@
 +#ifndef PLAT_H
 +#define PLAT_H
 +// PORT32X: the platform layer of the Sega CD32X port.
@@ -4298,6 +4375,11 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' R
 +void plat_file_read(const char *path, int position);
 +// S7e: the game's drawing, measured (PC builds: SCD32X_DRAWLOG=file; the SH2 build does not call it)
 +void plat_draw_log(const char *function, int sheet, int pixels);
++// REV R3: a sprite draw call (md/md_sprites.h): kind 0 DrawSprite / DrawSpriteFlipped (x, y = the rect's top-left,
++// dir = the flip), 1 DrawSpriteRotated (x, y = its centre, px, py = its pivot arguments, rot = its rotation). The SH2
++// planes build makes Genesis hardware sprites of them; the PC check (SCD32X_SGBTEST) the same, in its model.
++void plat_sprite(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py);
++extern int scdDrawLayer; // REV R3: the draw list being drawn (Drawing.cpp DrawObjectList)
 +// S7e: where the engine's renderer draws (SH2 drawing build: the 32X frame buffer)
 +unsigned short *plat_frame_target();
 +void plat_stage_loading(); // a stage is about to load (the SH2 selects that stage's cart image here)

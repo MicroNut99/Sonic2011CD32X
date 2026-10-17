@@ -33,6 +33,7 @@ void plat_stage_loaded() {}
 void plat_stage_loading() {}
 void plat_file_read(const char *, int) {}
 void plat_draw_log(const char *, int, int) {}
+void plat_sprite(int, int, int, int, int, int, int, int, int, int, int, int) {} // REV R3
 unsigned short *plat_frame_target() { return 0; }
 unsigned char *plat_fb_data(int, int size) { return (unsigned char *)calloc(1, size); }
 void plat_chunk_arrays(const unsigned short **a, const unsigned char **b, const unsigned char **c, const unsigned char **d, int *n)
