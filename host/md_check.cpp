@@ -1839,6 +1839,10 @@ void sgb_stage()
     }
     memset(aniDirty, 0, sizeof(aniDirty)); // (the planes are written from scratch)
     aniDirtyAny = false;
+    if (sgb.aniOn) // as plat_mars.cpp planes_load: a tile showing a picture without name words - its own again
+        for (int t = 0; t < 1024; ++t)
+            if (!(sgb.aniShown[aniMap[t] >> 3] >> (aniMap[t] & 7) & 1))
+                aniMap[t] = (uint16_t)t;
 }
 
 int sgb_pixel(uint16_t nameBase, int16_t hs, uint16_t vs, int x, int y)
@@ -2011,11 +2015,13 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
             md_log("SPR uploads per frame: none %ld, <=128 %ld, <=256 %ld, <=512 %ld, <=768 %ld, <=1024 %ld, <=1600 %ld, more %ld", hist[0], hist[1],
                    hist[2], hist[3], hist[4], hist[5], hist[6], hist[7]);
     }
+    bool freshA = false, freshB = false; // REV R4C: a plane written from scratch this frame (as plat_mars.cpp)
     if (layoutSetsLost) { // REV R4B: more layout changes than the queue holds - both planes from scratch, now
         md_plane_reset(&sgb.pA);
         md_plane_reset(&sgb.pB);
         layoutSets.clear();
         layoutSetsLost = false;
+        freshA = freshB = true;
     }
     MdLayer LA = layer(0, fgSlots);
     md_plane_update(&sgb.pA, &LA, SGB_NAME_A, rec[fgSlot].tileYPos, rec[fgSlot].x, SCREEN_YSIZE, SCREEN_XSIZE, hsA, &vA, sgb_write, &o);
@@ -2023,6 +2029,7 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
         if (bgLayer != sgb.bLayer) {
             md_plane_reset(&sgb.pB);
             sgb.bLayer = bgLayer;
+            freshB     = true;
         }
         MdLayer LB = layer(bgLayer, bgSlots);
         md_plane_update(&sgb.pB, &LB, SGB_NAME_B, rec[bgSlot].tileYPos, rec[bgSlot].x, SCREEN_YSIZE, SCREEN_XSIZE, hsB, &vB, sgb_write, &o);
@@ -2043,8 +2050,9 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
     layoutSets.clear();
     if (sgb.aniOn && aniDirtyAny) { // REV R4C: the animated tiles' cells the planes hold (plat_mars.cpp planes_frame)
         MdLayer L0 = layer(0, fgSlots);
-        md_plane_refresh(&sgb.pA, &L0, SGB_NAME_A, sgb.aniChunks.data(), aniDirty, sgb_write, &o);
-        if (bgLayer >= 0) {
+        if (!freshA)
+            md_plane_refresh(&sgb.pA, &L0, SGB_NAME_A, sgb.aniChunks.data(), aniDirty, sgb_write, &o);
+        if (bgLayer >= 0 && !freshB) {
             MdLayer L1 = layer(bgLayer, bgSlots);
             md_plane_refresh(&sgb.pB, &L1, SGB_NAME_B, sgb.aniChunks.data(), aniDirty, sgb_write, &o);
         }

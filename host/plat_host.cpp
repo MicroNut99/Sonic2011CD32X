@@ -536,8 +536,9 @@ static int pmLayerY[4];
 static bool pmLayerOn[4];
 static unsigned long pmFrames = 0, pmBadFrames = 0, pmBadPixels = 0, pmApxPixels = 0, pmApxDiffer = 0;
 static unsigned char pmOp[328 * 224], pmOpNow = 0; // the draw call that wrote each pixel last (a debug aid)
+static unsigned long long pmOpW[32], pmOpShown[32]; // per draw call: pixels written, pixels shown (every 600 frames)
 static bool pmDrew = false, pmWaitDraw = false; // a pixel written this frame; the display waits for the first such frame
-#define PM_SET(off, v) (pmBuf[pmCur][(off)] = (unsigned char)(v), pmApx[pmCur][(off)] = 0, pmOp[(off)] = pmOpNow, pmDrew = true)
+#define PM_SET(off, v) (pmBuf[pmCur][(off)] = (unsigned char)(v), pmApx[pmCur][(off)] = 0, pmOp[(off)] = pmOpNow, pmOpW[pmOpNow & 31]++, pmDrew = true)
 #define PM_W16(off, w) (PM_SET((off), (w) >> 8), PM_SET((off) + 1, (w) & 0xFF))
 #define PM_O16(off, w)                       \
     do {                                     \
@@ -829,6 +830,8 @@ static void pm_check_frame(const unsigned short *frame, int pitch)
                 fprintf(pmCheckLog, " %d:%d", k, ops[k]);
         fprintf(pmCheckLog, "\n");
     }
+    for (int y = 0; y < 224; ++y)
+        for (int x = 0; x < 320; ++x) pmOpShown[pmOp[y * 328 + x] & 31]++;
     pmFrames++;
     pmApxPixels += nApx;
     pmApxDiffer += nApxDiff;
@@ -891,6 +894,14 @@ static void pm_check_frame(const unsigned short *frame, int pitch)
     if (frameCount % 600 == 599)
         fprintf(pmCheckLog, "%u ... %lu picture frames, %lu with differences (%lu pixels); %lu pixels approximated (%lu of them differ)\n",
                 frameCount, pmFrames, pmBadFrames, pmBadPixels, pmApxPixels, pmApxDiffer);
+    if (frameCount % 600 == 599) { /* which draw calls' pixels show (1 clear, 2 sprite, 3 scaled, 4 rotozoom, 5 rect, 6 face,
+                                      7 textured face, 8 3D scene, 9 floor, 10+ the layer slots) */
+        fprintf(pmCheckLog, "  pixels written / shown by draw call:");
+        for (int k = 0; k < 32; ++k)
+            if (pmOpW[k] || pmOpShown[k])
+                fprintf(pmCheckLog, " %d:%llu/%llu", k, pmOpW[k], pmOpShown[k]);
+        fprintf(pmCheckLog, "\n");
+    }
     fflush(pmCheckLog);
     pmCur ^= 1; /* the console draws the next frame into the other buffer */
     pmPalGen++;

@@ -38,6 +38,11 @@ static void scd_sampling(unsigned int on)
     if (a >= 0x06000000u && a < 0x06002000u)
         *(volatile unsigned int *)a = on;
 }
+static unsigned int scd_sampling_now() /* REV R4C: the sampler on (1) - it writes COMM8's high word and COMM12 */
+{
+    unsigned int a = SCD_BOOT_RECORD[7];
+    return (a >= 0x06000000u && a < 0x06002000u) ? *(volatile unsigned int *)a : 0;
+}
 #define STATE(code) (*(volatile unsigned short *)0x2000402C = (unsigned short)(code)) /* Kobo's STATE (COMM12) */
 
 void scd_status(int row, const char *t, int color);
@@ -488,6 +493,7 @@ enum { PLANES_OFF_TEXT, PLANES_OFF_PICTURE, PLANES_OFF_BLACK }; /* REV R4B: what
 static void planes_off(int show = PLANES_OFF_PICTURE)
 {
     sky_off(); /* REV R4B */
+    aniTiles = 0; /* REV R4C: the act file's slot may get another file (the menu's, the credits'): planes_load sets it */
     if (!planesOn && !menuOn)
         return;
     if (show == PLANES_OFF_PICTURE)
@@ -548,6 +554,12 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
         if (at <= bytes - 8 - 192)
             aniTiles = f + at;
     }
+    if (aniTiles) /* a tile that shows a picture without name words (copied while no act file was in): its own again */
+        for (int t = 0; t < TILE_COUNT; ++t) {
+            unsigned int s = pmTileMap[t];
+            if (!(aniTiles[s >> 3] >> (s & 7) & 1))
+                pmTileMap[t] = (unsigned short)t;
+        }
     for (int i = 0; i < 32; ++i) aniDirty[i] = 0;
     aniDirtyAny = false;
     STATE(0x5C65); /* R1C: the MDG is in the cart; command 68 next */
@@ -690,11 +702,13 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     sgb_out_begin(&o, SGB_FB_REC, SGB_REC_MAX);
     mds_record(&sprites, &o); /* REV R3: the patterns and the sprite table first - vertical blank */
     uint16_t vA = 0, vB = 0;
+    bool freshA = false, freshB = false; /* REV R4C: a plane written from scratch this frame (no refresh needed) */
     if (layoutQLost) { /* REV R4B */
         md_plane_reset(&sgbA);
         md_plane_reset(&sgbB);
         layoutQn    = 0;
         layoutQLost = false;
+        freshA = freshB = true;
     }
     md_plane_update(&sgbA, &LA, SGB_NAME_A, tileYA, xA, SCREEN_YSIZE, SCREEN_XSIZE, hsA, &vA, sgb_write, &o);
     skyY = bgLayer >= 0 && bgLayer == skyLayer ? tileYB : -1; /* REV R4B: the sky follows the background's rows */
@@ -702,6 +716,7 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
         if (bgLayer != sgbBLayer) {
             md_plane_reset(&sgbB);
             sgbBLayer = bgLayer;
+            freshB    = true;
         }
         LB.layout       = stageLayouts[bgLayer].tiles;
         LB.layoutStride = 0x100;
@@ -719,9 +734,11 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
         else if (layoutQ[i][0] == bgLayer)
             md_plane_chunk(&sgbB, &LB, SGB_NAME_B, layoutQ[i][1], layoutQ[i][2], sgb_write, &o);
     layoutQn = 0;
-    if (aniDirtyAny) { /* REV R4C: the changed animated tiles' cells the planes hold */
-        md_plane_refresh(&sgbA, &LA, SGB_NAME_A, aniTiles + 128, (const uint8_t *)aniDirty, sgb_write, &o);
-        if (bgLayer >= 0)
+    if (aniDirtyAny) { /* REV R4C: the changed animated tiles' cells the planes hold (a plane written from scratch this
+                          frame has them already - the record stays small) */
+        if (!freshA)
+            md_plane_refresh(&sgbA, &LA, SGB_NAME_A, aniTiles + 128, (const uint8_t *)aniDirty, sgb_write, &o);
+        if (bgLayer >= 0 && !freshB)
             md_plane_refresh(&sgbB, &LB, SGB_NAME_B, aniTiles + 128, (const uint8_t *)aniDirty, sgb_write, &o);
         for (int i = 0; i < 32; ++i) aniDirty[i] = 0;
         aniDirtyAny = false;
@@ -1108,19 +1125,21 @@ static void pm_present()
             const TileLayer *L = &stageLayouts[layoutQ[i][0] < LAYER_COUNT ? layoutQ[i][0] : 0];
             val[i]             = layoutQ[i][2] < L->rowsCap ? L->tiles[layoutQ[i][1] + (layoutQ[i][2] << 8)] : 0;
         }
+        if (layoutQLost) /* more changes in one frame than the queue holds: all the layouts into the other buffer -
+                            from this one (the newest), so before the swap (the review: after it, the old ones won) */
+            pm_mirror(PM_FB_POOL, pm_pool_used());
         flip_wait(); /* the frame is shown from this vertical blank */
         pm_colours();
         if (!pmShown) {
             MARS_VDP_DISPMODE = (unsigned short)((MARS_VDP_DISPMODE & 0x8000) | MARS_VDP_MODE_256);
             pmShown           = true;
         }
-        for (int i = 0; i < layoutQn; ++i) {
-            const TileLayer *L = &stageLayouts[layoutQ[i][0] < LAYER_COUNT ? layoutQ[i][0] : 0];
-            if (layoutQ[i][2] < L->rowsCap)
-                L->tiles[layoutQ[i][1] + (layoutQ[i][2] << 8)] = val[i];
-        }
-        if (layoutQLost) /* more changes in one frame than the queue holds: all the layouts again */
-            pm_mirror(PM_FB_POOL, pm_pool_used());
+        if (!layoutQLost)
+            for (int i = 0; i < layoutQn; ++i) {
+                const TileLayer *L = &stageLayouts[layoutQ[i][0] < LAYER_COUNT ? layoutQ[i][0] : 0];
+                if (layoutQ[i][2] < L->rowsCap)
+                    L->tiles[layoutQ[i][1] + (layoutQ[i][2] << 8)] = val[i];
+            }
         layoutQn    = 0;
         layoutQLost = false;
         pmDrew      = false;
@@ -1471,17 +1490,29 @@ static unsigned int save_fnv(const uint16_t *w)
     for (int i = 0; i < SCD_SAVE_WORDS; ++i) h = (h ^ w[i]) * 0x01000193u;
     return h | 1u;
 }
-static void save_settle() /* COMM0 free and the pad's answer taken: COMM8 carries the save's words now */
+static unsigned int save_settle() /* COMM0 free and the pad's answer taken: COMM8 carries the save's words now */
 {
+    /* REV R4C: the loader's sampler off while the words go through COMM8 / COMM12 - the scenes' start-up scripts read
+       the save during the stage load (the menu's: ProcessStartupObjects), while it samples (plat_stage_loading turns it
+       on): a sample between the Sub-CPU's answer and its reading here garbled a word or COMM12 (the review). Two
+       vertical blanks: a sample posted just now is written before the first command. The caller turns it back on. */
+    unsigned int was = scd_sampling_now();
+    if (was) {
+        scd_sampling(0);
+        for (int k = 0; k < 2; ++k) {
+            unsigned int f = VBLANK_COUNT;
+            while (VBLANK_COUNT == f) {
+            }
+        }
+    }
     comm_idle();
     if (padPending)
         pad_take();
     musicInFlight = false;
+    return was;
 }
-int plat_save_read()
+static int save_read(uint16_t *w)
 {
-    uint16_t w[SCD_SAVE_WORDS];
-    save_settle();
     SC_COMM12 = 0;
     sub_cmd(56, 0); /* the file into the Sub-CPU's buffer: COMM12 1 = there */
     if (SC_COMM12 != 1)
@@ -1490,8 +1521,17 @@ int plat_save_read()
         sub_cmd(57, (unsigned short)i);
         w[i] = (uint16_t)(SC_COMM8_32 >> 16);
     }
-    if (!scd_save_unpack(w, saveRAM))
-        return 0; /* not a save of this version: the game starts a new one */
+    return 1;
+}
+int plat_save_read()
+{
+    uint16_t w[SCD_SAVE_WORDS];
+    unsigned int sampling = save_settle();
+    int ok                = save_read(w);
+    if (sampling)
+        scd_sampling(1);
+    if (!ok || !scd_save_unpack(w, saveRAM))
+        return 0; /* no file, or not a save of this version: the game starts a new one */
     saveLastSum = save_fnv(w);
     return 1;
 }
@@ -1502,14 +1542,17 @@ int plat_save_write()
     unsigned int h = save_fnv(w);
     if (h == saveLastSum)
         return 1; /* the same as the file: nothing to write */
-    save_settle();
+    unsigned int sampling = save_settle();
     for (int i = 0; i < SCD_SAVE_WORDS; ++i) {
         SC_COMM8_32 = (unsigned int)w[i] << 16;
         sub_cmd(58, (unsigned short)i);
     }
     SC_COMM12 = 0;
     sub_cmd(59, 0); /* the buffer -> the file: COMM12 1 = written */
-    if (SC_COMM12 != 1)
+    int ok = SC_COMM12 == 1;
+    if (sampling)
+        scd_sampling(1);
+    if (!ok)
         return 0;
     saveLastSum = h;
     return 1;
