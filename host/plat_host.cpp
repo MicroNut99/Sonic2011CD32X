@@ -27,6 +27,7 @@ void md_layer_line(int slot, int line, int x);
 void md_layer_end(int slot);
 void md_check_frame();
 void md_sprite_draw(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py); // REV R3
+void md_layout_set(int layer, int x, int y); // REV R4B
 void md_check_summary();
 
 static unsigned int frameCount = 0;
@@ -280,6 +281,17 @@ void md_log(const char *fmt, ...)
 }
 const char *md_frames_dir() { return framesDir; }
 unsigned int md_frame_number() { return frameCount; }
+void md_save_png_path(const char *path, const unsigned char *rgb, int w, int h) // REV R4B: any path
+{
+    size_t rawLen = (size_t)(w * 3 + 1) * h;
+    byte *raw     = (byte *)malloc(rawLen);
+    for (int y = 0; y < h; y++) {
+        raw[y * (w * 3 + 1)] = 0;
+        memcpy(raw + y * (w * 3 + 1) + 1, rgb + (size_t)y * w * 3, (size_t)w * 3);
+    }
+    saveRawPNG(path, raw, rawLen, w, h);
+    free(raw);
+}
 void md_save_png(const char *name, const unsigned char *rgb, int w, int h)
 {
     char path[512];
@@ -325,11 +337,100 @@ unsigned int plat_ticks_ms() { return frameCount * 1000 / 60; }
 
 static void draw_log_frame(); // S7e (below)
 static void menu_log(); // REV R4
+// REV R4B: SCD32X_POKE="frame:Global.Name=value,frame:Name=value,..." - a test sets the game's global variables at a
+// frame (e.g. a time warp: Warp.Destination and Warp.Timer), logged as POKE
+static void poke_frame()
+{
+    static const char *pk = getenv("SCD32X_PEEKG"); // "first:last:Name,Name": those globals logged each frame first-last
+    if (pk && *pk) {
+        const char *p    = pk;
+        unsigned int a = (unsigned int)strtoul(p, (char **)&p, 10), b = (unsigned int)strtoul(p + 1, (char **)&p, 10);
+        if (frameCount >= a && frameCount <= b && *p == ':') {
+            char line[512];
+            int len = 0;
+            for (++p; *p;) {
+                const char *e = strchr(p, ',');
+                size_t n      = e ? (size_t)(e - p) : strlen(p);
+                for (int g = 0; g < globalVariablesCount; ++g)
+                    if (strlen(globalVariableNames[g]) == n && !strncmp(globalVariableNames[g], p, n))
+                        len += snprintf(line + len, sizeof(line) - len, " %.*s=%d", (int)n, p, globalVariables[g]);
+                p += n;
+                if (*p == ',')
+                    p++;
+            }
+            ev("PEEKG%s stageMode %d list %d pos %d", line, stageMode, activeStageList, stageListPosition);
+        }
+    }
+    static const char *lo = getenv("SCD32X_LISTOBJ"); // "first[-last]:type": the entities of that type (slot, place, state)
+    if (lo && *lo && strchr(lo, ':')) {
+        const char *q  = lo;
+        unsigned int a = (unsigned int)strtoul(q, (char **)&q, 10), b = a;
+        if (*q == '-')
+            b = (unsigned int)strtoul(q + 1, (char **)&q, 10);
+        if (frameCount >= a && frameCount <= b) {
+            int type = atoi(strchr(lo, ':') + 1);
+            if (type == 9998) { // every type in use: its number, name and count
+                int count[OBJECT_COUNT] = { 0 };
+                for (int e = 0; e < ENTITY_COUNT; ++e) count[objectEntityList[e].type]++;
+                for (int t = 1; t < OBJECT_COUNT; ++t)
+                    if (count[t])
+                        ev("TYPE %d %s x%d", t, typeNames[t], count[t]);
+            }
+            for (int e = 0; e < ENTITY_COUNT; ++e)
+                if (objectEntityList[e].type == type) {
+                    Entity &o = objectEntityList[e];
+                    ev("OBJ slot %d type %d x %d y %d prop %d state %d prio %d draw %d v %d %d %d %d %d %d %d %d", e, type, o.XPos >> 16,
+                       o.YPos >> 16, o.propertyValue, o.state, o.priority, o.drawOrder, o.values[0], o.values[1], o.values[2], o.values[3],
+                       o.values[4], o.values[5], o.values[6], o.values[7]);
+                }
+            ev("PLAYER x %d y %d stageMode %d layers %d %d %d %d scroll %d %d camera target %d enabled %d drawlist3 %d [%d %d %d]",
+               playerList[0].XPos >> 16, playerList[0].YPos >> 16, stageMode, activeTileLayers[0], activeTileLayers[1], activeTileLayers[2],
+               activeTileLayers[3], xScrollOffset, yScrollOffset, cameraTarget, cameraEnabled, drawListEntries[3].listSize,
+               drawListEntries[3].entityRefs[0], drawListEntries[3].entityRefs[1], drawListEntries[3].entityRefs[2]);
+            ev("PLAYER3 yBoundary1 %d 2 %d new %d %d xBoundary %d %d deathBoundary %d", yBoundary1, yBoundary2, newYBoundary1, newYBoundary2,
+               xBoundary1, xBoundary2, globalVariables[56]);
+            ev("PLAYER2 vel %d %d speed %d tilecoll %d objint %d gravity %d cmode %d angle %d ctrl %d visible %d", playerList[0].XVelocity,
+               playerList[0].YVelocity, playerList[0].speed, playerList[0].tileCollisions, playerList[0].objectInteractions,
+               playerList[0].gravity, playerList[0].collisionMode, playerList[0].angle, playerList[0].controlMode, playerList[0].visible);
+        }
+    }
+    static const char *tp = getenv("SCD32X_TELEPORT"); // "frame:x:y": the player there (pixels), standing
+    if (tp && *tp && (unsigned int)atoi(tp) == frameCount) {
+        const char *p = strchr(tp, ':');
+        if (p && strchr(p + 1, ':')) {
+            int x = atoi(p + 1), y = atoi(strchr(p + 1, ':') + 1);
+            playerList[0].XPos = x << 16, playerList[0].YPos = y << 16;
+            playerList[0].XVelocity = playerList[0].YVelocity = playerList[0].speed = 0;
+            ev("TELEPORT %d %d", x, y);
+        }
+    }
+    static const char *v = getenv("SCD32X_POKE");
+    if (!v || !*v)
+        return;
+    for (const char *p = v; *p;) {
+        unsigned int f = (unsigned int)strtoul(p, (char **)&p, 10);
+        if (*p != ':')
+            return;
+        const char *n = ++p, *eq = strchr(n, '=');
+        if (!eq)
+            return;
+        int value = (int)strtol(eq + 1, (char **)&p, 10);
+        if (f == frameCount)
+            for (int g = 0; g < globalVariablesCount; ++g)
+                if (strlen(globalVariableNames[g]) == (size_t)(eq - n) && !strncmp(globalVariableNames[g], n, eq - n)) {
+                    globalVariables[g] = value;
+                    ev("POKE %.*s = %d", (int)(eq - n), n, value);
+                }
+        if (*p == ',')
+            p++;
+    }
+}
 void plat_present(const unsigned short *frame, int width, int height, int pitch)
 {
     draw_log_frame(); // S7e
     hostInit();
     menu_log();
+    poke_frame(); // REV R4B
     md_check_frame();
     if (frameCount % saveEvery == 0) {
         if (crcLog) {
@@ -760,6 +861,7 @@ void plat_sprite(int kind, int sheet, int sx, int sy, int w, int h, int x, int y
 {
     md_sprite_draw(kind, sheet, sx, sy, w, h, x, y, dir, rot, px, py);
 }
+void plat_layout_set(int layer, int x, int y) { md_layout_set(layer, x, y); } // REV R4B
 void plat_draw_log(const char *function, int sheet, int pixels)
 {
     static bool on = getenv("SCD32X_DRAWLOG") != NULL;

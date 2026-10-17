@@ -76,6 +76,7 @@ void plat_credits()
     menuDrawn = false;
     STATE(0x5C80);
     comm_idle();
+    mdgInCart          = 0; /* REV R4B: the credits' file takes the act file's cart slot */
     unsigned int bytes = 0;
     int bad = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)CREDITS_FILE, &bytes);
     *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
@@ -95,6 +96,9 @@ void plat_credits()
     }
     menuOn = true; /* the 68000 takes records now (planes_off ends it) */
     /* the 32X: 256 colours, priority bit clear; OpenJazz's colours without bit 15 - behind the Genesis picture */
+    MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000); /* REV R4B: the loading picture off first - the
+                                                                         palette is written in blank */
+    splashUp = false;
     for (int i = 0; i < 16; ++i) SC_CRAM[160 + i] = cr_rgb15(oj_pal[i]);
     for (int k = 0; k < 2; ++k) { /* both buffers: line table and a first plasma, before the 32X layer comes on */
         cr_line_table(256);
@@ -204,5 +208,6 @@ void plat_credits()
     /* the frame buffer the engine keeps its menus, line and layouts in now holds plasma: cleared, as at power-on (the
        Level Select menu is made again; the layouts load with the next stage) */
     fb_clear(0x24000000, 0x20000);
+    skyPicture = false; /* REV R4B: the 32X sky's picture was in a buffer the plasma used: made again for the next sky */
     STATE(0x5C8F);
 }

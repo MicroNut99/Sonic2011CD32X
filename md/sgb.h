@@ -20,7 +20,10 @@
  *  24 u32 chunks offset: 512 chunks x 64 entries (MD_CE_* format, md_planes.h; engine chunk numbers)
  *  28 u32 zero block offset (4096 zero words: the 68000 clears the planes from it)
  *  32 u32 CRAM offset (64 Genesis colours at conversion time)
- *  36 char[28] the stage ("folder/id")
+ *  36 char[12] the stage ("folder/id"; R3: 56-63 the sprite pack, md_sprites.h)
+ *  48 u32 'SKY1' (REV R4B) 52 u32 the sky section's offset: u16 background layer, sky colour (engine palette index),
+ *     rows (the layer's height), pairs (rows / 2), the sky colour's RGB565 when the file was made, 0; then pairs x
+ *     { u16 A, u16 B }: the 32X colours (0BBBBBGGGGGRRRRR) of the background's row pair, a 2 x 2 checkerboard of A and B
  * Plain C, no host dependencies. */
 #ifndef SGB_H
 #define SGB_H
@@ -31,6 +34,7 @@
 #define SGB_VERSION 1
 #define SGB_HEADER 64
 #define SGB_REC_MAX 6000      /* words: the frame buffer's 12 KB record area (a full reload is ~4,300) */
+#define SGB_SKY_TAG 0x534B5931u /* 'SKY1': the act has a 32X sky (header words 48 / 52) */
 #define SGB_NAME_A 0xC000
 #define SGB_NAME_B 0xE000
 

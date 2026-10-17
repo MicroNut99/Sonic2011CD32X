@@ -211,3 +211,25 @@ void md_plane_update(MdPlane *p, const MdLayer *L, uint16_t nameBase, int tileYP
             layerRow = 0;
     }
 }
+
+/* REV R4B: see md_planes.h. A row holds the layer's columns rowC0 .. rowC0 + 63 (unwrapped: plane column = column & 63,
+   layer column = column modulo the layer's width), or for a layer that repeats across the plane its columns 0 .. 63 */
+void md_plane_chunk(MdPlane *p, const MdLayer *L, uint16_t nameBase, int chunkX, int chunkY, MdWriteFn write, void *ctx)
+{
+    int wCells = L->wChunks << 4, repeat = (MD_PLANE_W % wCells) == 0, r, k;
+    for (r = 0; r < MD_PLANE_H; r++) {
+        int lr = p->rowLayer[r];
+        if (lr < 0 || (lr >> 4) != chunkY)
+            continue;
+        for (k = 0; k < 16; k++) {
+            int w      = (chunkX << 4) + k;
+            int32_t c0 = repeat ? 0 : p->rowC0[r], d = (w - c0) % wCells, u;
+            if (d < 0)
+                d += wCells;
+            for (u = c0 + d; u <= c0 + MD_PLANE_W - 1; u += wCells) {
+                write(ctx, (uint16_t)(nameBase + ((r * MD_PLANE_W + (int)(u & (MD_PLANE_W - 1))) << 1)), md_name(L, w, lr));
+                p->written++;
+            }
+        }
+    }
+}

@@ -53,4 +53,8 @@ uint16_t md_name(const MdLayer *L, int cx, int cy); /* cx, cy: layer cell, alrea
 void md_plane_update(MdPlane *p, const MdLayer *L, uint16_t nameBase, int tileYPos,
                      const int *lineX, int lines, int screenW,
                      int16_t *hscroll, uint16_t *vscroll, MdWriteFn write, void *ctx);
+
+/* REV R4B: the layout entry of chunk (chunkX, chunkY) changed (a script's SetTileLayerEntry): the chunk's cells that
+   the plane's rows hold now are written again (rows written later read the new layout themselves). */
+void md_plane_chunk(MdPlane *p, const MdLayer *L, uint16_t nameBase, int chunkX, int chunkY, MdWriteFn write, void *ctx);
 #endif

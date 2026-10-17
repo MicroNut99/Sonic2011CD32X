@@ -236,6 +236,9 @@ All options go after the build folder.
 -pad SCRIPT    (R4) the controller: "FRAME:BUTTONS,..." - U D L R A B C S X Y Z (S = Start), "-" = none;
                FRAME:demo = the scripted pad (spin dash, run right) from that frame on
 -set NAME=V    (R4) the engine variable NAME (32 bits) = V when the first stage set-up starts (5C16)
+-pokeg F:I=V   (R4B) the game's global variable I (globalVariables[I], in GameConfig.bin's order: 25 Warp.Destination,
+               26 Warp.Timer ...) = V at frame F, as an SH2 write; up to 256 - e.g. a time warp on demand
+-peekevery N   (R4B) the -peek values every N frames too
 -peek NAME[:N] (R4) print the engine variable NAME (N = 1, 2 or 4 bytes) at each stage load and at the end, e.g.
                -peek scdBlob (not 0: the scene's native scripts are in use) -peek stageListPosition
 -syms FILE     (R4) more function names, `nm -n -C` format: a scene's native scripts are named in
@@ -275,7 +278,10 @@ cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
   console copied on R1H (`REC 0004 0004 0006 ...`). The VDP model draws the two planes, their scroll, the colours and
   (R3) the sprites: the sprite table at `0xF800`, the links, 20 sprites and 320 dots a line, the flips and the
   priority bits (high before low; sprite, plane A, plane B), and (R4) the 32X layer of the credits screen (the
-  256-colour mode through its line table; colours without bit 15 behind the Genesis picture). It has no window, no
+  256-colour mode through its line table; colours without bit 15 behind the Genesis picture). (R4B) The Sub-CPU's
+  commands 51 (a file's chunk into the frame buffer the 68000 sees, from byte 0x200 - the loading picture) and 52 (the
+  Genesis display on / off) are modelled: with the display off the pictures show the 32X layer alone, on black; the
+  file number 0 opens `IMAGE.RAW`, as on the Sub-CPU. It has no window, no
   sprite masking and no shadow / highlight. The 68000's copy takes 75 SH2 cycles a word, and it does not take a record while its
   vertical blank handler runs (`-k68word`).
 - **Loading speed.** The Sub-CPU answers at once. On the console a 32 KB chunk takes about a second, so the loading

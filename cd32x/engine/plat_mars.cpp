@@ -41,6 +41,7 @@ static void scd_sampling(unsigned int on)
 #define STATE(code) (*(volatile unsigned short *)0x2000402C = (unsigned short)(code)) /* Kobo's STATE (COMM12) */
 
 void scd_status(int row, const char *t, int color);
+void scd_text_on(); /* REV R4B: the Genesis display on (the loading picture off) - below */
 // S7e7: defined HERE, before its first use in plat_present (S7e4-S7e6 defined it further down, so
 // plat_present's readings block was silently compiled out)
 #ifndef SCD_DRAW_DIAG
@@ -105,6 +106,8 @@ static void status_init()
     if (statusReady)
         return;
     statusReady = true;
+    MARS_VDP_DISPMODE = (MARS_VDP_DISPMODE & 0x8000); /* REV R4B: blank first (a picture may be up): the palette can be
+                                                        written at any time then */
     SC_CRAM[PX_CLEAR] = 0x0000; /* see-through */
     SC_CRAM[PX_BOX]   = 0x0400; /* black (Kobo: never 0x0000) */
     SC_CRAM[PX_GREEN] = 0x03E0;
@@ -197,6 +200,7 @@ static void sgb_pause()
     } /* Kobo HW6: pause between COMM reads */
 }
 static void comm_idle();
+static bool genesisOff = true; /* REV R4B: the Genesis display may be off (command 52; at power-on the boot loader's) */
 static int sgb_cmd(unsigned short op, unsigned int arg) /* SH2 command 68 -> reply (COMM12) */
 {
     comm_idle(); /* REV R4: the pad request answered first */
@@ -205,7 +209,10 @@ static int sgb_cmd(unsigned short op, unsigned int arg) /* SH2 command 68 -> rep
     SC_COMM12   = 0xFFFF;
     SC_COMM0    = 68;
     for (unsigned int n = 0; n < 2000000u && SC_COMM0 != 0; ++n) sgb_pause();
-    return SC_COMM12;
+    int r = SC_COMM12;
+    if ((op == 1 && r == 1) || op == 2)
+        genesisOff = false; /* REV R4B: both leave the Genesis display on (cd32x/sub_main.c) */
+    return r;
 }
 static void sgb_give_fb() /* Kobo give_fb: FM = 0, wait until it reads 0 */
 {
@@ -221,14 +228,254 @@ static void sgb_take_fb() /* Kobo take_fb */
 }
 static bool menuOn = false; /* REV R4: the dev menu's text on plane A (below) */
 static void fb_clear(unsigned int at, int bytes);
-static void planes_off()
+/* REV R4B: layout entries the scripts changed (plat_layout_set, from SetTileLayerEntry): after the frame's plane update
+   their cells that the planes show now are written again (md_plane_chunk); more than the queue holds in one frame -
+   both planes from scratch. A tile trigger changes four entries at once. */
+#define LAYOUT_QUEUE 8 /* (SDRAM: 24 bytes) */
+static unsigned char layoutQ[LAYOUT_QUEUE][3];
+static int layoutQn          = 0;
+static bool layoutQLost      = false;
+void plat_layout_set(int layer, int x, int y)
 {
+    if (layoutQn >= LAYOUT_QUEUE)
+        layoutQLost = true;
+    else {
+        layoutQ[layoutQn][0] = (unsigned char)layer;
+        layoutQ[layoutQn][1] = (unsigned char)x;
+        layoutQ[layoutQn][2] = (unsigned char)y;
+        layoutQn++;
+    }
+}
+// ---------------------------------------------------------------- REV R4B: the 32X sky
+// An act whose file has a sky section (md/sgb.h 'SKY1', host/md_check.cpp): its background's sky colour is see-through
+// in the Genesis tiles, and the 32X layer behind the Genesis picture shows a gradient there. The frame buffer the 32X
+// shows holds a fixed picture: screen line pair g in colours 16 + 2g and 17 + 2g, a 2 x 2 checkerboard; the engine
+// keeps its data in the other buffer (the one the SH2 and the 68000 use) as before. Each vertical blank the SH2 sets
+// the 112 pairs' colours from the background row at the top of the screen - the gradient moves with the background.
+// The colours have no bit 15: behind the Genesis (32X priority bit clear), seen where its planes and sprites are
+// see-through. The engine's fade and changes of the sky colour itself apply to them as to the Genesis palette.
+#define SKY_BASE 16 /* 32X colours 16-239 (0-15: the status box) */
+static const unsigned short *skyPairs = 0; /* the act file's table (the cart): pairs x { A, B } */
+static int skyPairsN = 0, skyLayer = -1, skyIdx = 144, skyY = -1;
+static unsigned short sky565  = 0;     /* the sky colour (RGB565) the table was made for */
+static bool skyPicture        = false; /* the shown frame buffer holds the sky picture */
+static bool skyShown          = false; /* the 32X layer shows it */
+static unsigned int skyLastRow = 0, skyLastFade = 0; /* what the 32X colours hold now (row and sky colour, fade);
+                                                        skyLastFade 0: to be written */
+static void sky_picture() /* the picture into the other frame buffer: swap, write, swap back */
+{
+    MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000); /* blank while the engine's buffer is shown */
+    flip_wait();
+    volatile unsigned short *fb = SC_FB;
+    for (int y = 0; y < 256; ++y) fb[y] = (unsigned short)(0x100 + (y < 224 ? y : 223) * 160);
+    for (int y = 0; y < 224; ++y) {
+        unsigned short a = (unsigned short)(SKY_BASE + 2 * (y >> 1)), b = (unsigned short)(a + 1);
+        unsigned short w            = (y & 1) ? (unsigned short)(b << 8 | a) : (unsigned short)(a << 8 | b);
+        volatile unsigned short *ln = fb + 0x100 + y * 160;
+        for (int x = 0; x < 160; ++x) ln[x] = w;
+    }
+    flip_wait(); /* the engine's buffer is the SH2's again; the sky picture is the shown one */
+    skyPicture = true;
+}
+static void sky_off()
+{
+    if (skyShown)
+        MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000);
+    skyShown    = false;
+    skyY        = -1;
+    skyLastFade = 0;
+}
+static void sky_load(const unsigned char *f) /* from planes_load: the act file's sky, its picture ready */
+{
+    sky_off();
+    skyPairs = 0;
+    if (*(const unsigned int *)(f + 48) != SGB_SKY_TAG)
+        return;
+    const unsigned short *k = (const unsigned short *)(f + *(const unsigned int *)(f + 52));
+    if (k[3] < 112 || k[2] != 2 * k[3]) /* (a background of 224 rows at least: one wrap a frame) */
+        return;
+    skyLayer  = k[0];
+    skyIdx    = k[1];
+    skyPairsN = k[3];
+    sky565    = k[4];
+    skyPairs  = k + 6;
+    if ((unsigned int)(unsigned long)skyPairs & 3) { /* (md_check.cpp aligns it: sky_vblank reads a pair at a time) */
+        skyPairs = 0;
+        return;
+    }
+    if (!skyPicture)
+        sky_picture();
+}
+static inline int sky_div255(int x) { return (x * 257 + 257) >> 16; } /* x / 255 (0 <= x <= 255 * 255) */
+static void sky_vblank() __attribute__((noinline)); /* cart code: not inlined into plat_present (SDRAM is full) */
+static void sky_vblank() /* in the vertical blank, after the frame's record went to the 68000 (plat_present) */
+{
+    if (!skyPairs || !skyPicture || skyY < 0) {
+        if (skyShown)
+            sky_off();
+        return;
+    }
+    /* the sky colour's own changes (in 5-bit steps) and the engine's fade, for every colour */
+    unsigned short cur = activePalette[skyIdx];
+    int dr = (int)(cur >> 11) - (int)(sky565 >> 11), dg = (int)((cur >> 6) & 31) - (int)((sky565 >> 6) & 31),
+        db = (int)(cur & 31) - (int)(sky565 & 31);
+    int fa = fadeMode > 0 ? (fadeA > 255 ? 255 : fadeA) : 0;
+    int fr = fadeR >> 3, fg = fadeG >> 3, fb = fadeB >> 3;
+    if (stageMode == STAGEMODE_PAUSED) /* the pause menu: dimmed as the planes (pause_frame) */
+        fa = 150, fr = fg = fb = 0;
+    bool adjust = dr || dg || db || fa > 0;
+    int fk      = 255 - fa;
+    /* the colours of the frame before, again (no vertical move, the same sky colour and fade): nothing to write - most
+       frames of most acts (2-3% of a frame each time: 224 colours from the cart's table to the 32X) */
+    unsigned int row = (unsigned int)(skyY >> 1) | (unsigned int)cur << 16;
+    unsigned int fad = 0x80000000u | (unsigned int)fa | (unsigned int)fr << 8 | (unsigned int)fg << 13 | (unsigned int)fb << 18;
+    if (skyShown && row == skyLastRow && fad == skyLastFade)
+        return;
+    skyLastRow  = row;
+    skyLastFade = fad;
+    while (!(SC_VDP_FBCTL & MARS_VDP_PEN)) {
+    } /* the palette can be written (blank) */
+    volatile unsigned short *cram = SC_CRAM + SKY_BASE;
+    const unsigned int *pairs     = (const unsigned int *)skyPairs; /* A and B in one read (the table is 4-aligned) */
+    int k                         = skyY >> 1;
+    for (int g = 0; g < 112; ++g, ++k) {
+        if (k >= skyPairsN)
+            k -= skyPairsN;
+        unsigned int ab  = pairs[k];
+        unsigned short A = (unsigned short)(ab >> 16), B = (unsigned short)ab;
+        if (adjust)
+            for (int j = 0; j < 2; ++j) {
+                unsigned short c = j ? B : A;
+                int r = (c & 31) + dr, gg = ((c >> 5) & 31) + dg, b = ((c >> 10) & 31) + db;
+                r  = r < 0 ? 0 : r > 31 ? 31 : r;
+                gg = gg < 0 ? 0 : gg > 31 ? 31 : gg;
+                b  = b < 0 ? 0 : b > 31 ? 31 : b;
+                if (fa > 0) {
+                    r  = sky_div255(r * fk + fr * fa);
+                    gg = sky_div255(gg * fk + fg * fa);
+                    b  = sky_div255(b * fk + fb * fa);
+                }
+                c = (unsigned short)(b << 10 | gg << 5 | r);
+                if (!c)
+                    c = 0x0400; /* never 0x0000: a see-through 32X pixel */
+                if (j)
+                    B = c;
+                else
+                    A = c;
+            }
+        cram[2 * g]     = A;
+        cram[2 * g + 1] = B;
+    }
+    if (!skyShown) { /* the first frame of the act with the picture: the 32X layer on (256 colours, priority bit clear) */
+        MARS_VDP_DISPMODE = (unsigned short)((MARS_VDP_DISPMODE & 0x8000) | MARS_VDP_MODE_256);
+        skyShown          = true;
+    }
+}
+// ---------------------------------------------------------------- REV R4B: the loading picture
+// At power-on the boot loader shows IMAGE.RAW (tools/scd_splash.py: the title screen with a loading bar) while it loads,
+// the Genesis display off (cd32x/sh2_engboot.c). Between the scenes the engine does the same: the picture from its copy
+// at the end of SCDDATA.PAK in the cart (tools/build_game_data.py: the footer 'SPL1', its offset, its size) into the
+// frame buffer the 32X shows (swap, write, swap back - as the sky's picture: the engine's data stays in the other
+// buffer), the Genesis display off (Sub-CPU command 52) - its loading lines are not seen - and the bar filled chunk by
+// chunk: its segments are colours of their own, set to the full colour (nothing is drawn). The colours have bit 15: in
+// front of the Genesis picture. The act's planes (command 68 op 1) switch the Genesis display on again, and the act's
+// sky or a blank 32X layer replaces the picture. A reload of the scene already in the cart (a restart after a death)
+// reads nothing from the disc: the screen just stays black. Something not loading brings the text back for its STATE.
+#define SPLASH_PIXELS (320 * 224)
+#define SPLASH_BYTES (SPLASH_PIXELS + 512 + 12) /* the pixels, 256 colours, 'BAR1' + 4 words */
+static void sub_cmd(unsigned short cmd, unsigned short arg);
+static bool splashUp = false; /* the 32X layer shows the loading picture */
+static int splashFrom = 0, splashTo = 0, splashLit = 0, splashSegs = 0;
+static unsigned short splashFirst = 0, splashFull = 0;
+static unsigned int be32(const unsigned char *p) { return (unsigned int)p[0] << 24 | (unsigned int)p[1] << 16 | (unsigned int)p[2] << 8 | p[3]; }
+static const unsigned char *splash_image() /* the picture after the data pack (cart 0x300000), or 0 */
+{
+    unsigned int n = SCD_BOOT_RECORD[2]; /* SCDDATA.PAK's length */
+    if (n < SPLASH_BYTES + 16 || n > 0x80000)
+        return 0;
+    const unsigned char *t = CART_PACK + n - 16;
+    unsigned int off       = be32(t + 4);
+    if (be32(t) != 0x53504C31u || be32(t + 8) != SPLASH_BYTES || (off & 3) || off + SPLASH_BYTES > n - 16) /* 'SPL1' */
+        return 0;
+    if (be32(CART_PACK + off + SPLASH_PIXELS + 512) != 0x42415231u) /* 'BAR1' */
+        return 0;
+    return CART_PACK + off;
+}
+static void splash_show() __attribute__((noinline));
+static void splash_show()
+{
+    const unsigned char *img = splash_image();
+    if (!img)
+        return; /* SCDDATA.PAK without the picture: the text stays, as before */
+    const unsigned char *bar = img + SPLASH_PIXELS + 512;
+    splashFirst              = (unsigned short)(bar[4] << 8 | bar[5]);
+    splashSegs               = bar[6] << 8 | bar[7];
+    splashFull               = (unsigned short)(bar[10] << 8 | bar[11]);
+    if (splashSegs <= 0 || splashFirst + splashSegs > 256)
+        return;
+    MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000); /* blank while the engine's buffer is shown */
+    flip_wait();
+    volatile unsigned short *fb = SC_FB;
+    for (int y = 0; y < 256; ++y) fb[y] = (unsigned short)(0x100 + (y < 224 ? y : 223) * 160);
+    const unsigned int *src       = (const unsigned int *)img;
+    volatile unsigned short *line = fb + 0x100;
+    for (int i = 0; i < SPLASH_PIXELS / 4; ++i) { /* 16-bit writes (Kobo rule 4) */
+        unsigned int w  = src[i];
+        line[2 * i]     = (unsigned short)(w >> 16);
+        line[2 * i + 1] = (unsigned short)w;
+    }
+    flip_wait(); /* the picture is the shown buffer, the engine's buffer the SH2's again */
+    skyPicture                = false;
+    const unsigned short *pal = (const unsigned short *)(img + SPLASH_PIXELS);
+    while ((SC_VDP_FBCTL & 0x8000) == 0) { /* VBLK: the palette in the vertical blank */
+    }
+    for (int i = 0; i < 256; ++i) SC_CRAM[i] = pal[i];
+    MARS_VDP_DISPMODE = (unsigned short)((MARS_VDP_DISPMODE & 0x8000) | MARS_VDP_MODE_256);
+    splashUp          = true;
+    splashLit         = 0;
+    splashFrom        = 0;
+    splashTo          = splashSegs;
+}
+static void splash_part(int from, int to) /* the bar's share of the next file: segments from - to of 32 */
+{
+    splashFrom = from * splashSegs >> 5;
+    splashTo   = to * splashSegs >> 5;
+}
+static void splash_chunk(unsigned int done, unsigned int total) __attribute__((noinline)); /* cart code: between chunks */
+static void splash_chunk(unsigned int done, unsigned int total) /* chunk `done` of `total` loaded: the bar up to there */
+{
+    if (!splashUp || !total)
+        return;
+    int n = splashFrom + (int)((unsigned int)(splashTo - splashFrom) * done / total);
+    if (n <= splashLit)
+        return;
+    while ((SC_VDP_FBCTL & 0x8000) == 0) { /* VBLK */
+    }
+    for (; splashLit < n && splashLit < splashSegs; ++splashLit) SC_CRAM[splashFirst + splashLit] = splashFull;
+}
+static void splash_fail() /* a file did not load: the picture off, the Genesis display on - line 10 shows the STATE */
+{
+    splashUp          = false;
+    MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000);
+    sub_cmd(52, 1);
+    genesisOff = false;
+}
+enum { PLANES_OFF_TEXT, PLANES_OFF_PICTURE, PLANES_OFF_BLACK }; /* REV R4B: what shows while the next scene loads */
+static void planes_off(int show = PLANES_OFF_PICTURE)
+{
+    sky_off(); /* REV R4B */
     if (!planesOn && !menuOn)
         return;
+    if (show == PLANES_OFF_PICTURE)
+        splash_show(); /* REV R4B: in front of the planes, before they go */
     planesOn = false;
     menuOn   = false;
     sgb_cmd(2, 0); /* the listener's own picture back (text, for the loading lines) */
     SC_COMM4 = 0;  /* REV R4: the last record id - the Sub-CPU took it for a start-up fault ("SH2 NEVER EVEN REACHED") */
+    if (splashUp || show == PLANES_OFF_BLACK) {
+        sub_cmd(52, 0); /* REV R4B: the Genesis display off - its loading lines are not seen */
+        genesisOff = true;
+    }
 }
 /* REV R3: Tails. A scene played as Tails (the game's character choice: playerListPos 1) has files of its own,
    numbered 128 on: its scene image L<list>S<pos + 128>.IMG (the cart image holds the scene's animation files and
@@ -238,24 +485,38 @@ static unsigned int player_files()
 {
     return (playerListPos == 1 && stageListPosition >= 0 && stageListPosition < 0x80) ? 0x80u : 0u;
 }
+static unsigned int mdgInCart = 0, mdgBytes = 0; /* REV R4B: the act file in the cart's slot (0: none, or another file) */
+static unsigned int mdg_file() { return 0x1000 + (((unsigned int)activeStageList + 1) << 8) + (unsigned int)stageListPosition + player_files(); }
+static int sd_load_whole(unsigned short number, unsigned int *bytes);
 static void planes_load() /* the scene's MDG: on the disc? then into the cart and the VDP */
 {
-    unsigned int file  = 0x1000 + (((unsigned int)activeStageList + 1) << 8) + (unsigned int)stageListPosition + player_files();
+    unsigned int file  = mdg_file();
     unsigned int bytes = 0;
+    int bad            = 0;
     STATE(0x5C60); /* R1C: the MDG load starts */
     comm_idle();   /* REV R4: the pad request answered first */
-    int bad            = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)file, &bytes);
-    if (bad < 0) {
-        STATE(0x5C61);
-        return;
+    if (file == mdgInCart && mdgBytes)
+        bytes = mdgBytes; /* REV R4B: the same act again (a restart): its file is in the cart */
+    else {
+        mdgInCart = 0;
+        splash_part(20, 32); /* REV R4B: the bar's last part */
+        bad = sd_load_whole((unsigned short)file, &bytes);
+        if (bad < 0) {
+            STATE(0x5C61);
+            splash_fail();
+            return;
+        }
+        *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
     }
-    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
     const unsigned char *f = SGB_FILE;
     if (bad > 0 || *(const unsigned int *)f != SGB_MAGIC || *(const unsigned short *)(f + 4) != SGB_VERSION ||
         *(const unsigned int *)(f + 8) != bytes) {
         STATE(0x5C62);
+        splash_fail();
         return;
     }
+    mdgInCart = file;
+    mdgBytes  = bytes;
     STATE(0x5C65); /* R1C: the MDG is in the cart; command 68 next */
     SC_COMM4 = 0; /* R1S (R1P's line): COMM4 still held the Sub-CPU's start-up check 0x1234 - the 68000 took it as a
                      record id the moment command 68 switched the records on and copied junk from the frame buffer
@@ -263,6 +524,7 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
                      the SH2, before command 68. */
     if (sgb_cmd(1, SGB_CART_OFFSET) != 1) {
         STATE(0x5C63);
+        splash_fail();
         return;
     }
     const unsigned short *cram0 = (const unsigned short *)(f + *(const unsigned int *)(f + 32));
@@ -275,9 +537,13 @@ static void planes_load() /* the scene's MDG: on the disc? then into the cart an
     md_plane_reset(&sgbB);
     sgbBLayer = -1;
     for (int s = 0; s < 4; ++s) slotUsed[s] = false;
-    frameBg  = -1;
-    planesOn = true;
+    frameBg     = -1;
+    layoutQn    = 0; /* REV R4B */
+    layoutQLost = false;
+    planesOn    = true;
     MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000); /* 32X layer blank: the Genesis shows */
+    splashUp          = false;                                         /* REV R4B: the loading picture off */
+    sky_load(f); /* REV R4B: the act's 32X sky (on from its first frame with a picture) */
 }
 static bool sgb_shows(int slots, bool front)
 {
@@ -303,9 +569,44 @@ static inline __attribute__((always_inline)) void rec_handover()
     }
     sgb_take_fb();
     if (n >= 400000u) {
-        planes_off();
+        planes_off(PLANES_OFF_TEXT); /* (REV R4B: the text, for line 10) */
         STATE(0x5C64);
     }
+}
+/* REV R4B: the pause menu. While the game is paused the engine draws no tile layer (the planes keep the last picture)
+   but every draw list again: the pause menu's own sprites (CONTINUE, RESTART, EXIT, the PAUSE banner, the player's
+   icon) go to the 68000 as a record of sprites only, with the planes' colours (lines 0-2) dimmed so the menu reads over
+   them - the engine's version washes the picture out and draws a black panel (DrawRect), which the Genesis has no use
+   for. Cart code (not every frame); the scroll the last frame sent. */
+static uint16_t lastVA = 0, lastVB = 0;
+static void pause_frame() __attribute__((noinline));
+static void pause_frame()
+{
+    const unsigned char *f      = SGB_FILE;
+    const unsigned short *slots = (const unsigned short *)(f + *(const unsigned int *)(f + 16));
+    SgbOut o;
+    sgb_out_begin(&o, SGB_FB_REC, SGB_REC_MAX);
+    mds_record(&sprites, &o);
+    uint16_t cIdx[64], cCol[64];
+    int nc = 0;
+    for (int i = 0; i < 64; ++i) {
+        if (slots[i] == 0xFFFF)
+            continue;
+        uint16_t c565 = activePalette[slots[i]];
+        if (i < 48)
+            c565 = sgb_fade565(c565, 0, 0, 0, 150); /* the planes at about 40 % */
+        uint16_t c = sgb_md_color(c565);
+        if (c != cramSent[i]) {
+            cIdx[nc]    = (uint16_t)i;
+            cCol[nc++]  = c;
+            cramSent[i] = c;
+        }
+    }
+    if (sgb_out_end(&o, lastVA, lastVB, hsA, hsB, SCREEN_YSIZE, cIdx, cCol, nc) < 0) {
+        mds_forget(&sprites);
+        return;
+    }
+    rec_handover();
 }
 static void planes_frame() SCD_HOT; /* PORT32X R1V: every frame - SDRAM (RetroEngine.hpp SCD_HOT) */
 static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.cpp sgb_frame) */
@@ -332,6 +633,11 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     int bgSeen = frameBg;
     frameBg    = -1;
     if (unsupported || !fgSlots || bgLayer != bgSeen) {
+        if (!fgSlots && stageMode == STAGEMODE_PAUSED && sprites.ndraw) { /* REV R4B: the pause menu */
+            pause_frame();
+            sprites.ndraw = 0;
+            return;
+        }
         sprites.ndraw = 0; /* REV R3: the sprites keep the last picture too */
         return;            /* the planes keep the last picture */
     }
@@ -350,7 +656,14 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     sgb_out_begin(&o, SGB_FB_REC, SGB_REC_MAX);
     mds_record(&sprites, &o); /* REV R3: the patterns and the sprite table first - vertical blank */
     uint16_t vA = 0, vB = 0;
+    if (layoutQLost) { /* REV R4B */
+        md_plane_reset(&sgbA);
+        md_plane_reset(&sgbB);
+        layoutQn    = 0;
+        layoutQLost = false;
+    }
     md_plane_update(&sgbA, &LA, SGB_NAME_A, tileYA, xA, SCREEN_YSIZE, SCREEN_XSIZE, hsA, &vA, sgb_write, &o);
+    skyY = bgLayer >= 0 && bgLayer == skyLayer ? tileYB : -1; /* REV R4B: the sky follows the background's rows */
     if (bgLayer >= 0) {
         if (bgLayer != sgbBLayer) {
             md_plane_reset(&sgbB);
@@ -366,13 +679,19 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
     }
     else
         for (int i = 0; i < SCREEN_YSIZE; ++i) hsB[i] = 0;
+    for (int i = 0; i < layoutQn; ++i) /* REV R4B: the changed entries' cells the planes show */
+        if (layoutQ[i][0] == 0)
+            md_plane_chunk(&sgbA, &LA, SGB_NAME_A, layoutQ[i][1], layoutQ[i][2], sgb_write, &o);
+        else if (layoutQ[i][0] == bgLayer)
+            md_plane_chunk(&sgbB, &LB, SGB_NAME_B, layoutQ[i][1], layoutQ[i][2], sgb_write, &o);
+    layoutQn = 0;
     const unsigned short *slots = (const unsigned short *)(f + *(const unsigned int *)(f + 16));
     uint16_t cIdx[64], cCol[64];
     int nc = 0;
     for (int i = 0; i < 64; ++i) {
         if (slots[i] == 0xFFFF)
             continue;
-        uint16_t c565 = fullPalette[0][slots[i]];
+        uint16_t c565 = activePalette[slots[i]]; /* REV R4B: the active bank (Palmtree Panic's waterfalls cycle the banks) */
         if (fadeMode > 0) /* REV R3: the engine's fade rectangle, on the palette - planes and sprites fade with it */
             c565 = sgb_fade565(c565, fadeR, fadeG, fadeB, fadeA);
         uint16_t c = sgb_md_color(c565);
@@ -388,6 +707,7 @@ static void planes_frame() /* the frame's record -> the 68000 (as host/md_check.
         mds_forget(&sprites); /* REV R3: its pattern uploads never reached the VRAM */
         return;
     }
+    lastVA = vA, lastVB = vB; /* REV R4B: the pause menu's records keep this scroll */
     rec_handover();
 }
 // ---------------------------------------------------------------- REV R4: the dev menu on plane A
@@ -426,12 +746,16 @@ void plat_menu_text(const unsigned short *t, int n, int x, int y, int highlight)
 }
 static bool menu_on()
 {
-    if (menuFailed)
+    if (menuFailed) {
+        if (genesisOff)
+            splash_fail(); /* REV R4B: the text back once (line 10: why the menu did not come) */
         return false;
+    }
     planes_off(); /* a stage's planes (the A + B + C + START way back) */
     unsigned int bytes = 0;
     STATE(0x5C70);
     comm_idle();
+    mdgInCart = 0; /* REV R4B: the menu's file takes the act file's cart slot */
     int bad = ((ScdLoadFile)SCD_BOOT_RECORD[6])((unsigned short)MENU_FILE, &bytes);
     *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
     const unsigned char *f                = SGB_FILE;
@@ -439,18 +763,21 @@ static bool menu_on()
         *(const unsigned int *)(f + 8) != bytes) {
         STATE(bad < 0 ? 0x5C71 : 0x5C72);
         menuFailed = true; /* not again every frame: each try reads the disc */
+        splash_fail();     /* REV R4B */
         return false;
     }
     SC_COMM4 = 0;
     if (sgb_cmd(1, SGB_CART_OFFSET) != 1) {
         STATE(0x5C73);
         menuFailed = true;
+        splash_fail(); /* REV R4B */
         return false;
     }
     for (int i = 0; i < MENU_COLS * MENU_ROWS; ++i) MENU_SHOWN[i] = 0; /* command 68 cleared the planes */
     for (int i = 0; i < SCREEN_YSIZE; ++i) hsA[i] = hsB[i] = 0;
     menuOn            = true;
     MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000); /* 32X layer blank: the Genesis shows */
+    splashUp          = false;                                         /* REV R4B: the loading picture off */
     STATE(0x5C74);
     return true;
 }
@@ -476,9 +803,12 @@ static void menu_frame()
     }
     rec_handover();
 }
+void scd_text_on() { splash_fail(); } /* REV R4B: for the fatal screens (engine_start.cpp's exception screen, no_heap) */
 #else
 void plat_menu_clear() {}
 void plat_menu_text(const unsigned short *, int, int, int, int) {}
+void plat_layout_set(int, int, int) {} /* REV R4B: no planes - the engine draws its layers itself */
+void scd_text_on() {}
 #endif
 bool plat_boot_menu() /* REV R4 */
 {
@@ -524,6 +854,10 @@ void plat_present(const unsigned short *, int, int, int)
     unsigned int f = VBLANK_COUNT;
     while (VBLANK_COUNT == f) {
     } /* pace: at most one engine frame per vertical blank */
+#if SCD_PLANES
+    if (planesOn && !menuDrawn)
+        sky_vblank(); /* REV R4B: the 32X sky's colours for the frame the 68000 shows from this vertical blank */
+#endif
 #endif
     presented++;
     /* S7d: no 4B10 - Kobo's Sub-CPU stops reprinting line 10 after it, and line 10 has to keep
@@ -889,6 +1223,7 @@ void plat_fatal(const char *text)
     t[i] = 0;
     STATE(0x5CE5);
 #if SCD_PLANES
+    splash_fail(); /* REV R4B: the Genesis text on (line 10) */
     if (planesOn) { /* REV R1: the record area held the planes' records - the box from scratch */
         planesOn    = false;
         statusReady = false;
@@ -941,6 +1276,9 @@ static bool haveOffsets = false;
 static void scene_stop(unsigned short code, const char *what, unsigned int file)
 {
     char t[16], *p = t;
+#if SCD_PLANES
+    splash_fail(); /* REV R4B: the Genesis text on (line 10) */
+#endif
     STATE(code);
     while (*what) *p++ = *what++;
     hex(p, file, 3);
@@ -1032,8 +1370,26 @@ static int sd_load_list()
         if (SC_COMM12 != 0)
             bad++;
         STATE(0x5D00 | (loadList[i] & 0xFF)); /* as the boot loader: 5Dnn = chunk nn */
+#if SCD_PLANES
+        splash_chunk((unsigned int)i + 1, (unsigned int)loadCount); /* REV R4B: the loading bar (cart code: the cart is free) */
+#endif
     }
     return bad;
+}
+static int sd_load_whole(unsigned short number, unsigned int *bytes) /* REV R4B: a whole file into its cart place, as the
+                                                                       boot loader's routine (scd_load_file) - with the bar */
+{
+    int r = sd_open_first(number);
+    if (r == -1)
+        return -1; /* not on the disc */
+    if (r < 0)
+        return 1; /* no answer */
+    unsigned int total = (loadLen + 32767u) >> 15;
+    loadCount          = 0;
+    for (unsigned int c = 1; c < total && c < SCD_CHUNKS_MAX; ++c) loadList[loadCount++] = (unsigned short)c;
+    int bad = sd_load_list();
+    *bytes  = loadLen;
+    return r + (bad < 0 ? 1 : bad);
 }
 static int scene_load(unsigned int file) /* the scene's image into the cart: 0 = there, -1 = not on the disc */
 {
@@ -1066,6 +1422,9 @@ static int scene_load(unsigned int file) /* the scene's image into the cart: 0 =
             loadList[loadCount++] = (unsigned short)c;
     }
     STATE(0x5E00 | (loadCount & 0xFF)); /* REV R4: line 10 5Enn = nn chunks to load */
+#if SCD_PLANES
+    splash_part(0, 20); /* REV R4B: the loading bar's first part (the act file fills the rest) */
+#endif
     int bad = sd_load_list();
     if (bad != 0)
         scene_stop(0x5CE2, "BAD LOAD ", file);
@@ -1102,6 +1461,11 @@ static char *note_put(char *d, const char *t, char *end)
 static void menu_note_missing(unsigned int file) /* REV R4: the dev menu's two lines - the file, the stage's name */
 {
     char *d = scdMenuNote[0], *end = scdMenuNote[0] + SCD_MENU_NOTE - 1;
+    if (activeStageList == 0 && stageListPosition == 0) { /* REV R4B: the title screen - the pause menu's EXIT, a game over:
+                                                             the Options Menu is this port's title screen */
+        scdMenuNote[0][0] = scdMenuNote[1][0] = 0;
+        return;
+    }
     char nm[12] = { 'L', (char)('0' + (((file >> 8) - 1) & 7)), 'S', (char)('0' + (file & 0xFF) / 100),
                     (char)('0' + (file & 0xFF) / 10 % 10), (char)('0' + (file & 0xFF) % 10), '.', 'I', 'M', 'G', 0 };
     d  = note_put(d, "NOT ON THE DISC: ", end);
@@ -1116,7 +1480,9 @@ static void menu_note_missing(unsigned int file) /* REV R4: the dev menu's two l
 bool plat_stage_loading()
 {
 #if SCD_PLANES
-    planes_off(); /* REV R1: the loading lines need the Genesis text again */
+    /* REV R1: the planes off (the Sub-CPU's loading lines) - REV R4B: the loading picture in front, the Genesis display
+       off; the scene and its act file in the cart already (a restart): black, nothing to wait for */
+    planes_off(scene_file() == SCD_BOOT_RECORD[5] && mdg_file() == mdgInCart ? PLANES_OFF_BLACK : PLANES_OFF_PICTURE);
     menuDrawn = false;
 #endif
     audio_before_load(); /* REV R4 */
@@ -1128,6 +1494,12 @@ bool plat_stage_loading()
     STATE(0x5C13);
     unsigned int file = scene_file();
     int bad           = scene_load(file);
+#if SCD_PLANES
+    if (bad == 0) { /* REV R4B: the scene is in the cart (loaded now, or there already): the bar's first part full */
+        splash_part(0, 20);
+        splash_chunk(1, 1);
+    }
+#endif
 #if SCD_PLANES && SCD_DEVMENU
     if (bad < 0) {
         /* REV R4: the scene is not on the disc (the title screen, a special stage, a scene not built): the dev menu, with
@@ -1342,6 +1714,7 @@ extern char end[];                              /* end of the program's data (li
 static void no_heap(unsigned int size, void *caller)
 {
     char t[16], *p = t;
+    scd_text_on(); /* REV R4B: the Genesis text on (line 10) */
     STATE(0x5CE4);
     for (const char *a = "NO HEAP A"; *a;) *p++ = *a++;
     hex(p, size, 4);

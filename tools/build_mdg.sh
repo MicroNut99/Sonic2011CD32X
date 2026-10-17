@@ -35,8 +35,10 @@ for s in $(expand); do
     case "$pl" in 0|1) ;; *) echo "*** scene $s@$pl: player 0 (Sonic) or 1 (Tails)"; exit 1 ;; esac
     rm -rf "$T/run" && mkdir -p "$T/run/mdg"
     printf "[Dev]\nStartingCategory=%s\nStartingScene=%s\nDataFile=%s\n" "$l" "$p" "$DATA" > "$T/run/settings.ini"
+    # REV R4B: the chunks the act's scripts can place later (tile triggers ...) get their cells too
+    placed=$(python3 tools/scd_chunks.py "$DATA" "$l" "$p")
     ( cd "$T/run" && SCD32X_PLAYER=$pl SCD32X_MDCHECK=1 SCD32X_MDGEXPORT="$T/run/mdg" SCD32X_MAX_FRAMES=120 SCD32X_EVENT_LOG=events.txt \
-        "$OLDPWD/host/soniccd_host" > out.txt 2>&1 ) || true
+        SCD32X_PLACED="$placed" "$OLDPWD/host/soniccd_host" > out.txt 2>&1 ) || true
     f=$(ls "$T/run/mdg"/*.MDG 2>/dev/null | head -1)
     name=$(printf "G%dS%03d.MDG" "$l" "$((p + 128 * pl))")
     if [ -z "$f" ]; then

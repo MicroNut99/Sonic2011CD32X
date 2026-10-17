@@ -27,6 +27,7 @@ extern "C" {
 
 void md_log(const char *fmt, ...);
 void md_save_png(const char *name, const unsigned char *rgb, int w, int h);
+void md_save_png_path(const char *path, const unsigned char *rgb, int w, int h); // REV R4B
 const char *md_frames_dir();
 unsigned int md_frame_number();
 
@@ -79,6 +80,11 @@ struct Stage {
     std::set<int> palCycles;  // REV R3: engine palette indices whose colour changed in the stage's first frames
     std::vector<ushort> pal0; // ... compared with this
     int palWatch = 0;         // frames left before the act's file (sprite pack) is made
+    // REV R4B: the 32X sky - the background's sky colour (palette 144) see-through in the background's own tiles, a
+    // gradient behind it on the 32X (sky_decide, sky_section)
+    bool skyOn = false;
+    int skyIdx = 144, skyLayer = 1;
+    std::vector<bool> skyTile; // tiles of the background (not of the foreground) whose sky colour is see-through
 };
 Stage st;
 MdPlane planeA, planeB;
@@ -215,6 +221,10 @@ void cell_indices(const uint8_t *tileset, int tile, int q, uint8_t *pix)
     const uint8_t *src = tileset + tile * 256 + (q >> 1) * 8 * 16 + (q & 1) * 8;
     for (int y = 0; y < 8; ++y)
         for (int x = 0; x < 8; ++x) pix[y * 8 + x] = src[y * 16 + x];
+    if (st.skyOn && st.skyTile[tile]) // REV R4B: the background's sky colour: see-through (the 32X sky behind)
+        for (int i = 0; i < 64; ++i)
+            if (pix[i] == st.skyIdx)
+                pix[i] = 0;
 }
 
 int line_for(const std::set<int> &s)
@@ -309,6 +319,254 @@ bool convert_tile(int tile)
     return true;
 }
 
+// ---------------------------------------------------------------- REV R4B: the 32X sky
+// The acts whose background has a sky (palette colour 144, the colour Sonic CD's backgrounds are filled with): that
+// colour becomes see-through in the background's own tiles (not the foreground's), and the 32X draws a gradient behind
+// the Genesis picture - in the act's own colours: for a day sky its colour darker above and towards its clouds' light
+// colour near the horizon; for a night sky black above and the horizon glowing in the colour of the lights below it.
+// The gradient follows the background's rows (the SH2 sets the 32X colours of each line pair from the background's
+// vertical position every frame). After MicroNut99's Sonic32XPlus1 (Green Hill's 32X sky) and SuperTuxCD32X (its skies
+// in the pictures' own colours, dithered); the act file carries it ('SKY1' section, md/sgb.h).
+static void layer_pixels(int l, std::vector<uint8_t> &px, int &w, int &h)
+{
+    TileLayer &L = stageLayouts[l];
+    w            = L.xsize * 128;
+    h            = L.ysize * 128;
+    px.assign((size_t)w * h, 0);
+    for (int cy = 0; cy < L.ysize; ++cy)
+        for (int cx = 0; cx < L.xsize; ++cx) {
+            int c = L.tiles[cy * 0x100 + cx] & 0x1FF;
+            for (int e = 0; e < 64; ++e) {
+                int tile = tiles128x128.tileIndex[c * 64 + e] & 0x3FF, dir = tiles128x128.direction[c * 64 + e] & 3;
+                int ox = cx * 128 + (e & 7) * 16, oy = cy * 128 + (e >> 3) * 16;
+                for (int y = 0; y < 16; ++y)
+                    for (int x = 0; x < 16; ++x) {
+                        int sx = dir & 1 ? 15 - x : x, sy = dir & 2 ? 15 - y : y;
+                        px[(size_t)(oy + y) * w + ox + x] = tilesetGFXData[tile * 256 + sy * 16 + sx];
+                    }
+            }
+        }
+}
+struct SkyRgb {
+    double r = 0, g = 0, b = 0;
+};
+static SkyRgb sky_rgb(int idx)
+{
+    ushort c = fullPalette[0][idx];
+    SkyRgb o;
+    o.r = ((c >> 11) & 31) * 255.0 / 31;
+    o.g = ((c >> 5) & 63) * 255.0 / 63;
+    o.b = (c & 31) * 255.0 / 31;
+    return o;
+}
+static SkyRgb sky_mix(const SkyRgb &a, const SkyRgb &b, double t) { return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t }; }
+static SkyRgb sky_scale(const SkyRgb &a, double k) { return { a.r * k, a.g * k, a.b * k }; }
+static double sky_max(const SkyRgb &a) { return std::max(a.r, std::max(a.g, a.b)); }
+static double sky_lum(const SkyRgb &a) { return 0.299 * a.r + 0.587 * a.g + 0.114 * a.b; }
+// art direction where the rule above does not see the act's sky as it is (previews: SCD32X_SKYPREVIEW)
+struct SkyArt {
+    const char *folder; // the stage's folder (all its acts)
+    int off;            // 1: no 32X sky
+    int end;            // > 0: the sky region ends at this background row (the horizon)
+    int glow;           // > 0: the night horizon's colour, 0xRRGGBB
+};
+static const SkyArt skyArt[] = {
+    // Stardust Speedway: no 32X sky (MicroNut99, R4B: its night skies look better as drawn) - every time period
+    { "R71A", 1, 0, 0 }, { "R71B", 1, 0, 0 }, { "R71C", 1, 0, 0 }, { "R71D", 1, 0, 0 },
+    { "R72A", 1, 0, 0 }, { "R72B", 1, 0, 0 }, { "R72C", 1, 0, 0 }, { "R72D", 1, 0, 0 },
+    { "R73C", 1, 0, 0 }, { "R73D", 1, 0, 0 },
+};
+static const SkyArt *sky_art(const std::string &key)
+{
+    for (const SkyArt &a : skyArt)
+        if (key.compare(0, strlen(a.folder), a.folder) == 0 && key.size() > strlen(a.folder) && key[strlen(a.folder)] == '/')
+            return &a;
+    return nullptr;
+}
+struct SkyRegion {
+    int a, b;
+    SkyRgb top, bot;
+};
+// the background rows where the sky colour is >= 20 % of the row (gaps of 8 rows bridged): 96 rows or more, or a sky
+// at the top of the background of 40 rows or more
+static std::vector<SkyRegion> sky_regions(const std::vector<uint8_t> &px, int w, int h, int idx, const SkyArt *art, std::vector<double> &frac)
+{
+    frac.assign(h, 0);
+    for (int y = 0; y < h; ++y) {
+        int n = 0;
+        for (int x = 0; x < w; ++x) n += px[(size_t)y * w + x] == idx;
+        frac[y] = (double)n / w;
+    }
+    std::vector<SkyRegion> out;
+    for (int y = 0; y < h; ++y) {
+        if (frac[y] < 0.2)
+            continue;
+        if (!out.empty() && y - out.back().b <= 8)
+            out.back().b = y;
+        else
+            out.push_back({ y, y, {}, {} });
+    }
+    std::vector<SkyRegion> keep;
+    for (SkyRegion r : out) {
+        if (art && art->end > 0) {
+            if (r.a >= art->end)
+                continue;
+            r.b = std::min(r.b, art->end);
+        }
+        if (r.b - r.a + 1 >= 96 || (r.a <= 16 && r.b - r.a + 1 >= 40))
+            keep.push_back(r);
+    }
+    return keep;
+}
+// REV R4B: does the act get a 32X sky? Run in convert_stage before the palette lines are packed (see-through sky pixels
+// free their colour); the tiles of the background but not of the foreground lose the sky colour (cell_indices)
+static void sky_decide(const std::set<int> &fgChunks)
+{
+    st.skyOn = false;
+    st.skyTile.assign(1024, false);
+    const char *env = getenv("SCD32X_SKY");
+    if (env && *env == '0')
+        return;
+    const SkyArt *art = sky_art(st.key);
+    if (art && art->off)
+        return;
+    int l = st.skyLayer;
+    if (l >= LAYER_COUNT || stageLayouts[l].type != LAYER_HSCROLL || !stageLayouts[l].xsize || !stageLayouts[l].ysize)
+        return;
+    SkyRgb S = sky_rgb(st.skyIdx);
+    if (sky_max(S) < 24) // black: an indoor background
+        return;
+    std::vector<uint8_t> px;
+    int w, h;
+    layer_pixels(l, px, w, h);
+    long flat = 0, cells = 0; // the sky colour's share of the background's single-colour cells
+    for (int cy = 0; cy + 8 <= h; cy += 8)
+        for (int cx = 0; cx + 8 <= w; cx += 8) {
+            cells++;
+            bool all = true;
+            for (int y = 0; y < 8 && all; ++y)
+                for (int x = 0; x < 8; ++x)
+                    if (px[(size_t)(cy + y) * w + cx + x] != st.skyIdx) {
+                        all = false;
+                        break;
+                    }
+            flat += all;
+        }
+    std::vector<double> frac;
+    if (cells == 0 || flat * 10 < cells || sky_regions(px, w, h, st.skyIdx, art, frac).empty())
+        return;
+    std::vector<bool> fgTile(1024, false);
+    for (int c : fgChunks)
+        for (int e = 0; e < 64; ++e) fgTile[tiles128x128.tileIndex[c * 64 + e] & 0x3FF] = true;
+    TileLayer &L = stageLayouts[l];
+    for (int cy = 0; cy < L.ysize; ++cy)
+        for (int cx = 0; cx < L.xsize; ++cx) {
+            int c = L.tiles[cy * 0x100 + cx] & 0x1FF;
+            for (int e = 0; e < 64; ++e) {
+                int t = tiles128x128.tileIndex[c * 64 + e] & 0x3FF;
+                if (!fgTile[t])
+                    st.skyTile[t] = true;
+            }
+        }
+    st.skyOn = true;
+    md_log("SKY stage %s: the background's colour %d (%02X%02X%02X) is the 32X sky's - %.0f %% of its plain cells", st.key.c_str(), st.skyIdx,
+           (int)S.r, (int)S.g, (int)S.b, 100.0 * flat / cells);
+}
+// the gradient: one colour a background row (the palette as the act file is made: its 60th frame)
+static std::vector<SkyRgb> sky_table(std::vector<SkyRegion> *regsOut = nullptr)
+{
+    std::vector<uint8_t> px;
+    int w, h;
+    layer_pixels(st.skyLayer, px, w, h);
+    const SkyArt *art = sky_art(st.key);
+    std::vector<double> frac;
+    std::vector<SkyRegion> regs = sky_regions(px, w, h, st.skyIdx, art, frac);
+    SkyRgb S = sky_rgb(st.skyIdx);
+    std::vector<SkyRgb> t(h, S);
+    for (SkyRegion &R : regs) {
+        // the region's light colour: its brightest colour with 0.5 % of its pixels or more (clouds, stars)
+        std::map<int, long> cnt, below;
+        for (int y = R.a; y <= R.b; ++y)
+            for (int x = 0; x < w; ++x) {
+                int v = px[(size_t)y * w + x];
+                if (v && v != st.skyIdx)
+                    cnt[v]++;
+            }
+        long regionPx = (long)(R.b - R.a + 1) * w, belowPx = 0;
+        SkyRgb C   = { 255, 255, 255 };
+        double cl  = -1;
+        for (auto &e : cnt)
+            if (e.second * 200 >= regionPx && sky_lum(sky_rgb(e.first)) > cl) {
+                cl = sky_lum(sky_rgb(e.first));
+                C  = sky_rgb(e.first);
+            }
+        for (int y = R.b + 1; y < std::min(h, R.b + 49); ++y)
+            for (int x = 0; x < w; ++x) {
+                int v = px[(size_t)y * w + x];
+                if (v && v != st.skyIdx) {
+                    below[v]++;
+                    belowPx++;
+                }
+            }
+        if (sky_max(S) >= 80) { // a day or dusk sky
+            R.top = sky_scale(S, 0.55);
+            R.bot = sky_mix(S, C, 0.55);
+        }
+        else { // a night sky: the horizon in the colour of the lights under it
+            SkyRgb H = C;
+            double best = -1;
+            for (auto &e : below) {
+                if (e.second * 100 < belowPx)
+                    continue;
+                SkyRgb c      = sky_rgb(e.first);
+                double chroma = sky_max(c) - std::min(c.r, std::min(c.g, c.b));
+                if (chroma > best) {
+                    best = chroma;
+                    H    = c;
+                }
+            }
+            if (art && art->glow > 0)
+                H = { (double)((art->glow >> 16) & 255), (double)((art->glow >> 8) & 255), (double)(art->glow & 255) };
+            SkyRgb glow = sky_scale(H, 110.0 / std::max(1.0, sky_max(H)));
+            R.top       = sky_scale(S, 0.35);
+            R.bot       = sky_mix(S, glow, 0.6);
+        }
+        for (int y = R.a; y <= R.b; ++y) {
+            double f = (double)(y - R.a) / std::max(1, R.b - R.a), u;
+            if (f < 0.4) {
+                u    = f / 0.4;
+                u    = u * u * (3 - 2 * u);
+                t[y] = sky_mix(R.top, S, u);
+            }
+            else {
+                u    = (f - 0.4) / 0.6;
+                u    = u * u * (3 - 2 * u);
+                t[y] = sky_mix(S, R.bot, u);
+            }
+        }
+        for (int y = R.b + 1; y < h && frac[y] >= 0.02; ++y) t[y] = R.bot; // under it: the gaps between hills, buildings
+        for (int y = R.a - 1; y >= 0 && frac[y] >= 0.02; --y) t[y] = R.top;
+    }
+    if (regsOut)
+        *regsOut = regs;
+    return t;
+}
+// two 15-bit 32X colours (0BBBBBGGGGGRRRRR) whose 2 x 2 checkerboard is the colour c (half steps); never 0x0000 (a
+// see-through 32X pixel)
+static void sky_pair(const SkyRgb &c, uint16_t &A, uint16_t &B)
+{
+    auto ch = [](double v, double k) {
+        int q = (int)std::floor(std::max(0.0, std::min(255.0, v)) / 255.0 * 31.0 + k);
+        return q < 0 ? 0 : q > 31 ? 31 : q;
+    };
+    A = (uint16_t)(ch(c.b, 0.25) << 10 | ch(c.g, 0.25) << 5 | ch(c.r, 0.25));
+    B = (uint16_t)(ch(c.b, 0.75) << 10 | ch(c.g, 0.75) << 5 | ch(c.r, 0.75));
+    if (!A)
+        A = 0x0400;
+    if (!B)
+        B = 0x0400;
+}
+
 std::string stage_key()
 {
     char k[0x60];
@@ -342,8 +600,72 @@ void convert_stage()
         for (int y = 0; y < L.ysize; ++y)
             for (int x = 0; x < L.xsize; ++x) usedChunks.insert(L.tiles[y * 0x100 + x] & 0x1FF);
     }
+    // REV R4B: and the chunks the act's scripts can put into the foreground layout later (tools/scd_chunks.py, given as
+    // SCD32X_PLACED="<layer:chunk,...> <type,...>" by tools/build_mdg.sh): the constants, and around each object of a type
+    // that writes a computed chunk, the chunks c - 7 .. c + 7 of the layout chunks next to it (Palmtree Panic's tile
+    // triggers: the ramps' chunks c .. c + 3 or c + 4 .. c + 7, whichever the act does not start with)
+    size_t layoutChunks = usedChunks.size();
+    if (const char *pv = getenv("SCD32X_PLACED")) {
+        const char *p = pv;
+        while (*p && *p != ' ') {
+            int layer = (int)strtol(p, (char **)&p, 10), chunk = *p == ':' ? (int)strtol(p + 1, (char **)&p, 10) : -1;
+            if (layer == 0 && chunk >= 0 && chunk < 512)
+                usedChunks.insert(chunk);
+            while (*p && *p != ',' && *p != ' ') p++;
+            if (*p == ',')
+                p++;
+        }
+        std::set<int> types;
+        while (*p == ' ') p++;
+        while (*p && *p != '-') {
+            types.insert((int)strtol(p, (char **)&p, 10));
+            if (*p != ',')
+                break;
+            p++;
+        }
+        TileLayer &F = stageLayouts[0];
+        for (int e = 0; e < ENTITY_COUNT && !types.empty(); ++e)
+            if (types.count(objectEntityList[e].type)) {
+                int ox = objectEntityList[e].XPos >> 23, oy = objectEntityList[e].YPos >> 23;
+                for (int y = oy - 1; y <= oy + 1; ++y)
+                    for (int x = ox - 1; x <= ox + 2; ++x)
+                        if (x >= 0 && y >= 0 && x < F.xsize && y < F.ysize) {
+                            int c = F.tiles[y * 0x100 + x] & 0x1FF;
+                            for (int k = c - 7; k <= c + 7; ++k)
+                                if (k > 0 && k < 512)
+                                    usedChunks.insert(k);
+                        }
+            }
+    }
     for (int c : usedChunks)
         for (int e = 0; e < 64; ++e) st.tileUsed[tiles128x128.tileIndex[c * 64 + e] & 0x3FF] = true;
+    if (usedChunks.size() != layoutChunks)
+        md_log("MDCHECK stage %s: %d chunks in the layouts, %d with the ones scripts place", stage_key().c_str(), (int)layoutChunks,
+               (int)usedChunks.size());
+    { // REV R4B: the 32X sky - decided before the palette lines (its colour, see-through, needs no slot in the tiles it leaves)
+        std::set<int> fgChunks(usedChunks);
+        if (stageLayouts[st.skyLayer].xsize) { // the chunks of the sky's background only: not the foreground's
+            std::set<int> fgOnly;
+            TileLayer &F = stageLayouts[0];
+            for (int y = 0; y < F.ysize; ++y)
+                for (int x = 0; x < F.xsize; ++x) fgOnly.insert(F.tiles[y * 0x100 + x] & 0x1FF);
+            for (int c : usedChunks) // the chunks scripts place go into the foreground
+                if (!fgOnly.count(c)) {
+                    bool bg = false;
+                    for (int l = 1; l < LAYER_COUNT && !bg; ++l)
+                        for (int y = 0; y < stageLayouts[l].ysize && !bg; ++y)
+                            for (int x = 0; x < stageLayouts[l].xsize; ++x)
+                                if ((stageLayouts[l].tiles[y * 0x100 + x] & 0x1FF) == c) {
+                                    bg = true;
+                                    break;
+                                }
+                    if (!bg)
+                        fgOnly.insert(c);
+                }
+            fgChunks = fgOnly;
+        }
+        sky_decide(fgChunks);
+    }
     // palette lines from every used cell's index set
     std::vector<std::set<int>> sets;
     for (int t = 0; t < 1024; ++t)
@@ -384,6 +706,9 @@ void convert_stage()
 }
 
 inline int rgb9_of565(ushort c) { return ((c >> 13) & 7) << 6 | ((c >> 8) & 7) << 3 | ((c >> 2) & 7); }
+// REV R4B: the comparisons - a pixel the planes leave see-through where the engine drew the background's sky colour
+// is the 32X sky's (the picture differs there by design: the gradient)
+static bool sky_shows(int ref9, int bank) { return st.skyOn && ref9 == rgb9_of565(fullPalette[bank][st.skyIdx]); }
 
 // ---------------------------------------------------------------- export for the 68000 demo (round S3b)
 // SCD32X_MDEXPORT=file: from frame SCD32X_MDEXPORT_START (default 300) record the camera path of
@@ -1232,9 +1557,63 @@ std::vector<uint8_t> mdg_build()
         set32(h, 60, (uint32_t)h.size());
         h.insert(h.end(), spr.bytes.begin(), spr.bytes.end());
     }
+    if (st.skyOn) { // REV R4B: the 32X sky ('SKY1' in the header's words 48 / 52, md/sgb.h)
+        std::vector<SkyRegion> regs;
+        std::vector<SkyRgb> t = sky_table(&regs);
+        int rows = (int)t.size(), pairs = rows / 2;
+        while (h.size() & 3) h.push_back(0);
+        set32(h, 48, SGB_SKY_TAG);
+        set32(h, 52, (uint32_t)h.size());
+        put16(h, (unsigned)st.skyLayer);
+        put16(h, (unsigned)st.skyIdx);
+        put16(h, (unsigned)rows);
+        put16(h, (unsigned)pairs);
+        put16(h, fullPalette[0][st.skyIdx]); // its colour now (RGB565): the SH2 follows the palette's changes to it
+        put16(h, 0);
+        for (int k = 0; k < pairs; ++k) {
+            SkyRgb c = sky_mix(t[2 * k], t[2 * k + 1], 0.5);
+            uint16_t A, B;
+            sky_pair(c, A, B);
+            put16(h, A);
+            put16(h, B);
+        }
+        for (const SkyRegion &R : regs)
+            md_log("SKY stage %s: rows %d-%d, %02X%02X%02X at the top to %02X%02X%02X at the horizon", st.key.c_str(), R.a, R.b,
+                   (int)R.top.r, (int)R.top.g, (int)R.top.b, (int)R.bot.r, (int)R.bot.g, (int)R.bot.b);
+        if (const char *dir = getenv("SCD32X_SKYPREVIEW")) { // the background as the console shows it: the sky colour dithered
+            std::vector<uint8_t> px;
+            int w, hh;
+            layer_pixels(st.skyLayer, px, w, hh);
+            int W = std::min(w, 640);
+            std::vector<unsigned char> img((size_t)(2 * W + 8) * hh * 3, 40);
+            for (int y = 0; y < hh; ++y)
+                for (int x = 0; x < W; ++x) {
+                    int v = px[(size_t)y * w + x];
+                    SkyRgb o = sky_rgb(v);
+                    unsigned char *a = &img[((size_t)y * (2 * W + 8) + x) * 3], *b = &img[((size_t)y * (2 * W + 8) + W + 8 + x) * 3];
+                    a[0] = (unsigned char)o.r, a[1] = (unsigned char)o.g, a[2] = (unsigned char)o.b;
+                    if (v == st.skyIdx) {
+                        uint16_t A, B;
+                        sky_pair(sky_mix(t[y & ~1], t[std::min(hh - 1, (y & ~1) + 1)], 0.5), A, B);
+                        uint16_t c = ((x + y) & 1) ? B : A;
+                        o = { (c & 31) * 255.0 / 31, ((c >> 5) & 31) * 255.0 / 31, ((c >> 10) & 31) * 255.0 / 31 };
+                    }
+                    b[0] = (unsigned char)o.r, b[1] = (unsigned char)o.g, b[2] = (unsigned char)o.b;
+                }
+            std::string name = st.key;
+            std::replace(name.begin(), name.end(), '/', '_');
+            std::string path = std::string(dir) + "/sky_" + name + ".png";
+            FILE *f          = fopen(path.c_str(), "wb");
+            if (f) {
+                fclose(f);
+                // md_save_png writes into the frames directory: give it the name relative to it when that is the place
+                md_save_png_path(path.c_str(), img.data(), 2 * W + 8, hh);
+            }
+        }
+    }
     set32(h, 8, (uint32_t)h.size());
     std::string k = st.key;
-    for (size_t i = 0; i < k.size() && i < 19; ++i) h[36 + i] = (uint8_t)k[i]; // R3: 19 characters (56-63: the pack)
+    for (size_t i = 0; i < k.size() && i < 11; ++i) h[36 + i] = (uint8_t)k[i]; // R3: the stage (REV R4B: 11 characters; 48-55 the sky)
     return h;
 }
 
@@ -1263,8 +1642,69 @@ void sgb_vram_w(void *, uint16_t addr, uint16_t word)
 uint16_t be16(const std::vector<uint8_t> &b, size_t at) { return (uint16_t)(b[at] << 8 | b[at + 1]); }
 uint32_t be32(const std::vector<uint8_t> &b, size_t at) { return (uint32_t)be16(b, at) << 16 | be16(b, at + 2); }
 
+// REV R4B: SCD32X_SKYDUMP=dir - each background layer of the act as engine palette indices (dir/<key>_L<l>.idx: u32 w,
+// u32 h, w x h bytes), the palette (dir/<key>.pal: 256 x RGB) and the layers' facts (dir/<key>.txt), for the 32X skies'
+// study (which colours are sky)
+std::set<int> bgLayersSeen;
+void sky_dump(const char *dir)
+{
+    std::string name = st.key;
+    std::replace(name.begin(), name.end(), '/', '_');
+    std::string base = std::string(dir) + "/" + name;
+    FILE *t          = fopen((base + ".txt").c_str(), "w");
+    if (!t)
+        return;
+    fprintf(t, "stage %s planeB %d bgseen", st.key.c_str(), planeBLayer);
+    for (int l : bgLayersSeen) fprintf(t, " %d", l);
+    fprintf(t, "\n");
+    for (int l = 0; l < LAYER_COUNT; ++l) {
+        TileLayer &L = stageLayouts[l];
+        if (!L.xsize || !L.ysize)
+            continue;
+        fprintf(t, "layer %d type %d size %d x %d parallax %d speed %d\n", l, L.type, L.xsize, L.ysize, L.parallaxFactor, L.scrollSpeed);
+        if (l == 0)
+            continue;
+        int w = L.xsize * 128, h = L.ysize * 128;
+        std::vector<uint8_t> px((size_t)w * h, 0);
+        for (int cy = 0; cy < L.ysize; ++cy)
+            for (int cx = 0; cx < L.xsize; ++cx) {
+                int c = L.tiles[cy * 0x100 + cx] & 0x1FF;
+                for (int e = 0; e < 64; ++e) {
+                    int tile = tiles128x128.tileIndex[c * 64 + e] & 0x3FF, dir = tiles128x128.direction[c * 64 + e] & 3;
+                    int ox = cx * 128 + (e & 7) * 16, oy = cy * 128 + (e >> 3) * 16;
+                    for (int y = 0; y < 16; ++y)
+                        for (int x = 0; x < 16; ++x) {
+                            int sx = dir & 1 ? 15 - x : x, sy = dir & 2 ? 15 - y : y;
+                            px[(size_t)(oy + y) * w + ox + x] = tilesetGFXData[tile * 256 + sy * 16 + sx];
+                        }
+                }
+            }
+        char fn[32];
+        snprintf(fn, sizeof(fn), "_L%d.idx", l);
+        FILE *o = fopen((base + fn).c_str(), "wb");
+        if (o) {
+            uint32_t wh[2] = { (uint32_t)w, (uint32_t)h };
+            fwrite(wh, 4, 2, o);
+            fwrite(px.data(), 1, px.size(), o);
+            fclose(o);
+        }
+    }
+    fclose(t);
+    FILE *p = fopen((base + ".pal").c_str(), "wb");
+    if (p) {
+        for (int i = 0; i < 256; ++i) {
+            ushort c     = fullPalette[0][i];
+            uint8_t b[3] = { (uint8_t)(((c >> 11) & 31) * 255 / 31), (uint8_t)(((c >> 5) & 63) * 255 / 63), (uint8_t)((c & 31) * 255 / 31) };
+            fwrite(b, 1, 3, p);
+        }
+        fclose(p);
+    }
+}
+
 void sgb_stage()
 {
+    if (const char *d = getenv("SCD32X_SKYDUMP"))
+        sky_dump(d);
     std::vector<uint8_t> f = mdg_build();
     if (!sgb.exportDir.empty()) {
         std::string name = st.key;
@@ -1393,7 +1833,7 @@ void sgb_sprite_compare(const int16_t *gA, const int16_t *gB, uint16_t gvA, uint
             uint16_t w = sgb.shown[k];
             int model  = ((w >> 1) & 7) << 6 | ((w >> 5) & 7) << 3 | ((w >> 9) & 7);
             int ref    = rgb9_of565(Engine.frameBuffer[y * GFX_LINESIZE + x]);
-            bool bad   = gfxLineBuffer[y] == 0 && ref != model;
+            bool bad   = gfxLineBuffer[y] == gfxLineBuffer[0] && ref != model && !(pix == 0 && sky_shows(ref, gfxLineBuffer[0])); // REV R4B
             diff += bad;
             if (save) {
                 auto put = [&](int panel, int c9) {
@@ -1426,6 +1866,14 @@ void sgb_sprite_compare(const int16_t *gA, const int16_t *gB, uint16_t gvA, uint
 }
 
 // one frame the way the console does it: SH2 (record) -> 68000 (apply) -> VDP model
+// REV R4B: layout entries the scripts changed since the last frame (plat_layout_set) - the console model writes their
+// shown cells again after the frame's plane update, as plat_mars.cpp does (md_plane_chunk)
+struct LayoutSet {
+    int layer, x, y;
+};
+std::vector<LayoutSet> layoutSets;
+bool layoutSetsLost = false;
+
 void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, std::function<bool(int, bool)> shows)
 {
     if (!sgb.test || sgb.key != st.key)
@@ -1461,6 +1909,12 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
             md_log("SPR uploads per frame: none %ld, <=128 %ld, <=256 %ld, <=512 %ld, <=768 %ld, <=1024 %ld, <=1600 %ld, more %ld", hist[0], hist[1],
                    hist[2], hist[3], hist[4], hist[5], hist[6], hist[7]);
     }
+    if (layoutSetsLost) { // REV R4B: more layout changes than the queue holds - both planes from scratch, now
+        md_plane_reset(&sgb.pA);
+        md_plane_reset(&sgb.pB);
+        layoutSets.clear();
+        layoutSetsLost = false;
+    }
     MdLayer LA = layer(0, fgSlots);
     md_plane_update(&sgb.pA, &LA, SGB_NAME_A, rec[fgSlot].tileYPos, rec[fgSlot].x, SCREEN_YSIZE, SCREEN_XSIZE, hsA, &vA, sgb_write, &o);
     if (bgLayer >= 0) {
@@ -1473,13 +1927,25 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
     }
     else
         for (int i = 0; i < SCREEN_YSIZE; ++i) hsB[i] = 0;
+    // REV R4B: the changed layout entries' shown cells (plat_mars.cpp planes_frame)
+    for (const LayoutSet &e : layoutSets) {
+        if (e.layer == 0) {
+            MdLayer L0 = layer(0, fgSlots);
+            md_plane_chunk(&sgb.pA, &L0, SGB_NAME_A, e.x, e.y, sgb_write, &o);
+        }
+        else if (e.layer == bgLayer) {
+            MdLayer L1 = layer(bgLayer, bgSlots);
+            md_plane_chunk(&sgb.pB, &L1, SGB_NAME_B, e.x, e.y, sgb_write, &o);
+        }
+    }
+    layoutSets.clear();
     // palette: the engine's colours behind each CRAM slot, sent when they change (fades, cycles)
     uint16_t cIdx[64], cCol[64];
     int nc = 0;
     for (int i = 0; i < 64; ++i) {
         if (sgb.slots[i] == 0xFFFF)
             continue;
-        uint16_t c565 = fullPalette[0][sgb.slots[i]];
+        uint16_t c565 = activePalette[sgb.slots[i]]; // REV R4B: the active bank (as plat_mars.cpp)
         if (fadeMode > 0) // REV R3: the engine's fade, on the palette (as plat_mars.cpp)
             c565 = sgb_fade565(c565, fadeR, fadeG, fadeB, fadeA);
         uint16_t c = sgb_md_color(c565);
@@ -1518,7 +1984,7 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
             int model = -1;
             if (pix) {
                 int k = ((pix >> 4) & 3) * 16 + (pix & 15);
-                if (gfxLineBuffer[y] == 0) { // bank 0: the colour the 68000 put into CRAM
+                if (gfxLineBuffer[y] == gfxLineBuffer[0]) { // the active bank: the colour the 68000 put into CRAM
                     uint16_t w = sgb.shown[k];
                     model      = ((w >> 1) & 7) << 6 | ((w >> 5) & 7) << 3 | ((w >> 9) & 7);
                 }
@@ -1530,8 +1996,8 @@ void sgb_frame(int fgSlot, int fgSlots, int bgLayer, int bgSlot, int bgSlots, st
             }
             ushort r = refBuf[y * GFX_LINESIZE + x];
             int ref  = r == sentinel ? -1 : rgb9_of565(r);
-            if (ref != model && fadeMode <= 0) // R3: in a fade the model's colours are faded, the layer reference is not
-                diff++;
+            if (ref != model && fadeMode <= 0 && !(model == -1 && sky_shows(ref, gfxLineBuffer[y]))) // R3: in a fade the model's
+                diff++; // colours are faded, the layer reference is not. REV R4B: nothing on the planes, the sky colour: the 32X sky
         }
     }
     if (sgb.sprOn)
@@ -1574,6 +2040,8 @@ void compare_frame()
         framesUnsupported++;
         return;
     }
+    if (bgLayer > 0)
+        bgLayersSeen.insert(bgLayer); // REV R4B (sky_dump)
     int16_t hsA[MAXLINES], hsB[MAXLINES];
     uint16_t vsA = 0, vsB = 0;
     auto shows = [](int slots, bool front) {
@@ -1626,7 +2094,7 @@ void compare_frame()
             }
             ushort r = refBuf[y * GFX_LINESIZE + x];
             int ref  = r == sentinel ? -1 : rgb9_of565(r);
-            if (ref != model)
+            if (ref != model && !(model == -1 && sky_shows(ref, bank))) // REV R4B: see-through sky colour: the 32X sky
                 diff++;
             if (save) {
                 auto put = [&](int panel, int c9) {
@@ -1730,6 +2198,15 @@ int md_sprite_high(int layer)
     static const int after[4] = { 1, 2, 3, 5 }; // the first draw list after tile slot 0, 1, 2, 3 (DrawStageGFX)
     return last < 0 || layer >= after[last];
 }
+void md_layout_set(int layer, int x, int y) // REV R4B (plat_layout_set)
+{
+    if (!enabled)
+        return;
+    if (layoutSets.size() >= 8) // (as the SH2's queue: more in one frame - both planes again)
+        layoutSetsLost = true;
+    else
+        layoutSets.push_back({ layer, x, y });
+}
 void md_sprite_draw(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py)
 {
     if (!enabled || !sgb.sprOn || sgb.key != st.key)
@@ -1805,8 +2282,10 @@ void test_camera()
     static int on = -1;
     if (on < 0) {
         const char *v = getenv("SCD32X_TEST_CAMERA");
-        on            = v && *v == '1';
+        on            = v && (*v == '1' || *v == '2') ? *v - '0' : 0;
     }
+    if (on == 2 && cameraTarget >= 0 && stageMode == STAGEMODE_NORMAL) // REV R4B: =2 takes the camera from the player (the act's
+        cameraTarget = -1;                                               // whole map, both ways, with its objects running)
     if (!on || cameraTarget >= 0)
         return;
     static unsigned int rs = 99;
@@ -1988,7 +2467,7 @@ void md_check_frame()
     }
     if (st.ok && st.palWatch > 0) {
         for (int i = 0; i < PALETTE_SIZE; ++i)
-            if (fullPalette[0][i] != st.pal0[i])
+            if (fullPalette[0][i] != st.pal0[i] || activePalette[i] != st.pal0[i]) // REV R4B: and the banks' cycles
                 st.palCycles.insert(i);
         if (--st.palWatch == 0 && (sgb.test || !sgb.exportDir.empty()))
             sgb_stage(); // REV R1

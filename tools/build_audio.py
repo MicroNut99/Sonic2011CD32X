@@ -33,8 +33,8 @@ MUSIC = ([("R%dB.ogg" % r, "*") for r in (1, 3, 4, 5, 6, 7, 8)] +
 EFFECTS = [("Global/Ring.wav", 11000, 0.40, 0xC0), ("Global/Jump.wav", 11000, 0.33, 0xC0),
            ("Global/Destroy.wav", 8000, 0.35, 0xE0), ("Global/Skidding.wav", 8000, 0.30, 0xB0),
            ("Global/Spring.wav", 8000, 0.40, 0xD0), ("Global/Hurt.wav", 8000, 0.50, 0xD0),
-           ("Global/LoseRings.wav", 8000, 0.80, 0xD0), ("Global/Charge.wav", 8000, 0.35, 0xC0),
-           ("Global/Release.wav", 8000, 0.45, 0xD0), ("Global/LampPost.wav", 8000, 0.40, 0xC0),
+           ("Global/LoseRings.wav", 8000, 0.80, 0xD0), ("Global/Charge.wav", 8000, 0.70, 0xF0),
+           ("Global/Release.wav", 8000, 0.80, 0xF0), ("Global/LampPost.wav", 8000, 0.40, 0xC0),
            ("Global/BlueShield.wav", 8000, 0.35, 0xC0), ("Global/Future.wav", 8000, 0.60, 0xD0),
            ("Global/Past.wav", 8000, 0.60, 0xD0), ("Global/TimeWarp.wav", 8000, 1.00, 0xD0),
            ("Global/SignPost.wav", 8000, 0.60, 0xC0), ("Global/ScoreAdd.wav", 8000, 0.10, 0xB0),
@@ -65,9 +65,18 @@ def samples_of(data):
 
 
 def resample(a, src, dst):
-    """linear, src Hz -> dst Hz"""
+    """src Hz -> dst Hz: down, each output sample the average of the source samples it stands for (a box filter -
+    less aliasing hiss than picking one); up, linear"""
     n = max(1, int(len(a) * dst / src))
     out = []
+    if dst < src:
+        span = src / dst
+        for i in range(n):
+            k0 = int(i * span)
+            k1 = max(k0 + 1, int((i + 1) * span))
+            seg = a[k0:k1]
+            out.append(sum(seg) / len(seg) if seg else 0.0)
+        return out
     for i in range(n):
         t = i * src / dst
         k = int(t)
@@ -96,6 +105,12 @@ def build_sfx(pk, out_dir):
         fade = min(len(a), int(0.01 * r))  # a short fade: nothing clicks
         for i in range(fade):
             a[len(a) - 1 - i] *= i / fade
+        # REV R4B: each effect to full scale (at most x4), the chip's volume (EFFECTS) sets the balance - quiet ones
+        # (the spin dash: peaks at a third of full scale) were lost under the CD music
+        peak = max((abs(v) for v in a), default=0.0)
+        if peak > 0:
+            g = min(0.98 / peak, 4.0)
+            a = [v * g for v in a]
         clips.append((name, a, r, rate, vol))
     scale = 1.0
     while True:
@@ -109,7 +124,7 @@ def build_sfx(pk, out_dir):
             total += need
         if total <= RAM:
             break
-        scale *= 0.95
+        scale *= 0.99  # (fine steps: as much of the 64 KB as fits)
     image, table = bytearray(), []
     for name, a, r, fd, play, vol, n in plan:
         page = len(image) // PAGE

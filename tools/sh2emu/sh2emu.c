@@ -278,10 +278,15 @@ static const char *opt_callers; /* -callers NAME: who calls NAME, while profilin
 static const char *opt_set_name[MAX_SETS];
 static u32 opt_set_value[MAX_SETS];
 static int opt_nsets;
+/* REV R4B: -pokeg FRAME:INDEX=VALUE - the game's global variable INDEX (globalVariables[INDEX], GameConfig.bin's order:
+   25 Warp.Destination, 26 Warp.Timer ...) = VALUE from frame FRAME on, once */
+#define MAX_POKES 256
+static int opt_poke_frame[MAX_POKES], opt_poke_index[MAX_POKES], opt_npokes;
+static u32 opt_poke_value[MAX_POKES];
 static const char *opt_xsyms[8]; /* REV R4: -syms: more names to load */
 static int opt_nxsyms;
 static const char *opt_peek[8]; /* REV R4: -peek NAME[:size]: an SDRAM variable's value at each stage load and the end */
-static int opt_peek_size[8], opt_npeek;
+static int opt_peek_size[8], opt_npeek, opt_peek_every; /* -peekevery N: also every N frames */
 static void print_peeks(const char *when);
 static u32 callers_addr;
 static u64 *callers_count;
@@ -1216,6 +1221,12 @@ static u32 sdram_read32(u32 a)
     u32 o = (a - 0x06000000u) & (SDRAM_SIZE - 1);
     return (u32)sdram[o] << 24 | (u32)sdram[o + 1] << 16 | (u32)sdram[o + 2] << 8 | sdram[o + 3];
 }
+static void sdram_write32(u32 a, u32 v)
+{
+    u32 o = (a - 0x06000000u) & (SDRAM_SIZE - 4);
+    sdram[o] = (u8)(v >> 24), sdram[o + 1] = (u8)(v >> 16), sdram[o + 2] = (u8)(v >> 8), sdram[o + 3] = (u8)v;
+    for (int k = 0; k < 4; ++k) sdram_def[o + k] = 1;
+}
 static void note_state(u16 v)
 {
     if (v == 0x5C16 && ms_setup < 0) {
@@ -1624,6 +1635,8 @@ static u64 sub_done_at;
 static u16 sub_cmd;
 static int cur_file = -1, cur_img = 0;
 static int planes_on;
+static int md_display = 1; /* REV R4B: the Genesis display (VDP register 1 bit 6): CMD 52 sets it, CMD 68 op 1 / op 2 turn it on */
+static u64 splash_cmds;      /* REV R4B: command 51s (file chunk -> frame buffer: the loading picture) */
 /* ---- the 68000's plane records and the VDP (cd32x/kobo/hw_md.s sgb_poll / sgb_vblank, md/sgb.h) ---- */
 static u16 vram[0x8000];      /* 64 KB, words */
 static u16 vsram[2], vcram[64];
@@ -1858,7 +1871,9 @@ static void write_shot(const char *path)
             if (cb >= 0 && pb) c = cb;
             if (ca >= 0 && pa) c = ca;
             if (cs >= 0 && ps) c = cs;
-            u16 g = vcram[c & 63];
+            if (!md_display) /* REV R4B: the Genesis display off (CMD 52): black, see-through for the 32X */
+                c = 0;
+            u16 g = md_display ? vcram[c & 63] : 0;
             line[x * 3 + 0] = (u8)(((g >> 9) & 7) * 36);
             line[x * 3 + 1] = (u8)(((g >> 5) & 7) * 36);
             line[x * 3 + 2] = (u8)(((g >> 1) & 7) * 36);
@@ -1985,6 +2000,8 @@ static void sub_finish(void)
             sprintf(nm, "G%dS%03d.MDG", ((idx >> 8) & 0xF) - 1, idx & 0xFF);
             cur_img = 28;
         }
+        else if (idx <= 0)
+            strcpy(nm, "IMAGE.RAW"); /* REV R4B: as the Sub-CPU (sub_main.c: file 0 and below) */
         else
             sprintf(nm, "IMAGE%d.RAW", idx);
         cur_file = find_file(nm);
@@ -2048,7 +2065,41 @@ static void sub_finish(void)
         SET_COMM(12, (u16)n);
         SET_COMM(0, 0);
     }
-    else if (cmd == 52 || cmd == 44) {
+    else if (cmd == 51) {
+        /* REV R4B: as the Sub-CPU's CMD 51 (sub_main.c K15): chunk c of the open file (32 KB, 16 sectors, whole sectors)
+           -> the frame buffer the 68000 sees (the one not shown) at byte 0x200 + c * 32 KB, written by the 68000: the SH2
+           must have handed the frame buffer over (FM = 0) */
+        int chunk  = COMM(2);
+        u32 length = cur_file >= 0 ? files[cur_file].len : 0;
+        u32 off    = (u32)chunk * 32768;
+        int n      = 0;
+        if (off < length)
+            n = (int)((length - off + 2047) / 2048);
+        if (n > 16)
+            n = 16;
+        if (fm)
+            evlog("FB-CMD51", "command 51 while the SH2 holds the frame buffer (FM 1): the 68000's writes would not land");
+        for (int i = 0; i < n * 2048; ++i) {
+            u32 src = off + i, o = 0x200 + off + i;
+            if (o >= FB_SIZE)
+                break;
+            fb[fs_bit][o]     = (cur_file >= 0 && src < length) ? files[cur_file].data[src] : 0;
+            fb_def[fs_bit][o] = 1;
+        }
+        splash_cmds++;
+        SET_COMM(12, (u16)(((chunk & 0xFF) << 8) | (n & 0xFF))); /* (the Sub-CPU's K11 reply, in COMM12 and COMM14) */
+        if (opt_verbose)
+            printf("[f%5d] SUB: CMD 51 chunk %d -> frame buffer %X (%d sectors)\n", frame_no(), chunk, 0x200 + off, n);
+        SET_COMM(0, 0);
+    }
+    else if (cmd == 52) { /* REV R4B: the Genesis display on (COMM2 = 1) / off (0) - the text and the planes */
+        int on = COMM(2) & 1;
+        if (on != md_display)
+            printf("[f%5d] SUB: CMD 52 Genesis display %s\n", frame_no(), on ? "on" : "off");
+        md_display = on;
+        SET_COMM(0, 0);
+    }
+    else if (cmd == 44) {
         SET_COMM(0, 0);
     }
     else if (cmd == 68) {
@@ -2068,13 +2119,15 @@ static void sub_finish(void)
                 if (ms_planes < 0)
                     ms_planes = frame_no();
                 vdp_planes_on(o);
+                md_display = 1; /* REV R4B: the Sub-CPU's register list ends with 0x8174 */
                 SET_COMM(6, 0);
             }
         }
         else if (op == 2) {
-            planes_on = 0;
-            sgb_on    = 0;
-            ok        = 1;
+            planes_on  = 0;
+            sgb_on     = 0;
+            md_display = 1; /* REV R4B: md_init_hw leaves the display on (the text screen) */
+            ok         = 1;
         }
         printf("[f%5d] SUB: CMD 68 op %d off %06X -> %d\n", frame_no(), op, off, ok);
         SET_COMM(12, ok);
@@ -2128,8 +2181,21 @@ static void sub_poll(void)
         lat = 400000;
     sub_done_at = cycles + lat;
 }
+static void sdram_write32(u32 a, u32 v);
 static void frame_tick(void)
 {
+    for (int i = 0; i < opt_npokes; ++i) /* REV R4B: -pokeg */
+        if (opt_poke_frame[i] == frame_no()) {
+            u32 a = sym_addr("globalVariables");
+            if (a < 0x06000000u || a >= 0x06040000u)
+                printf("[f%5d] -pokeg: no globalVariables in SDRAM\n", frame_no());
+            else {
+                sdram_write32(a + 4u * (u32)opt_poke_index[i], opt_poke_value[i]);
+                cache_write_update(a + 4u * (u32)opt_poke_index[i], opt_poke_value[i], 4); /* as an SH2 write */
+                printf("[f%5d] -pokeg globalVariables[%d] (%08X) = %d\n", frame_no(), opt_poke_index[i],
+                       a + 4u * (u32)opt_poke_index[i], (int)opt_poke_value[i]);
+            }
+        }
     if (fs_req >= 0) { /* REV R4: the frame buffer swap, in vertical blank */
         fs_bit = fs_req;
         fs_req = -1;
@@ -2863,6 +2929,8 @@ static void summary(void)
     if (ms_planes >= 0)
         printf(" (frame %d)\n", ms_planes);
     printf("line 10 now       STATE:%X CKPT:%04X COMM4:%04X\n", COMM(12), COMM(8), COMM(4));
+    printf("Genesis display   %s at the end%s\n", md_display ? "on" : "off (CMD 52)",
+           splash_cmds ? "; the loading picture: command 51 used" : ""); /* REV R4B */
     if (ms_loaded >= 0 && presented_addr && frame_no() > ms_loaded + 60) {
         u32 n    = sdram_read32(presented_addr) - presented_at_loaded;
         double s = (frame_no() - ms_loaded) / 60.0;
@@ -2938,7 +3006,19 @@ static void fill_garbage(u8 *p, u32 n, u32 *seed)
 static void print_peeks(const char *when) /* REV R4: -peek - read straight from SDRAM (no bus time, no cache) */
 {
     for (int i = 0; i < opt_npeek; ++i) {
-        u32 a = sym_addr(opt_peek[i]), v = 0;
+        u32 a = 0, v = 0;
+        { /* REV R4B: NAME+OFFSET too (e.g. globalVariables+104: the game's global 26) */
+            char nm[128];
+            const char *plus = strchr(opt_peek[i], '+');
+            size_t L         = plus ? (size_t)(plus - opt_peek[i]) : strlen(opt_peek[i]);
+            if (L >= sizeof nm)
+                L = sizeof nm - 1;
+            memcpy(nm, opt_peek[i], L);
+            nm[L] = 0;
+            a     = sym_addr(nm);
+            if (a && plus)
+                a += (u32)strtoul(plus + 1, 0, 0);
+        }
         int n = opt_peek_size[i] == 1 || opt_peek_size[i] == 2 ? opt_peek_size[i] : 4;
         if (!a || (a & 0x1FFFFFFF) < 0x06000000u || (a & 0x1FFFFFFF) >= 0x06000000u + SDRAM_SIZE) {
             printf("[f%5d] peek %s: no SDRAM variable of that name\n", frame_no(), opt_peek[i]);
@@ -2971,6 +3051,9 @@ int main(int argc, char **argv)
                    "                 scripted spin dash / run right from FRAME on)\n"
                    "  -set NAME=V    the engine variable NAME (32 bits) = V at the first stage set-up (e.g. scdDemoPad=1)\n"
                    "  -peek NAME[:N] print the engine variable NAME (N = 1, 2 or 4 bytes) at each stage load and at the end\n"
+                   "  -peekevery N   ... and every N frames\n"
+                   "  -pokeg F:I=V   the game's global variable I (GameConfig.bin's order, e.g. 25 Warp.Destination,\n"
+                   "                 26 Warp.Timer) = V at frame F (REV R4B; up to 256)\n"
                    "  -syms FILE     more function names (nm -n -C), e.g. a scene's native scripts: game_data/native/\n"
                    "                 scene_<list>_<pos>.syms (tools/build_game_data.py --native); up to 8\n"
                    "  -reccrc N      CRC of the first N records' contents (default 600): the same pictures at any speed\n"
@@ -3034,6 +3117,8 @@ int main(int argc, char **argv)
             opt_rec_crc_n = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-pad") && i + 1 < argc)
             pad_parse(argv[++i]);
+        else if (!strcmp(argv[i], "-peekevery") && i + 1 < argc)
+            opt_peek_every = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-peek") && i + 1 < argc && opt_npeek < 8) {
             char *c = strchr(argv[++i], ':');
             opt_peek_size[opt_npeek] = c ? atoi(c + 1) : 4;
@@ -3048,6 +3133,15 @@ int main(int argc, char **argv)
             *e                         = 0;
             opt_set_name[opt_nsets]    = argv[i];
             opt_set_value[opt_nsets++] = (u32)strtoul(e + 1, 0, 0);
+        }
+        else if (!strcmp(argv[i], "-pokeg") && i + 1 < argc && opt_npokes < MAX_POKES) { /* REV R4B */
+            int fr = 0, ix = 0;
+            long val = 0;
+            if (sscanf(argv[++i], "%d:%d=%ld", &fr, &ix, &val) == 3 && ix >= 0 && ix < 256) {
+                opt_poke_frame[opt_npokes] = fr;
+                opt_poke_index[opt_npokes] = ix;
+                opt_poke_value[opt_npokes++] = (u32)val;
+            }
         }
         else if (!strcmp(argv[i], "-callers") && i + 1 < argc)
             opt_callers = argv[++i];
@@ -3205,6 +3299,8 @@ int main(int argc, char **argv)
             if (intmsk_lo & 0x08)
                 vint_pending = 1;
             vbi_count++;
+            if (opt_peek_every > 0 && opt_npeek && frame_no() % opt_peek_every == 0)
+                print_peeks("every");
         }
         if (!no_int_next && vint_pending && ((SR >> 4) & 15) < 12) {
             take_interrupt(12, 70);

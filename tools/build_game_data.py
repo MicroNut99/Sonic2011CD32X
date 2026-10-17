@@ -17,7 +17,12 @@ Output (cd32x/Makefile ENGINE=1 puts it on the disc):
                       (after the part table, "SCHK"): a scene change loads only the chunks whose
                       CRCs differ from the image already in the cart
   SCDDATA.PAK         the start scene's pack (the boot loader loads a data pack; the engine uses the
-                      one in the scene image) - cart 0x300000
+                      one in the scene image) - cart 0x300000. REV R4B: then the loading picture (IMAGE.RAW's
+                      bytes, at a multiple of 4) and a 16-byte footer: 'SPL1', its offset, its size, 0 - the
+                      engine shows it between the scenes (cd32x/engine/plat_mars.cpp)
+  IMAGE.RAW           REV R4B: the loading picture (tools/scd_splash.py: the title screen with a loading bar) -
+                      file 0: the boot loader shows it at power-on (not copied by the Makefile: the build
+                      commands copy it into the disc folder, as KOBOSFX.BIN)
   --native DIR        REV R4: part 18 of each image: the scene's own scripts as native SH2 code (tools/scd_aot.py
                       --part stage), compiled and linked for part 18's place in the cart against the engine in
                       DIR (cd32x/build_engine: engine.elf, engine.bin - build the engine first: the blobs are for
@@ -33,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rsdk_pack as rp
 import scd_report as sr
 import measure_stages as ms
+import scd_splash
 
 ROOT = ms.ROOT
 SCENE_MAX = 0x300000 - 0x080000  # S7e: the scene image now carries sprite and tile pixels
@@ -127,9 +133,13 @@ def menu_mdg(src):
     ncells = len(cells) // 32
     slots = [0xFFFF] * 64
     cram = [0] * 64
+    # REV R4B: the highlighted half's letters yellow (the font's own: white, next to the others' grey - too close on a TV)
+    hi = {v for v in px[128 * w:256 * w]} - {v for v in px[:128 * w]}
     for v, k in slot.items():
         slots[k] = v
         cram[k] = md_colour(tuple(master[3 * v:3 * v + 3])) if master and len(master) >= 3 * v + 3 else 0x0EEE
+        if v in hi:
+            cram[k] = md_colour((255, 255, 0))
     o_cells = 64
     o_slots = o_cells + len(cells)
     o_cram = o_slots + 128
@@ -460,8 +470,13 @@ def main():
         open(fn, "wb").write(img)
         r = subprocess.run([os.path.join(ROOT, "host", "cart_verify_host"), fn], capture_output=True, text=True)
         rows.append(f"| {fname} | {folder}/{sid}{who} | {len(img) // 1024} KB, pack {len(packs[(l, p, pl)]) // 1024} KB, {r.stdout.strip()} |")
-    # 5. SCDDATA.PAK: the start scene's pack (the boot loader loads one; the engine reads the scene image's)
-    sp = packs[(start[0], start[1], 0)]
+    # 5. SCDDATA.PAK: the start scene's pack (the boot loader loads one; the engine reads the scene image's) - REV R4B:
+    #    with the loading picture after it (IMAGE.RAW, the boot loader's copy of it)
+    spl, spic = scd_splash.make(scd_splash.title_frame(data))
+    open(os.path.join(out, "IMAGE.RAW"), "wb").write(spl)
+    pk = packs[(start[0], start[1], 0)]
+    pk += b"\0" * (-len(pk) & 3)
+    sp = pk + spl + b"SPL1" + struct.pack(">3I", len(pk), len(spl), 0)
     open(os.path.join(out, "SCDDATA.PAK"), "wb").write(sp)
     # 6. REV R4: the Level Select menu's font, the credits screen's Genesis data
     mf = menu_mdg(src)
@@ -477,7 +492,8 @@ def main():
         w.write(f"Scene image (fixed layout, every scene the same): {size} bytes of {SCENE_MAX} - {'OK' if size <= SCENE_MAX else 'TOO BIG'}\n\n")
         w.write(f"Scenes: {nimg}. Each image carries its scene's data pack (part 17, at most {caps[17]} bytes) and its chunks' CRCs.\n\n")
         w.write(f"Native scripts (part 18): {len(blobs)} scenes, at most {caps[18]} bytes" + (f", for the engine with checksum {esum:08X}" if blobs else " - none (no --native)") + "\n\n")
-        w.write(f"SCDDATA.PAK (the start scene's pack, for the boot loader): {len(sp)} bytes of {DATA_MAX} - {'OK' if len(sp) <= DATA_MAX else 'TOO BIG'}\n\n")
+        w.write(f"SCDDATA.PAK (the start scene's pack, for the boot loader, and the loading picture): {len(sp)} bytes of {DATA_MAX} - {'OK' if len(sp) <= DATA_MAX else 'TOO BIG'}\n\n")
+        w.write(f"IMAGE.RAW (the loading picture: the title screen, frame {scd_splash.FRAME}, {len({c for r in spic for c in r})} colours, and a bar of {scd_splash.SEGS} segments): {len(spl)} bytes\n\n")
         w.write(f"Mini-packs of the included scenes: {'all identical' if bads and all(b == 0 for b in bads) else 'NOT ALL IDENTICAL - see stage_packs*.md'}\n\n")
         w.write("Part capacities (largest over the included scenes): " + ", ".join(str(c) for c in caps) + "\n\n")
         w.write("| File | Scene | Check |\n|---|---|---|\n" + "\n".join(rows) + "\n")

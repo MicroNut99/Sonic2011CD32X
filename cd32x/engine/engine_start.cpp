@@ -10,6 +10,7 @@
 #include "../../engine/RetroEngine.hpp"
 
 void scd_status(int row, const char *t, int color);
+void scd_text_on(); /* REV R4B: plat_mars.cpp - the Genesis text on (the loading picture may hide it) */
 #define STATE(code) (*(volatile unsigned short *)0x2000402C = (unsigned short)(code))
 int main(int argc, char *argv[]);
 
@@ -84,6 +85,7 @@ static char *exc_hex(char *p, unsigned int v)
 extern "C" void scd_exc_show(unsigned int kind, unsigned int pc, unsigned int pr)
 {
     char t[16];
+    scd_text_on(); /* REV R4B */
     STATE(0x5CE0 | (kind & 0xF));
     t[0] = 'P', t[1] = 'C', t[2] = ' ';
     exc_hex(t + 3, pc);

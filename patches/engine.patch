@@ -170,7 +170,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  extern int hitboxCount;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Audio.cpp engine/Audio.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Audio.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Audio.cpp	2026-10-16 22:08:44.728778766 -0700
++++ engine/Audio.cpp	2026-10-17 03:40:14.164516254 -0700
 @@ -1,7 +1,9 @@
  #include "RetroEngine.hpp"
  #include <cmath>
@@ -614,38 +614,48 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      byte type;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Debug.cpp engine/Debug.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Debug.cpp	2026-10-16 22:03:21.997015360 -0700
++++ engine/Debug.cpp	2026-10-17 03:57:33.596375716 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +#include <stdarg.h> // PORT32X: was pulled in by SDL.h
  
  int touchFlags = 0;
  
-@@ -44,6 +45,58 @@
+@@ -44,6 +45,113 @@
      }
  }
  
 +#if defined(SONICCD32X)
-+// REV R4: the port's Level Select menu (the engine's dev menu, renamed). START GAME starts the first stage (Palmtree
-+// Panic 1, the title screen is not on the disc);
-+// STAGE SELECT is the engine's own (player, stage list, stage); the test switches below them: DEMO PAD (the scripted pad
-+// plays each stage from its start until a button is pressed) and DEBUG MODE (every stage with the game's debug mode).
-+// The platform's line (scdMenuNote): why the game came back here. A + B + C + START in a stage: back to this menu.
-+#define SCD_MENU_DEMOPAD 13
-+#define SCD_MENU_DEBUG   15
-+#define SCD_MENU_CREDITS 17 // REV R4: the credits screen (plat_credits)
++// REV R4: the port's menu (the engine's dev menu) - REV R4B: the OPTIONS MENU. PLAYER (Sonic or Tails) first, then START
++// GAME (the first stage - the title screen is not on the disc) or STAGE SELECT (the stage lists, then the stage); LIVES
++// (1-9) for either; the test switches: DEMO PAD (the scripted pad plays each stage from its start until a button is
++// pressed) and DEBUG MODE (every stage with the game's debug mode); CREDITS. The platform's line (scdMenuNote): why the
++// game came back here. A + B + C + START in a stage: back to this menu.
++#define SCD_MENU_PLAYER  9
++#define SCD_MENU_START   11
++#define SCD_MENU_STAGES  13
++#define SCD_MENU_LIVES   15
++#define SCD_MENU_DEMOPAD 17
++#define SCD_MENU_DEBUG   19
++#define SCD_MENU_CREDITS 21 // REV R4: the credits screen (plat_credits)
 +int scdDebugSwitch                = 0;
++static int scdPlayer              = 0; // REV R4B: 0 Sonic, 1 Tails
++static int scdLives               = 3; // REV R4B: the lives a game starts with
 +char scdMenuNote[2][SCD_MENU_NOTE] = { "", "" };
 +static const char *scd_switch_text(int row)
 +{
-+    if (row == SCD_MENU_DEMOPAD)
-+        return scdDemoPad ? "DEMO PAD   ON " : "DEMO PAD   OFF";
-+    return scdDebugSwitch ? "DEBUG MODE ON " : "DEBUG MODE OFF";
++    static char lives[] = "LIVES      3    "; // (all 16 letters: the switches' values in one column)
++    switch (row) {
++        case SCD_MENU_PLAYER: return scdPlayer ? "PLAYER     TAILS" : "PLAYER     SONIC";
++        case SCD_MENU_LIVES: lives[11] = (char)('0' + scdLives); return lives;
++        case SCD_MENU_DEMOPAD: return scdDemoPad ? "DEMO PAD   ON   " : "DEMO PAD   OFF  ";
++        default: return scdDebugSwitch ? "DEBUG MODE ON   " : "DEBUG MODE OFF  ";
++    }
 +}
-+static void scd_main_menu()
++static void scd_main_menu(int row = SCD_MENU_START)
 +{
 +    SetupTextMenu(&gameMenu[0], 0);
-+    AddTextMenuEntry(&gameMenu[0], "LEVEL SELECT");
++    AddTextMenuEntry(&gameMenu[0], "OPTIONS MENU");
 +    AddTextMenuEntry(&gameMenu[0], " ");
 +    char version[0x80];
 +    StrCopy(version, Engine.gameWindowText);
@@ -657,9 +667,13 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +    AddTextMenuEntry(&gameMenu[0], scdMenuNote[0][0] ? scdMenuNote[0] : " ");
 +    AddTextMenuEntry(&gameMenu[0], scdMenuNote[1][0] ? scdMenuNote[1] : " ");
 +    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_PLAYER));
++    AddTextMenuEntry(&gameMenu[0], " ");
 +    AddTextMenuEntry(&gameMenu[0], "START GAME");
 +    AddTextMenuEntry(&gameMenu[0], " ");
 +    AddTextMenuEntry(&gameMenu[0], "STAGE SELECT");
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_LIVES));
 +    AddTextMenuEntry(&gameMenu[0], " ");
 +    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_DEMOPAD));
 +    AddTextMenuEntry(&gameMenu[0], " ");
@@ -669,18 +683,59 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +    gameMenu[0].alignment        = 2;
 +    gameMenu[0].selectionCount   = 2;
 +    gameMenu[0].selection1       = 0;
-+    gameMenu[0].selection2       = 9;
++    gameMenu[0].selection2       = row;
 +    gameMenu[0].visibleRowCount  = 0; // REV R4: (left as a script's menu set it - or what the credits left in the frame buffer)
 +    gameMenu[0].visibleRowOffset = 0;
 +    gameMenu[1].visibleRowCount  = 0;
 +    gameMenu[1].visibleRowOffset = 0;
++}
++// REV R4B: a game started from the menu starts as a new game does (the game's own menu: lives, score, the next extra
++// life at 50,000, no time stones, the first special stage, no lamp post) - with the menu's lives
++static void scd_set_global(const char *name, int value)
++{
++    for (int v = 0; v < globalVariablesCount; ++v)
++        if (StrComp(name, globalVariableNames[v])) {
++            globalVariables[v] = value;
++            return;
++        }
++}
++static void scd_new_game()
++{
++    scd_set_global("Player.Lives", scdLives);
++    scd_set_global("Player.Score", 0);
++    scd_set_global("Player.ScoreBonus", 50000);
++    scd_set_global("SpecialStage.TimeStones", 0);
++    scd_set_global("SpecialStage.ListPos", 0);
++    scd_set_global("LampPost.Check", 0);
++    playerListPos = scdPlayer;
++}
++static void scd_stage_lists() // REV R4B: STAGE SELECT - the stage lists (the player is the menu's), REGULAR first
++{
++    SetupTextMenu(&gameMenu[0], 0);
++    AddTextMenuEntry(&gameMenu[0], "SELECT A STAGE LIST");
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], "   PRESENTATION");
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], "   REGULAR");
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], "   SPECIAL");
++    AddTextMenuEntry(&gameMenu[0], " ");
++    AddTextMenuEntry(&gameMenu[0], "   BONUS");
++    gameMenu[0].alignment      = 0;
++    gameMenu[0].selectionCount = 2;
++    gameMenu[0].selection2     = 5;
++    gameMenu[1].visibleRowCount  = 0;
++    gameMenu[1].visibleRowOffset = 0;
++    playerListPos              = scdPlayer;
++    stageMode                  = DEVMENU_STAGELISTSEL;
 +}
 +#endif
 +
  void InitDevMenu()
  {
  #if RETRO_USE_MOD_LOADER
-@@ -70,6 +123,9 @@
+@@ -70,6 +178,9 @@
      SetPaletteEntry(-1, 0xF0, 0x00, 0x00, 0x00);
      SetPaletteEntry(-1, 0xFF, 0xFF, 0xFF, 0xFF);
      stageMode = DEVMENU_MAIN;
@@ -690,7 +745,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      SetupTextMenu(&gameMenu[0], 0);
      AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
      AddTextMenuEntry(&gameMenu[0], " ");
-@@ -102,6 +158,7 @@
+@@ -102,6 +213,7 @@
      gameMenu[0].selection2       = 9;
      gameMenu[1].visibleRowCount  = 0;
      gameMenu[1].visibleRowOffset = 0;
@@ -698,7 +753,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (renderType == RENDER_HW) {
          Engine.highResMode = false;
          render3DEnabled    = false;
-@@ -144,6 +201,9 @@
+@@ -144,6 +256,9 @@
  void ProcessStageSelect()
  {
      ClearScreen(0xF0);
@@ -708,7 +763,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      keyDown.start = false;
      keyDown.B     = false;
      keyDown.up    = false;
-@@ -210,7 +270,9 @@
+@@ -210,7 +325,9 @@
                  gameMenu[0].selection2 -= 2;
  
              int count = 13;
@@ -719,50 +774,71 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              count += 2;
  #endif
  
-@@ -220,6 +282,42 @@
+@@ -219,7 +336,63 @@
+             if (gameMenu[0].selection2 < 9)
                  gameMenu[0].selection2 = count;
  
-             DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 72);
 +#if defined(SONICCD32X)
-+            if (gameMenu[0].selection2 == SCD_MENU_CREDITS) { // REV R4: the credits screen, back here after it
-+                if (keyPress.start || keyPress.A) {
-+                    plat_credits();
-+                    Engine.gameMode = ENGINE_INITDEVMENU; // the menu again (the credits used the frame buffer)
++            DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 16); // REV R4B: 22 rows - from the top of the screen
++            {
++                const int row = gameMenu[0].selection2;
++                const bool go = keyPress.start || keyPress.A, side = keyPress.left || keyPress.right;
++                if (row == SCD_MENU_CREDITS) { // REV R4: the credits screen, back here after it
++                    if (go) {
++                        plat_credits();
++                        Engine.gameMode = ENGINE_INITDEVMENU; // the menu again (the credits used the frame buffer)
++                    }
++                    break;
 +                }
-+                break;
-+            }
-+            if (gameMenu[0].selection2 == SCD_MENU_DEMOPAD || gameMenu[0].selection2 == SCD_MENU_DEBUG) { // REV R4: a switch
-+                if (keyPress.start || keyPress.A || keyPress.left || keyPress.right) {
-+                    if (gameMenu[0].selection2 == SCD_MENU_DEMOPAD)
-+                        scdDemoPad ^= 1;
-+                    else
-+                        scdDebugSwitch ^= 1;
-+                    EditTextMenuEntry(&gameMenu[0], scd_switch_text(gameMenu[0].selection2), gameMenu[0].selection2);
++                if (row == SCD_MENU_PLAYER || row == SCD_MENU_DEMOPAD || row == SCD_MENU_DEBUG) { // a switch
++                    if (go || side) {
++                        if (row == SCD_MENU_PLAYER)
++                            scdPlayer ^= 1;
++                        else if (row == SCD_MENU_DEMOPAD)
++                            scdDemoPad ^= 1;
++                        else
++                            scdDebugSwitch ^= 1;
++                        EditTextMenuEntry(&gameMenu[0], scd_switch_text(row), row);
++                    }
++                    break;
 +                }
-+                break;
++                if (row == SCD_MENU_LIVES) { // REV R4B: 1 to 9 (Right / A / Start: one more, Left: one less)
++                    if (go || keyPress.right)
++                        scdLives = scdLives < 9 ? scdLives + 1 : 1;
++                    else if (keyPress.left)
++                        scdLives = scdLives > 1 ? scdLives - 1 : 9;
++                    if (go || side)
++                        EditTextMenuEntry(&gameMenu[0], scd_switch_text(row), row);
++                    break;
++                }
++                if (go && row == SCD_MENU_START) { // START GAME: the first stage, as the menu's player
++                    ClearGraphicsData();
++                    ClearAnimationData();
++                    LoadPalette("MasterPalette.act", 0, 0, 0, 256);
++                    int list = Engine.startList_Game, pos = Engine.startStage_Game;
++                    if (list < 0 || list > 3 || pos < 0 || pos >= stageListCount[list])
++                        list = 0, pos = 0;
++                    activeStageList   = list;
++                    stageListPosition = pos;
++                    scd_new_game();
++                    debugMode       = scdDebugSwitch;
++                    stageMode       = STAGEMODE_LOAD;
++                    Engine.gameMode = ENGINE_MAINGAME;
++                    break;
++                }
++                if (go && row == SCD_MENU_STAGES) { // STAGE SELECT: the stage lists (the player is the menu's)
++                    scd_stage_lists();
++                    break;
++                }
 +            }
-+            if ((keyPress.start || keyPress.A) && gameMenu[0].selection2 == 9) { // START GAME: the first stage, Sonic
-+                ClearGraphicsData();
-+                ClearAnimationData();
-+                LoadPalette("MasterPalette.act", 0, 0, 0, 256);
-+                int list = Engine.startList_Game, pos = Engine.startStage_Game;
-+                if (list < 0 || list > 3 || pos < 0 || pos >= stageListCount[list])
-+                    list = 0, pos = 0;
-+                activeStageList   = list;
-+                stageListPosition = pos;
-+                playerListPos     = 0;
-+                debugMode         = scdDebugSwitch;
-+                stageMode         = STAGEMODE_LOAD;
-+                Engine.gameMode   = ENGINE_MAINGAME;
-+                break;
-+            }
-+            if (keyPress.B)
-+                break; /* the original: START GAME - here only START / A start anything */
++            break; /* (B: nothing - the original's B started the game) */
++#else
+             DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 72);
 +#endif
              if (keyPress.start || keyPress.A) {
                  if (gameMenu[0].selection2 == 9) {
                      ClearGraphicsData();
-@@ -326,6 +424,10 @@
+@@ -326,6 +499,10 @@
              }
              else if (keyPress.B) {
                  stageMode = DEVMENU_MAIN;
@@ -773,19 +849,32 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
                  AddTextMenuEntry(&gameMenu[0], " ");
-@@ -480,7 +582,11 @@
+@@ -421,6 +598,11 @@
+                 stageMode                    = DEVMENU_STAGESEL;
+             }
+             else if (keyPress.B) {
++#if defined(SONICCD32X)
++                stageMode = DEVMENU_MAIN; // REV R4B: the player is chosen in the menu - back there
++                scd_main_menu(SCD_MENU_STAGES);
++                break;
++#endif
+                 SetupTextMenu(&gameMenu[0], 0);
+                 AddTextMenuEntry(&gameMenu[0], "SELECT A PLAYER");
+                 SetupTextMenu(&gameMenu[1], 0);
+@@ -480,7 +662,12 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX - 4, 40);
              DrawTextMenu(&gameMenu[1], SCREEN_CENTERX + 100, 64);
              if (keyPress.start || keyPress.A) {
 +#if defined(SONICCD32X)
-+                debugMode         = keyDown.A || scdDebugSwitch; // REV R4: the DEBUG MODE switch
++                debugMode         = scdDebugSwitch; // REV R4B: the DEBUG MODE switch only (the original: A held while choosing - A chooses on this pad)
++                scd_new_game();                                   // REV R4B: the menu's player and lives
 +#else
                  debugMode         = keyDown.A;
 +#endif
                  stageMode         = STAGEMODE_LOAD;
                  Engine.gameMode   = ENGINE_MAINGAME;
                  stageListPosition = gameMenu[1].selection1;
-@@ -511,6 +617,10 @@
+@@ -511,6 +698,10 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 72);
              if (keyPress.start || keyPress.A) {
                  stageMode = DEVMENU_MAIN;
@@ -1952,8 +2041,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void CalculateTrigAngles();
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Object.cpp engine/Object.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Object.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Object.cpp	2026-10-16 14:59:01.551989069 -0700
-@@ -3,8 +3,16 @@
++++ engine/Object.cpp	2026-10-17 04:20:26.892344305 -0700
+@@ -3,24 +3,44 @@
  int objectLoop    = 0;
  int curObjectType = 0;
  Entity objectEntityList[ENTITY_COUNT];
@@ -1971,7 +2060,16 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
  int OBJECT_BORDER_X1       = 0x80;
  int OBJECT_BORDER_X2       = 0;
-@@ -15,12 +23,18 @@
+ const int OBJECT_BORDER_Y1 = 0x100;
++#if defined(SONICCD32X)
++// PORT32X REV R4B: the original's 240 lines, not the port's 224 - the scripts place objects for that border: the time warp
++// puts Warp Sonic at y 480 (inside 240 + 256), and with 224 + 256 it never ran - its 120 frames end the warp (state 4)
++const int OBJECT_BORDER_Y2 = 240 + 0x100;
++#else
+ const int OBJECT_BORDER_Y2 = SCREEN_YSIZE + 0x100;
++#endif
+ 
+ void SetObjectTypeName(const char *objectName, int objectID)
  {
      int objNameID  = 0;
      int typeNameID = 0;
@@ -1992,7 +2090,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      PrintLog("Set Object (%d) name to: %s", objectID, objectName);
  }
  
-@@ -39,22 +53,69 @@
+@@ -39,22 +59,69 @@
          scriptInfo->frameListOffset = scriptFrameCount;
          scriptInfo->spriteSheetID   = 0;
          entity->type                = i;
@@ -2063,7 +2161,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          switch (entity->priority) {
              case PRIORITY_BOUNDS:
                  x      = entity->XPos >> 16;
-@@ -92,9 +153,9 @@
+@@ -92,9 +159,9 @@
          if (active && entity->type > OBJ_TYPE_BLANKOBJECT) {
              ObjectScript *scriptInfo = &objectScriptList[entity->type];
              activePlayer             = 0;
@@ -2075,7 +2173,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  while (activePlayer < activePlayerCount) {
                      if (playerList[activePlayer].objectInteractions)
                          ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
-@@ -103,8 +164,14 @@
+@@ -103,8 +170,14 @@
                  }
              }
  
@@ -2092,7 +2190,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          }
      }
  }
-@@ -119,9 +186,9 @@
+@@ -119,9 +192,9 @@
          if (entity->priority == PRIORITY_ALWAYS && entity->type > OBJ_TYPE_BLANKOBJECT) {
              ObjectScript *scriptInfo = &objectScriptList[entity->type];
              activePlayer             = 0;
@@ -2104,7 +2202,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  while (activePlayer < PLAYER_COUNT) {
                      if (playerList[activePlayer].objectInteractions)
                          ProcessScript(scriptInfo->subPlayerInteraction.scriptCodePtr, scriptInfo->subPlayerInteraction.jumpTablePtr,
-@@ -130,8 +197,14 @@
+@@ -130,8 +203,14 @@
                  }
              }
  
@@ -2369,7 +2467,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      fileInfo->readPos           = readPos - readSize;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/RetroEngine.cpp engine/RetroEngine.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/RetroEngine.cpp	2026-10-16 21:11:45.890207487 -0700
++++ engine/RetroEngine.cpp	2026-10-17 03:45:30.275251491 -0700
 @@ -32,6 +32,9 @@
  
  bool ProcessEvents()
@@ -2483,9 +2581,18 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
          if (strlen(Engine.startSceneFolder) && strlen(Engine.startSceneID)) {
              SceneInfo *scene = &stageList[STAGELIST_BONUS][0xFE]; // slot 0xFF is used for "none" startStage
              strcpy(scene->name, "_RSDK_SCENE");
+@@ -1305,6 +1334,8 @@
+                     objectEntityList[9].type      = o;
+                     objectEntityList[9].drawOrder = 6;
+                     objectEntityList[9].priority  = PRIORITY_ALWAYS;
++                    SCD_LIVE(9); // PORT32X REV R4B: ProcessObjects passes slots without the bit - the pause menu never
++                                 // got back to its last state (it empties slot 9), and the game pauses only while slot 9 is empty
+                     if (activeStageList == STAGELIST_SPECIAL)
+                         stageLayouts[0].type = LAYER_3DFLOOR;
+                     for (int s = 0; s < globalSFXCount + stageSFXCount; ++s) {
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp engine/RetroEngine.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/RetroEngine.hpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/RetroEngine.hpp	2026-10-16 15:18:51.084947275 -0700
++++ engine/RetroEngine.hpp	2026-10-17 04:23:05.856739057 -0700
 @@ -4,6 +4,93 @@
  // Disables POSIX use c++ name blah blah stuff
  #pragma warning(disable : 4996)
@@ -2621,7 +2728,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  #else
  #error Unspecified RETRO_GAMEPLATFORMID
  #endif
-@@ -347,10 +444,21 @@
+@@ -347,10 +444,23 @@
  };
  
  // General Defines
@@ -2629,6 +2736,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +// PORT32X S7e: the 32X frame buffer holds 198 lines of the software renderer's 328-pixel lines
 +// (512 + 328 * 198 * 2 = 130,400 of 131,072 bytes); SCD32X_SCREEN198 = the PC reference build
 +#define SCREEN_YSIZE   (198)
++#elif RETRO_PLATFORM == RETRO_SCD32X && defined(SCD32X_SCREEN240)
++#define SCREEN_YSIZE   (240) // PORT32X REV R4B: a PC test build with the original's 240 lines (what depends on the 224)
 +#elif RETRO_PLATFORM == RETRO_SCD32X
 +#define SCREEN_YSIZE   (224) // PORT32X: the NTSC Mega Drive / 32X screen (Micronut99, S3a); scripts read Screen.YSize
 +#else
@@ -3301,7 +3410,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.cpp	2026-10-16 22:34:35.977040228 -0700
++++ engine/Script.cpp	2026-10-17 04:37:09.848427725 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -3665,7 +3774,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  Draw3DScene(scriptInfo->spriteSheetID);
                  break;
              case FUNC_SETIDENTITYMATRIX:
-@@ -3897,9 +4046,19 @@
+@@ -3897,9 +4046,24 @@
                  }
                  break;
              case FUNC_GETTILELAYERENTRY:
@@ -3682,10 +3791,15 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +                if (!scd_layout_index_ok(scriptEng.operands[1], scriptEng.operands[2] + 0x100 * scriptEng.operands[3]))
 +                    break; // PORT32X S5c: outside the layer's rows - dropped (logged once)
 +#endif
++#if defined(SONICCD32X)
++                // PORT32X REV R4B: the planes show a changed entry at once (a tile trigger's ramp, a swapped path)
++                if (stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] != scriptEng.operands[0])
++                    plat_layout_set(scriptEng.operands[1], scriptEng.operands[2], scriptEng.operands[3]);
++#endif
                  stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
                  break;
              case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
-@@ -3923,18 +4082,39 @@
+@@ -3923,18 +4087,39 @@
                  break;
              case FUNC_ADDDRAWLISTENTITYREF: {
                  opcodeSize                                                                                           = 0;
@@ -3727,7 +3841,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  int index = tiles128x128.tileIndex[scriptEng.operands[6]];
                  switch (scriptEng.operands[3]) {
-@@ -3956,9 +4136,17 @@
+@@ -3956,9 +4141,17 @@
                  Copy16x16Tile(scriptEng.operands[0], scriptEng.operands[1]);
                  break;
              case FUNC_SET16X16TILEINFO: {
@@ -3746,7 +3860,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  switch (scriptEng.operands[3]) {
                      case TILEINFO_INDEX:
-@@ -4021,7 +4209,14 @@
+@@ -4021,7 +4214,14 @@
                  TextMenu *menu = &gameMenu[scriptEng.operands[1]];
                  switch (scriptEng.operands[2]) {
                      case TEXTINFO_TEXTDATA:
@@ -3761,7 +3875,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          break;
                      case TEXTINFO_TEXTSIZE: scriptEng.operands[0] = menu->entrySize[scriptEng.operands[3]]; break;
                      case TEXTINFO_ROWCOUNT: scriptEng.operands[0] = menu->rowCount; break;
-@@ -4115,6 +4310,7 @@
+@@ -4115,6 +4315,7 @@
                      case VAR_OBJECTENTITYNO: break;
                      case VAR_OBJECTTYPE: {
                          objectEntityList[arrayVal].type = scriptEng.operands[i];
@@ -3769,7 +3883,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          break;
                      }
                      case VAR_OBJECTPROPERTYVALUE: {
-@@ -4608,7 +4804,16 @@
+@@ -4608,7 +4809,16 @@
                      case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
                      case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
                      case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
@@ -3787,7 +3901,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_TILELAYERTYPE: stageLayouts[arrayVal].type = scriptEng.operands[i]; break;
                      case VAR_TILELAYERANGLE:
                          stageLayouts[arrayVal].angle = scriptEng.operands[i];
-@@ -4636,6 +4841,54 @@
+@@ -4636,6 +4846,54 @@
                      case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
@@ -3842,7 +3956,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
                      case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
                      case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-@@ -4649,12 +4902,34 @@
+@@ -4649,12 +4907,34 @@
                      case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
@@ -3878,7 +3992,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
                      case VAR_OBJECTSPRITESHEET: {
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
-@@ -4704,3 +4979,165 @@
+@@ -4704,3 +4984,165 @@
          }
      }
  }
@@ -4657,8 +4771,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
-+++ engine/plat.hpp	2026-10-16 22:13:55.860076090 -0700
-@@ -0,0 +1,101 @@
++++ engine/plat.hpp	2026-10-17 04:37:09.846461895 -0700
+@@ -0,0 +1,104 @@
 +#ifndef PLAT_H
 +#define PLAT_H
 +// PORT32X: the platform layer of the Sega CD32X port.
@@ -4734,6 +4848,9 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +// dir = the flip), 1 DrawSpriteRotated (x, y = its centre, px, py = its pivot arguments, rot = its rotation). The SH2
 +// planes build makes Genesis hardware sprites of them; the PC check (SCD32X_SGBTEST) the same, in its model.
 +void plat_sprite(int kind, int sheet, int sx, int sy, int w, int h, int x, int y, int dir, int rot, int px, int py);
++// REV R4B: a script changed a layout entry (SetTileLayerEntry: layer, chunk column, chunk row) - the Genesis planes show
++// its new cells at once (the SH2), the PC check does the same in its model
++void plat_layout_set(int layer, int x, int y);
 +extern int scdDrawLayer; // REV R3: the draw list being drawn (Drawing.cpp DrawObjectList)
 +// S7e: where the engine's renderer draws (SH2 drawing build: the 32X frame buffer)
 +unsigned short *plat_frame_target();

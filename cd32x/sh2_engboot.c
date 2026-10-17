@@ -13,8 +13,12 @@
  *      interrupt mask, interrupts on, COMM10 0x0AAA -> wait 0x0BBB, take_fb
  *   1. the 32X layer stays BLANK (mode 0): Chilly's white lines and the green diagnostics are never
  *      covered (OpenLara). Progress = status codes in COMM12, shown by the Sub-CPU as STATE:xxxx
- *   2. [the splash: IMAGE.RAW, Kobo's show_splash() - its place in the sequence; OFF until the console
- *      boot is good (SCD_SPLASH 0)]
+ *   2. REV R4B: the loading picture, as OpenLara's / OpenJazz's / Hurrican's loaders show theirs (cdloader_sh2.c
+ *      splash_show): IMAGE.RAW (file 0, tools/scd_splash.py - the title screen with a bar) into the frame buffer with
+ *      the Sub-CPU's command 51, the 32X layer on, then command 52 switches the Genesis display off - no white or
+ *      green text from here on. The bar fills while the files below load: its segments are colours of their own,
+ *      set to the full colour chunk by chunk (nothing is drawn). Without IMAGE.RAW (or not in that format) all of
+ *      this is skipped: the text stays, as before. An error (halt) brings the text back for its STATE code.
  *   3. the game: ONE file, SONICCD.PAK (file 21 -> cart offset 0; one mapping line in the Sub-CPU, as
  *      OpenLara's file 20), CMD 38 + CMD 46 per 32 KB chunk, every chunk verified by the Sub-CPU
  *   4. the stage image's CRCs checked in the cart (md/cart_verify.c)
@@ -32,10 +36,10 @@
 #include "../md/cart_verify.h"
 
 #ifndef SCD_SPLASH
-#define SCD_SPLASH 0 /* IMAGE.RAW splash - OFF until the console boot is good */
+#define SCD_SPLASH 1 /* REV R4B: the loading picture (IMAGE.RAW); 0 = the text only, as R1S - R4A */
 #endif
 
-const char sh2_build_marker[] = "SH2-VS7D"; /* the Sub-CPU looks for "SH2-V" */
+const char sh2_build_marker[] = "SH2-VR4B"; /* the Sub-CPU looks for "SH2-V" (its line 4 shows "SH2-VR4") */
 
 #define SC_COMM2 (*(volatile uint16_t *)0x20004022)
 #define SC_COMM8_32 (*(volatile uint32_t *)0x20004028)
@@ -159,9 +163,100 @@ static void take_fb(void) /* Kobo */
     while ((MARS_SYS_INTMSK & 0x8000) == 0) {
     }
 }
+#if SCD_SPLASH
+/* REV R4B: the loading picture (see 2. above) */
+#define CMD_CHUNK_TO_FB 51 /* Sub-CPU (K15): chunk c of the open file -> the frame buffer, from byte 0x200 + c * 32 KB */
+#define CMD_GENESIS 52     /* Sub-CPU (K19): COMM2 = 1 the Genesis display on, 0 off */
+#define FILE_SPLASH 0      /* Sub-CPU: file 0 -> "IMAGE.RAW" */
+#define SPL_PIXELS (320 * 224)
+#define SPL_BYTES (SPL_PIXELS + 512 + 12) /* the pixels, 256 colours, 'BAR1' + 4 words */
+#define SC_VDP_FBCTL (*(volatile uint16_t *)0x2000410A)
+#define SC_CRAM ((volatile uint16_t *)0x20004200)
+#define SC_FB ((volatile uint8_t *)0x24000000)
+static int splashOn = 0, barFrom = 0, barTo = 0, barShown = 0;
+static uint16_t barFirst = 0, barSegs = 0, barFull = 0;
+static void give_fb(void) /* Kobo / OpenLara give_fb: FM = 0, the 68000 writes the frame buffer */
+{
+    SC_SYS_ADAPTER_B = 0x00;
+    while ((MARS_SYS_INTMSK & 0x8000) != 0) {
+    }
+}
+static void flip_wait(void) /* the other frame buffer shown from the next vertical blank on */
+{
+    uint16_t cur = SC_VDP_FBCTL & 1;
+    SC_VDP_FBCTL = cur ^ 1;
+    while ((SC_VDP_FBCTL & 1) == cur) {
+    }
+}
+static uint16_t fb16(uint32_t at) { return (uint16_t)(SC_FB[at] << 8 | SC_FB[at + 1]); }
+static void splash_show(void)
+{
+    uint32_t len, c;
+    int i;
+    SC_COMM2 = FILE_SPLASH;
+    wait_cmd(CMD_OPEN_FILE);
+    len = SC_COMM8_32;
+    if (len != SPL_BYTES)
+        return; /* no IMAGE.RAW: the text stays */
+    give_fb();
+    for (c = 0; c < ((len + CHUNK_BYTES - 1) >> 15); c++) {
+        SC_COMM2 = (uint16_t)c;
+        wait_cmd(CMD_CHUNK_TO_FB);
+    }
+    take_fb();
+    {
+        uint32_t b = 0x200 + SPL_PIXELS + 512; /* the bar: its colour numbers */
+        if (fb16(b) != 0x4241 || fb16(b + 2) != 0x5231) /* 'BAR1' */
+            return;
+        barFirst = fb16(b + 4);
+        barSegs  = fb16(b + 6);
+        barFull  = fb16(b + 10);
+        if (barSegs == 0 || barFirst + barSegs > 256)
+            return;
+    }
+    for (i = 0; i < 256; i++) /* the line table: line y at word 0x100 + y * 160 (byte 0x200 + y * 320) */
+        ((volatile uint16_t *)SC_FB)[i] = (uint16_t)(0x100 + (i < 224 ? i : 223) * 160);
+    for (i = 0; i < 256; i++)
+        SC_CRAM[i] = fb16(0x200 + SPL_PIXELS + 2 * i);
+    flip_wait();             /* the picture is the shown buffer; the engine takes the other one */
+    SC_VDP_DISPMODE = 0x0001; /* 256 colours, priority bit clear: the picture's colours (bit 15 set) in front */
+    SC_COMM2        = 0;
+    wait_cmd(CMD_GENESIS); /* the Genesis display off: no white or green text from here on */
+    splashOn = 1;
+}
+static void bar_part(int from, int to) /* the bar's share of the file loaded next: segments from - to of 32 */
+{
+    barFrom = from * barSegs >> 5;
+    barTo   = to * barSegs >> 5;
+}
+static void bar_chunk(uint32_t done, uint32_t total) /* chunk `done` of `total` loaded: the bar's colours up to there */
+{
+    uint32_t acc = (uint32_t)(barTo - barFrom) * done;
+    int n = barFrom;
+    if (!splashOn)
+        return;
+    while (total && acc >= total) { /* n = barFrom + (barTo - barFrom) * done / total, without a division */
+        acc -= total;
+        n++;
+    }
+    if (n <= barShown)
+        return; /* no segment more: no wait */
+    while ((SC_VDP_FBCTL & 0x8000) == 0) { /* VBLK: the palette written in the vertical blank */
+    }
+    for (; barShown < n && barShown < barSegs; barShown++) SC_CRAM[barFirst + barShown] = barFull;
+}
+#endif
 static void halt(uint16_t code) /* OpenLara: stays on screen as STATE:5CEx */
 {
     show_status(code);
+#if SCD_SPLASH
+    if (splashOn) { /* REV R4B: the picture off, the Genesis text on - the STATE code shows */
+        SC_VDP_DISPMODE = 0x0000;
+        SC_COMM2        = 1;
+        wait_cmd(CMD_GENESIS);
+        show_status(code);
+    }
+#endif
     while (1) {
     }
 }
@@ -188,6 +283,9 @@ int scd_load_file(uint16_t number, uint32_t *bytes)
         if (SC_COMM12 != 0)
             bad++;
         show_status((uint16_t)(0x5D00 | (c & 0xFF)));
+#if SCD_SPLASH
+        bar_chunk(c + 1, nchunks); /* REV R4B: (at power-on only: splashOn is 0 once the engine runs) */
+#endif
     }
     return bad;
 }
@@ -214,9 +312,9 @@ int main(void)
     if ((uint32_t)_bss_end > 0x06001F00) /* the engine's data starts at 0x06002000 */
         halt(0x5CE7);
 
-    /* ---- 2. the splash (IMAGE.RAW) - Kobo's show_splash() goes here; off for now ---- */
+    /* ---- 2. REV R4B: the loading picture (IMAGE.RAW), the Genesis text off ---- */
 #if SCD_SPLASH
-#error "SCD_SPLASH: Kobo's show_splash() is not in yet"
+    splash_show();
 #endif
 
     /* ---- 3. the engine, the data pack and the first scene into the cart ---- */
@@ -224,6 +322,9 @@ int main(void)
         uint32_t engineLen = 0, dataLen = 0, sceneLen = 0;
         int r1, r2, r3;
         show_status(0x5C00);
+#if SCD_SPLASH
+        bar_part(0, 7); /* REV R4B: the bar's shares - about the files' sizes (engine 12 chunks, data 6, scene 34) */
+#endif
         r1 = scd_load_file(FILE_ENGINE, &engineLen);
         if (r1 < 0)
             halt(0x5CE1);
@@ -232,6 +333,9 @@ int main(void)
         if (engineLen > ENGINE_MAX)
             halt(0x5CE3);
         show_status(0x5C01);
+#if SCD_SPLASH
+        bar_part(7, 11);
+#endif
         r2 = scd_load_file(FILE_DATA, &dataLen);
         if (r2 < 0)
             halt(0x5CE1);
@@ -240,6 +344,9 @@ int main(void)
         if (dataLen > DATA_MAX)
             halt(0x5CE3);
         show_status(0x5C02);
+#if SCD_SPLASH
+        bar_part(11, 32);
+#endif
         r3 = scd_load_file(FILE_FIRST_SCENE, &sceneLen);
         if (r3 < 0)
             halt(0x5CE1);
@@ -267,6 +374,9 @@ int main(void)
     BOOT_RECORD[5] = FILE_FIRST_SCENE;             /* the scene now in the cart */
     BOOT_RECORD[7] = (uint32_t)&scdSampling;       /* R1C: the engine switches the PC sampler on / off */
     show_status(0x5C05);
+#if SCD_SPLASH
+    splashOn = 0; /* REV R4B: the picture stays shown; the engine's loads (this routine) leave the colours alone */
+#endif
     SC_CCR = 0x11; /* purge + enable the cache: the engine runs from the cart */
     { /* S7e6: PC sampling from here on (vector 70 = V blank; Kobo's handler stays, chained) */
         volatile uint32_t *vbr = (volatile uint32_t *)0x06000000;

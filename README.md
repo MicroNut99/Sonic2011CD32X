@@ -21,7 +21,7 @@ drawing everything with the SH2s was far too slow.
 | far background (per-line parallax, water ripple) | Genesis plane B | the act's patterns in VRAM, h-scroll per line |
 | level (the foreground layer; its front tiles with the priority bit) | Genesis plane A | the act's patterns, scrolled with the camera |
 | Sonic, Tails, badniks, rings, HUD (R3) | Genesis sprites | the act's sprite frames as patterns, made on the PC; uploaded and placed by the SH2 through the same record |
-| later: effects the VDP has no form for (rotation, scaling, translucency, more colours) | 32X | the 32X layer is off so far |
+| the sky behind the level (R4B); the loading picture; later: effects the VDP has no form for (rotation, scaling, translucency, more colours) | 32X | R4B: a gradient per act where the background shows its sky colour, behind the Genesis planes; the title screen with a loading bar while the Sub-CPU loads |
 
 - **The SH2 runs the 2011 engine** (scripts, physics, objects) from the cart, as before.
 - **The Genesis VDP draws the level for free**, line by line, and scrolls it at 60 Hz – the way the
@@ -47,7 +47,8 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | The 2011 engine on the SH2 from the cart | proven on the console in rounds S5–S7 (title scene starts; 30 fps with drawing off) |
 | R1: the engine drives the planes (records through the frame buffer, the listener copies them in vblank) | **On the console (R1X): Palmtree Panic 1 on the Genesis planes at 60 frames a second** (measured on MicroNut99's video, 16 Oct), the whole act to its end. R1S was 27-29; the speed rounds R1T-R1X: native scripts, hot code in SDRAM, ... [docs/R1_NOTES.md](docs/R1_NOTES.md) (*Speed*). |
 | R3: the sprites, and Tails | **On the console (R3A)**: Sonic, Tails, rings, badniks and the HUD as Genesis sprites at 59.9 frames a second; the act as Sonic, then as Tails. [docs/R3_NOTES.md](docs/R3_NOTES.md) |
-| R4: the whole game's acts, the controller, the Level Select menu, music and sound | **In sh2emu**: all 70 regular acts (every round, all four time periods), as Sonic and as Tails, with the controller, CD audio music and PCM sound effects, each scene's scripts as native code: 58-60 frames a second (Collision Chaos 2 past: 52) - next: the console. [docs/R4_NOTES.md](docs/R4_NOTES.md) |
+| R4: the whole game's acts, the controller, the Level Select menu, music and sound | **On the console (R4A)**: every regular act as Sonic and as Tails with the controller, the music and the sound effects. [docs/R4_NOTES.md](docs/R4_NOTES.md) |
+| R4B: the loading picture, the Options Menu, the pause menu, 32X skies, the time warp | **In sh2emu**: the title screen with a loading bar at power-on and between the scenes (no green text), the Options Menu (player, lives, debug mode), the pause menu (continue, restart, exit), a 32X sky behind 27 acts, the time warp to the future, the ramps run backwards - next: the console. [docs/R4B_NOTES.md](docs/R4B_NOTES.md) |
 
 ## Rounds
 
@@ -58,6 +59,7 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | R2 | Animated tiles as pattern rewrites (R5xD, R6x, R8x need it – see R0); layout changes (broken walls, moved blocks). |
 | R3 | The sprites as Genesis hardware sprites, through the plane record: Sonic, rings, badniks, HUD, title card, results. Tails playable: his own scene image and act file; the act restarts with the other character. [docs/R3_NOTES.md](docs/R3_NOTES.md) |
 | R4 | Every regular act as Sonic and as Tails, the controller, the Level Select menu (stage select, demo pad and debug mode switches, credits), music as CD audio tracks, sound effects on the PCM chip, each scene image with its own data pack and native scripts, scene changes that load only the chunks that differ. [docs/R4_NOTES.md](docs/R4_NOTES.md) |
+| R4B | The loading picture (the SH2 loader and the engine: Sub-CPU commands 51 and 52), the Options Menu, the pause menu, 32X skies, the time warp, the layout changes on the planes, Palmtree Panic's palette banks, a restart without disc reads. [docs/R4B_NOTES.md](docs/R4B_NOTES.md) |
 | later | Water (palette per line: the 68000's line interrupt), animated tiles (R2's list), the 22 acts that differ in R0, special stages (32X, rotating floor), the title and story screens, the stages' own sound effects, time travel without loading (all four periods of an act fit the cart together – S2), 32X effects (rotation, scaling, translucency). |
 
 ## Command numbers
@@ -80,7 +82,7 @@ SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 6800
 ```
 
 The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
-the disc's steps are in [docs/R4_NOTES.md](docs/R4_NOTES.md) (R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
+the disc's steps are in [docs/R4B_NOTES.md](docs/R4B_NOTES.md) (R4A: [docs/R4_NOTES.md](docs/R4_NOTES.md), R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
 
 ## Checking a build before burning: tools/sh2emu
 
