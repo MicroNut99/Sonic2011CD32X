@@ -2,8 +2,8 @@
 
 **Goal of the R4C disc:** the whole game on one disc. Power-on goes to **Sonic CD's own title screen** and **menus**
 (save select, player select, time attack), the **special stages** play, the game **saves** to the Sega CD's backup
-RAM, scenes **load faster**, and the **animated tiles** of Tidal Tempest, Quartz Quadrant, Wacky Workbench and
-Metallic Madness move. From your R4B list: the stage select's cursor repeats more slowly, the credits start with the
+RAM, scenes **load faster**, and the **animated tiles** of 22 acts (Tidal Tempest, Quartz Quadrant, Wacky Workbench,
+Metallic Madness) move. From your R4B list: the stage select's cursor repeats more slowly, the credits start with the
 music, and the track number is at the far left.
 
 **Boot stack:** the 68000 listener (`cd32x/kobo/hw_md.s`) is unchanged. **No new command numbers.** Two things the
@@ -23,9 +23,8 @@ loads the title screen's image (`L0S000.IMG`) instead of Palmtree Panic 1's.
 ## Power-on: the game's own front end
 
 1. The SEGA logo, one or two seconds of the white and green text, then **the loading picture** with its bar, as in R4B.
-2. **The title screen**: Sonic on the emblem, the clouds, the title music (track 2), PRESS START.
-3. **Start: the main menu** – `START GAME`, `TIME ATTACK`, `LEADERBOARDS`, `ACHIEVEMENTS`. Up / Down choose, A (or
-   Start) picks.
+2. **The title screen**: Sonic on the emblem, the clouds, the title music, PRESS START.
+3. **Start: the main menu** – `START GAME`, `TIME ATTACK`, `LEADERBOARDS`, `ACHIEVEMENTS`. Up / Down choose, A picks.
 4. `START GAME`: **save select** – four save files (`NEW GAME` until used; a used one shows its zone), then **player
    select** (Sonic; Tails once the game unlocks him). A: the game starts at Palmtree Panic 1, or where the file left
    off.
@@ -33,10 +32,12 @@ loads the title screen's image (`L0S000.IMG`) instead of Palmtree Panic 1's.
    game's own rule: every zone shows its padlock on a new backup RAM).
 
 **The Options Menu** (R4B's: player, stage select, lives, demo pad, debug mode, credits) is still there: **A + B + C +
-Start** from anywhere – the title, the menus, an act, a special stage. The R4B menu's way back to the title is its
-`START GAME` row: it starts Palmtree Panic 1 directly, as before.
+Start** from anywhere – the title, the menus, an act, a special stage. Its `START GAME` row starts Palmtree Panic 1
+directly, as in R4B. After a game over the game's scripts go to the title screen, which is on the disc now (R4B:
+the Options Menu stood in for it; not run in sh2emu).
 
-The end of the game (the credits after the good or the bad ending) shows this port's credits screen, then the title.
+The game's credits scene (after the ending) shows this port's credits screen, then the title. In sh2emu the 8th
+special stage's end went there (the credits screen with its music); the ending itself was not reached.
 
 ## The 32X picture mode
 
@@ -45,10 +46,10 @@ scale, blend and draw a 3D floor. In R4C the SH2 draws them itself, into the 32X
 game's own palette), with the Genesis display off – `cd32x/engine/scd_pm.h`, written for the SH2 from the engine's own
 drawing functions:
 
-- **sprites** (flipped, scaled, rotated and zoomed), **rectangles**, **the 3D faces** (the special stages' backdrop and
-  shadows), **the tile layers**, **the special stages' floor** (`Draw3DSkyLayer`);
-- **translucency** (the menus' glass panels, fades between pictures): a 4 × 4 dither of the two colours where the
-  engine mixes them; a whole-screen fade goes on the colours instead (the 32X palette), as on the Genesis planes;
+- **sprites** (flipped, scaled, rotated and zoomed), **rectangles**, **the 3D faces** (the first special stage's
+  backdrop), **the tile layers**, **the special stages' floor** (`Draw3DSkyLayer`);
+- **translucency** (the menus' see-through parts): a 4 × 4 dither of the two colours where the engine mixes them; a
+  whole-screen fade goes on the colours instead (the 32X palette), as on the Genesis planes;
 - **two frame buffers**: the SH2 draws a frame into one while the 32X shows the other; they swap in the vertical blank.
   A frame that takes longer than its vertical blank makes the next ones logic only (up to 10 in a row) until the game
   is on time again: the game keeps its speed, the picture comes less often;
@@ -58,30 +59,34 @@ drawing functions:
 **Checked on the PC:** every presentation and special-stage scene drawn by `scd_pm.h` beside the engine's own 16-bit
 picture, frame by frame (`SCD32X_PMCHECK`, `host/plat_host.cpp`): the same picture, apart from the dithered blends.
 
-**Speed (sh2emu):** the title about 43-48 frames a second, the menus about 41-46. **The special stages are slow:** the
-game runs at about 46-48 frames a second (80 % of its speed: the stage's clock runs slower too), and the picture
-changes about **4 to 5 times a second**. A picture takes about 11 vertical blanks of the SH2: the floor about 4, the
-backdrop's 3D faces about 3, the two background layers about 3. Each sample of the rotating floor is about 25 SH2
-instructions and a cart read, for 16,000 samples a picture (already every other line). The way to more pictures a
-second is the 32X's second SH2, which is idle: it could draw half of every picture. That needs a small change in the
-SH2 loader (its `secondary()` waits for work from the engine instead of a loop; no new Sub-CPU command) – not in R4C
-without your say.
+**Speed (sh2emu):** the title and the menus about 40-48 frames a second. **The special stages are slow:** the
+game runs at about 44-52 frames a second (the 8th: 36; 75-85 % of its speed: the stage's clock runs slower too), and
+in the first one the picture changes about **4 to 5 times a second**. A picture of the first special stage takes
+about 11 vertical blanks of the SH2: the floor about 4, the backdrop's 3D faces about 3, the two background layers
+about 3. Each sample of the rotating floor is about 30 SH2 instructions and a cart read, for 16,000 samples a picture
+(already every other line). The way to more pictures a second is the 32X's second SH2, which is idle: it could draw
+half of every picture. That needs a small change in the SH2 loader (its `secondary()` waits for work from the engine
+instead of a loop; no new Sub-CPU command) – not in R4C without your say.
 
 ## The special stages
 
-All 8, as Sonic and as Tails (`L3S000-007.IMG`, `L3S128-135.IMG`): the big ring at the end of an act with 50 rings
-brings the stage, as in the game; the results, the time stones, then the next act. From the Options Menu: `STAGE
-SELECT`, `SPECIAL`, the stage.
+All 8, as Sonic and as Tails (`L3S000-007.IMG`, `L3S128-135.IMG`), reached as in the game (the big ring at the end
+of act 1 or 2 with 50 rings) or from the Options Menu (`STAGE SELECT`, `SPECIAL`, the stage). In sh2emu: the first
+special stage from the Options Menu, played until its time ran out – the results (`SPECIAL ZONE`), then Palmtree
+Panic 1 (the scripts' next act; from the menu there was no act before it). The big ring itself was not reached in
+sh2emu (it needs an act played to its end with 50 rings): it is the same kind of scene change.
 
 ## Saves
 
 The game keeps all that lasts – four save files, the options, the time attack records – in its save slots 0-173. The
 engine packs them into 185 words (`cd32x/engine/scd_save.h`: a header, a checksum, the slots), and the Sub-CPU keeps
-them in the backup RAM file `SONICCD32X_` (512 bytes, 8 blocks). The game reads it at the title and the menu, and
-writes it when it saves (a new game, the end of an act, a new record); nothing is written when nothing changed.
+them in the backup RAM file `SONICCD32X_` (512 bytes, 8 blocks). The game reads it at the title and the menus, and
+writes it when its scripts save (a new game, the end of an act, a new record); nothing is written when nothing
+changed. In sh2emu: a new game in the first file wrote it; a second run with that file (a power cycle) showed
+`PALMTREE PANIC 1` in save select.
 
-- **No room in the backup RAM** (8 free blocks needed: the Sega CD's BIOS screen shows them): the game plays without
-  saving, every power-on a new backup RAM to it.
+- **No room in the backup RAM** (8 free blocks needed: the Sega CD's BIOS screen shows them): the game plays, but
+  nothing is kept.
 - **The file from another version** (its header or checksum wrong): treated as no save; the game's next save writes
   over it.
 - While the words go through the COMM registers, the loader's PC sampler is switched off (the independent review
@@ -96,14 +101,20 @@ program without the run (R4B's) gets the old way for everything (sh2emu: `-oldsu
 
 ## Animated tiles
 
-The scripts' `Copy16x16Tile` – the conveyor belts, lights and machinery of Tidal Tempest 1, Quartz Quadrant's bad
-futures, every Wacky Workbench act and most Metallic Madness acts (22 acts) – moves on the Genesis planes now. The
+The scripts' tile animations (`Copy16x16Tile`) move on the Genesis planes now, in 22 acts: Tidal Tempest 1, Quartz
+Quadrant 1 and 2 bad future, every Wacky Workbench act and every Metallic Madness act but 1 past (R4B: still). The
 act file has the cells of every picture the act's animations show (`tools/build_mdg.sh` plays each act for 15 seconds
 on the PC first and logs them: they all show within its first four seconds); the SH2 keeps which picture each tile
 shows (the same table the picture mode uses) and rewrites the cells of a changed tile that the planes hold
 (`md_plane_refresh`, `md/md_planes.c`). The act file's section `ANI1` (`md/sgb.h`). Checked on the PC: the 22 acts
 for 90 seconds each with the scripted pad through the record and 68000 model (`SCD32X_SGBTEST`): no pixel different
 from the engine's own layers outside the water lines.
+
+## Sound
+
+The menus' cursor and choice sounds (`MenuButton`, `Select`) are in the PCM bank now (R4B's bank had the acts' 21
+effects only: the menus were silent). The bank is 64 KB, so every effect's rate went down a little: 5.8 kHz (R4B
+6.2), the ring and the jump 8.0 kHz (8.5).
 
 ## Your R4B list
 
@@ -116,12 +127,48 @@ from the engine's own layers outside the water lines.
 - **Tidal Tempest's underwater colours** (the 68000's line interrupt: a 68000 change).
 - **The stages' own sound effects** (the shared ones play): the Sub-CPU's sound effect bank (command 53) holds one
   file, `KOBOSFX.BIN`, at most 31 effects in 64 KB – a stage's own effects need a Sub-CPU change (a bank a stage).
-- **The special stages at full speed** (above: the second SH2).
+- **The special stages at full speed** (above: the second SH2), and their own sound effects and the big ring's
+  (`SpecialRing`, `SpecialWarp`: 1.7 seconds - no room left in the 64 KB bank).
 - `LEADERBOARDS` and `ACHIEVEMENTS` are the PC version's online screens: nothing behind them on the console.
 
 ## Checked before burning
 
-CHECKS_TBD
+- **sh2emu** (its README: it plays the Sub-CPU's fast command 46 and the backup RAM's commands 56-59 too; `-bram`
+  keeps the file between runs), on the build made from scratch with the commands below:
+  - **Power-on to Palmtree Panic 1** (the check below, 6,000 frames): the title at frame 372, the main menu at 1566,
+    save select, player select, Palmtree Panic 1 at 3842; `no problems found`; 39 fast runs (153 chunks); 4 sound
+    effects (the menus'); 1 save written. **The same file again** (a power cycle): save select shows `PALMTREE PANIC`.
+  - **Time attack**: its screen at frame 2755, every zone locked (a new backup RAM). **`LEADERBOARDS`,
+    `ACHIEVEMENTS`**: A does nothing, the menu stays.
+  - **A + B + C + Start on the title**: the Options Menu at about frame 1400.
+  - **Every special stage as Sonic and as Tails** (16 runs, through the Options Menu, 25 seconds each): `no problems
+    found` in all, the game at 44-52 frames a second (the 8th: 36); the first one played until its time ran out:
+    the results, then Palmtree Panic 1; the 8th's end: the credits screen.
+  - **The 22 acts with animated tiles** as Sonic, 25 seconds of play each with the scripted pad: `no problems found`
+    in all, 55-58 frames a second; a light in Wacky Workbench 1 blinks in sh2emu's pictures as on the PC.
+  - **11 more acts** (Palmtree Panic 1, Collision Chaos 1 bad future, Tidal Tempest 2, Quartz Quadrant 1 past, Wacky
+    Workbench 2 past, Stardust Speedway 1 good future and Metallic Madness 2 good future as Tails; Palmtree Panic 2
+    past, Collision Chaos 2 past, Tidal Tempest 2 bad future and Stardust Speedway 2 past as Sonic): `no problems
+    found`, 55-58 frames a second, each with its native scripts.
+  - **`-badrun 0`** (the first fast run answers a wrong checksum): its chunks loaded again one by one, the title as
+    usual; **`-oldsub`** (a Sub-CPU without the run): everything the old way (91 chunks one by one), the title at
+    frame 390 instead of 372. Both `no problems found`.
+- **The PC checks**: the picture mode beside the engine's own picture in every presentation and special-stage scene
+  (the same, apart from the dithered blends); the animated tiles in the 22 acts, 90 seconds each through the record
+  and the 68000 model (no pixel different outside the water lines).
+- **An independent review** (a separate agent) of the Sub-CPU, loader and engine changes, against the Sub-CPU's
+  commands and the hardware rules: nothing that stops the boot or breaks the fast loads or the backup RAM. It found one
+  real bug, fixed: the loader's PC sampler could garble a save word during a scene's start-up (now off while the words
+  go). And three smaller ones, fixed: the picture mode's layout copy after the swap (before it now), the animated
+  tiles' rewrite on a plane written from scratch the same frame (skipped now), the act file's animated-tile section
+  kept while another file used its slot (cleared with the planes now). Not changed: the fast command waits for the
+  Sub-CPU without a limit (R4B's chunk-by-chunk path timed out with `5CE2`; a Sub-CPU that never answers leaves the
+  console stuck either way).
+- **The delivery on its own:** R4B's files + `R4C_files.zip` + your Makefiles, built with the commands below (all but
+  the 68000 part, which needs the m68k toolchain): every one of the 316 files in `R4C_expected.txt` the same – the
+  scene images, the act files, `SCDDATA.PAK`, `IMAGE.RAW`, `KOBOSFX.BIN`, the engine (`SONICCD.PAK`), the loader
+  (`SCDSH2.BIN`) and the engine's generated includes. **The 68000 side** (`cd32x/sub_main.c`: the run and the 512-byte
+  file) is compiled only on your machine: sh2emu plays its commands from its own model, and the review read the code.
 
 ## Build
 
@@ -162,22 +209,23 @@ sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Soni
 ```
 
 `VERDICT no problems found`, `backup RAM SONICCD32X_: 3 loads, 1 saves, 256 words exchanged`; the four pictures: the
-title screen, the main menu, save select (player select over it), Palmtree Panic 1.
+title screen, the main menu, save select, Palmtree Panic 1.
 
 ## What to look for on the console
 
 1. **Power-on:** the SEGA logo, one or two seconds of the white and green text, the loading picture with its bar
-   (it should fill faster than R4B's: four chunks a CD read), then **the title screen** with its music. (R4B went to the Options Menu.)
+   (it should fill faster than R4B's: four chunks a CD read), then **the title screen** with its music (R4B went to
+   the Options Menu).
 2. **Start:** the main menu over its moving background, `START GAME` to `ACHIEVEMENTS`. The menus run at
    about 40-48 frames a second (the 32X draws them: a little slower than the game's own 60).
 3. `START GAME`: **save select**, four `NEW GAME` files on a backup RAM without the file; A, then player select, A:
    Palmtree Panic 1 on the Genesis planes as in R4B.
 4. **Power off, on again:** save select shows the file you played (`PALMTREE PANIC 1` and its icon) – the save.
 5. **A + B + C + Start** on the title or in a menu: the Options Menu (R4B's). `STAGE SELECT`, `SPECIAL`, a stage:
-   **the special stage** – the rotating floor, the UFOs, the backdrop. The picture changes about 4-5 times a second
+   **the special stage** – the rotating floor and the backdrop. The picture changes about 4-5 times a second
    (above); the game runs at about 80 % of its speed. When the time runs out: the results, then Palmtree Panic 1.
-6. **Wacky Workbench 1** (Options Menu, `STAGE SELECT`, `REGULAR`, the 41st act): the lights, the machines and the
-   floor's panels move (R4B: frozen). Metallic Madness 1 and Tidal Tempest 1 the same.
+6. **Wacky Workbench 1** (Options Menu, `STAGE SELECT`, `REGULAR`, the 41st act): its animated tiles move (R4B:
+   still). Metallic Madness 1 and Tidal Tempest 1 the same.
 7. `TIME ATTACK`: the zone pictures scroll; every zone shows a padlock until it is played in the game.
 8. The Options Menu's `STAGE SELECT`: a held Down moves one row, then after half a second 5 rows a second.
    `CREDITS`: the music from the start, `TRACK nn` at the far left.
