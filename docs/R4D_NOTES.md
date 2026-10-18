@@ -130,7 +130,7 @@ on the screen (above the screen, below it, or an act without water): the line in
 
 In WSL, as R4C. Two differences: the stage banks go on the disc with the other sound file (`SFX*.BIN` in the copy
 step) and `ROUND=R4D`. The link's "RAM end ... (must stay below 0603A400)" is the Makefile's old text, as before
-(`engine_cart.ld` checks the real limit, 0603D400). **The disc needs an 80-minute CD-R**, as R4C: @@DISC@@.
+(`engine_cart.ld` checks the real limit, 0603D400). **The disc needs an 80-minute CD-R**, as R4C: about 77.7 minutes of sectors (R4C's image 77.6; the stage banks add 1.3 MB) - `build_audio_disc.py` says how full it is.
 
 ```bash
 cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
@@ -146,7 +146,7 @@ sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_
 mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW cd32x/build_engine/disc/   # the Makefile copies none of them
 make -C cd32x ENGINE=1 START="0 0" ROUND=R4D
 python3 tools/build_audio_disc.py cd32x/build_engine/SCDENG.bin game_data/music                                  # -> cd32x/build_engine/SCDENG_AUDIO.bin + .cue: burn this one
-md5sum -c --quiet R4D_expected.txt && echo "R4D_expected: all @@NEXP@@ OK"
+md5sum -c --quiet R4D_expected.txt && echo "R4D_expected: all 339 OK"
 ls cd32x/build_engine/disc/SFX*.BIN | wc -l                                      # 23: the stage banks are on the disc
 grep -ac "BUILD: SONIC CD R4D GAME START" cd32x/build_engine/disc/APP.BIN       # 1: the round's label is in
 grep -ac "SH2-VR4D" cd32x/build_engine/disc/APP.BIN                              # 1: the R4D SH2 loader is in
