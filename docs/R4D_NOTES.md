@@ -78,8 +78,8 @@ The 32X has two SH2s; until R4D the second one did nothing (the loader's `second
 waits for work in a mailbox after the boot record (SDRAM `0x06001F40`, cache-through): the engine writes the job's
 function and argument there, the second SH2 runs it and writes back the job's number. Each big drawing of the picture
 mode is split by rows - the second SH2 draws every other row, the first SH2 the rest at the same time - and the
-first SH2 waits for the other half before it goes on: the special stages' floor, the tile layers, the 3D faces, and
-sprites of 24 rows and 4,096 pixels or more (the menus' pictures). Smaller ones stay on the first SH2 (handing them
+first SH2 waits for the other half before it goes on: the special stages' floor, the tile layers, the 3D faces of 24
+rows or more, and sprites of 24 rows and 4,096 pixels or more (the menus' pictures). Smaller ones stay on the first SH2 (handing them
 over costs more than it saves). The picture is the same either way (checked on the PC: the halves drawn one after the
 other give the same picture as the whole).
 
@@ -96,7 +96,10 @@ flippers, the drowning alarm, the UFOs ...) did not fit. With `STAGE SFX` on, ev
 scene: the shared effects of its kind (the acts' 21 + the big ring's two; the special stages' 7; the menus' two) and
 the effects of its `StageConfig`, at most 63 (`tools/build_audio.py`: 23 banks, `SFX01.BIN` - `SFX23.BIN`; scenes
 with the same effects share one). The longest shared effects are cut a little shorter in the acts' banks to make
-room; the rates are @@RATES@@ (`KOBOSFX.BIN`: 5.8 kHz, the ring and the jump 8 kHz).
+room. The rates: the acts' banks 4.2 - 5.7 kHz (24 - 35 effects each), the special stages' 7.0 kHz (15), the
+title's and the menus' 8 kHz (`KOBOSFX.BIN`: 5.8 kHz, the ring and the jump 8 kHz) - more effects, a little duller.
+Two banks are full: Wacky Workbench 3's leaves out `Crumble`, the sound test's (`Secrets`, 41 effects) three of its
+own.
 
 - **The Sub-CPU:** command 53 (load the bank) with the bank number in COMM2: 0 `KOBOSFX.BIN` (R4C's engine always
   sent 0), n `SFXnn.BIN`. A file it cannot read, or that is not a bank, leaves the chip as it was: the scene plays the
@@ -163,5 +166,8 @@ sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Soni
 sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_sh2.txt
 ```
 
-@@EMUEXPECT@@
+The first run: `VERDICT no problems found`, `backup RAM SONICCD32X_: 3 loads, 1 saves, 256 words exchanged`, `second
+SH2 0 jobs` (the switch is off), `audio ... 1 sound banks loaded`; the four pictures: the title screen, the main menu,
+player select with Tails in colour, Palmtree Panic 1. The second: `VERDICT no problems found`, `second SH2` with a few
+thousand jobs, `pictures ... in the last 10 s` about @@MENUON@@ a second (the main menu; with the switch off @@MENUOFF@@, R4C 3.6).
 
