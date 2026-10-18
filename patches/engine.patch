@@ -614,14 +614,14 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      byte type;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Debug.cpp engine/Debug.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Debug.cpp	2026-10-17 16:01:38.192374357 -0700
++++ engine/Debug.cpp	2026-10-17 17:12:46.794964759 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +#include <stdarg.h> // PORT32X: was pulled in by SDL.h
  
  int touchFlags = 0;
  
-@@ -44,6 +45,128 @@
+@@ -44,6 +45,129 @@
      }
  }
  
@@ -722,6 +722,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +    scd_set_global("SpecialStage.TimeStones", 0);
 +    scd_set_global("SpecialStage.ListPos", 0);
 +    scd_set_global("LampPost.Check", 0);
++    scd_set_global("Options.AttractMode", 0); // REV R4D: not a title demo (the flag stays set if a demo was left for this menu)
 +    playerListPos = scdPlayer;
 +}
 +static void scd_stage_lists() // REV R4B: STAGE SELECT - the stage lists (the player is the menu's), REGULAR first
@@ -750,7 +751,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void InitDevMenu()
  {
  #if RETRO_USE_MOD_LOADER
-@@ -70,6 +193,9 @@
+@@ -70,6 +194,9 @@
      SetPaletteEntry(-1, 0xF0, 0x00, 0x00, 0x00);
      SetPaletteEntry(-1, 0xFF, 0xFF, 0xFF, 0xFF);
      stageMode = DEVMENU_MAIN;
@@ -760,7 +761,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      SetupTextMenu(&gameMenu[0], 0);
      AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
      AddTextMenuEntry(&gameMenu[0], " ");
-@@ -102,6 +228,7 @@
+@@ -102,6 +229,7 @@
      gameMenu[0].selection2       = 9;
      gameMenu[1].visibleRowCount  = 0;
      gameMenu[1].visibleRowOffset = 0;
@@ -768,7 +769,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (renderType == RENDER_HW) {
          Engine.highResMode = false;
          render3DEnabled    = false;
-@@ -144,6 +271,9 @@
+@@ -144,6 +272,9 @@
  void ProcessStageSelect()
  {
      ClearScreen(0xF0);
@@ -778,7 +779,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      keyDown.start = false;
      keyDown.B     = false;
      keyDown.up    = false;
-@@ -210,16 +340,88 @@
+@@ -210,16 +341,88 @@
                  gameMenu[0].selection2 -= 2;
  
              int count = 13;
@@ -868,7 +869,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyPress.start || keyPress.A) {
                  if (gameMenu[0].selection2 == 9) {
                      ClearGraphicsData();
-@@ -326,6 +528,10 @@
+@@ -326,6 +529,10 @@
              }
              else if (keyPress.B) {
                  stageMode = DEVMENU_MAIN;
@@ -879,7 +880,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
                  AddTextMenuEntry(&gameMenu[0], " ");
-@@ -421,6 +627,11 @@
+@@ -421,6 +628,11 @@
                  stageMode                    = DEVMENU_STAGESEL;
              }
              else if (keyPress.B) {
@@ -891,7 +892,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "SELECT A PLAYER");
                  SetupTextMenu(&gameMenu[1], 0);
-@@ -437,6 +648,28 @@
+@@ -437,6 +649,28 @@
  
          case DEVMENU_STAGESEL: // Selecting Stage
          {
@@ -920,7 +921,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyDown.down) {
                  gameMenu[1].timer += 1;
                  if (gameMenu[1].timer > 8) {
-@@ -456,6 +689,7 @@
+@@ -456,6 +690,7 @@
                      gameMenu[1].timer = 0;
                  }
              }
@@ -928,7 +929,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyPress.down) {
                  gameMenu[1].selection1++;
                  if (gameMenu[1].selection1 - gameMenu[1].visibleRowOffset >= gameMenu[1].visibleRowCount) {
-@@ -480,7 +714,12 @@
+@@ -480,7 +715,12 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX - 4, 40);
              DrawTextMenu(&gameMenu[1], SCREEN_CENTERX + 100, 64);
              if (keyPress.start || keyPress.A) {
@@ -941,7 +942,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  stageMode         = STAGEMODE_LOAD;
                  Engine.gameMode   = ENGINE_MAINGAME;
                  stageListPosition = gameMenu[1].selection1;
-@@ -511,6 +750,10 @@
+@@ -511,6 +751,10 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 72);
              if (keyPress.start || keyPress.A) {
                  stageMode = DEVMENU_MAIN;

@@ -47,6 +47,13 @@ def one(job):
             pastEnd += 1
         if src.has(path):
             files[src.index[path.lower()][0]] = src.read_range(path, 0, min(int(n), src.size(path)))
+    # REV R4D: the title's demos (Options.AttractMode) play an act with the buttons from Data/Game/Demos/Key11a.bin
+    # (Key43c, Key82a; Special1, Special6 for the special stages) - a run from the act's own start never reads it, so it
+    # was in no pack: on the console (R4C) the demo ended at once and the game went back to the title. Into its act's pack
+    demo = (f"Data/Game/Demos/Key{folder[1:]}.bin" if folder.upper().startswith("R") else
+            f"Data/Game/Demos/Special{folder[2:]}.bin" if folder.upper().startswith("SS") else None)
+    if demo and src.has(demo):
+        files[src.index[demo.lower()][0]] = src.read_range(demo, 0, src.size(demo))
     pack = os.path.join(outdir, f"{folder}_{sid}.rsdk")
     rp.write_pack(pack, files)
     ms.run("soniccd_host_sh2cfg_asan", os.path.join(d, "m"), pack, cat, pos, frames, dict(pl, SCD32X_CARTIMG_IN=img))
