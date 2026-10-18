@@ -38,6 +38,9 @@ fit. A switch stays as set until the power goes off; `START GAME` or `STAGE SELE
 
 ## Fixes from the R4C disc (your video, 17 Oct)
 
+**On the console (R4C):** power-on to the title, the main menu, save select and player select; a save in the
+backup RAM, and after a power cycle save select shows it.
+
 - **The title's demos ended after a second or two.** Each demo plays an act with recorded buttons
   (`Data/Game/Demos/Key11a.bin`, `Key43c.bin`, `Key82a.bin`, `Special1.bin`, `Special6.bin`). The acts' data packs are
   made from PC runs that start each act directly, so those files were in no pack: on the console the demo found no
