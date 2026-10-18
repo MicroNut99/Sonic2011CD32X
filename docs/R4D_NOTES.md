@@ -56,7 +56,8 @@ backup RAM, and after a power cycle save select shows it.
   background: two pictures over the whole screen, each half see-through. R4C drew them pixel by pixel through the
   general dither; a half see-through picture is a plain checkerboard (one pixel of each pair), so it goes one byte
   read and one word written per pair now - the same pixels. With `2ND SH2` on, the second SH2 draws half of every big
-  picture too. Main menu, sh2emu: @@MENUS@@.
+  picture too. Main menu, sh2emu, pictures a second (the game's frames a second): R4C 3.6 (44); R4D with `2ND SH2` off
+  5.0 (54), on 7.6 (58).
 - **The dither's pattern slipped** after a see-through pixel of a sprite (R4C moved it on at the visible pixels
   only): every pixel moves it on now, so the pattern stays fixed on the screen.
 - **A short press in a slow menu could be lost.** The game reads the pad once a frame; while a picture takes several
@@ -124,7 +125,65 @@ on the screen (above the screen, below it, or an act without water): the line in
 - On, the colours above the line are the screen's first line's. Off, as R4C: the last line's - when the water
   reaches the bottom of the screen, the whole picture shows the water colours (an R4C fault the switch fixes).
 
-@@CHECKS@@
+## Checked before burning
+
+- **sh2emu** (its README; the second SH2 runs too, `-set` sets a switch), on the build made from scratch with the commands
+  below - `VERDICT no problems found` in every run:
+
+| Run | Result |
+|---|---|
+| Power-on to Palmtree Panic 1 (all switches off; your check below) | the title, the main menu, save select, player select with Tails in colour, Palmtree Panic 1; 1 save written; `second SH2 0 jobs`; 1 sound bank (`KOBOSFX.BIN`) |
+| The same backup RAM again (a power cycle) | save select shows `PALMTREE PANIC 1` |
+| Player select: Right, A | Palmtree Panic 1 as Tails (his scene image `L1S128.IMG`); 1 save written |
+| The title's demo (no buttons) | Palmtree Panic 1's demo plays 70 s, then the title (R4C: 3.5 s) |
+| Main menu, `2ND SH2` off / on | 5.0 / 7.6 pictures a second (R4C 3.6), the game 54 / 58 frames a second; on: 3,089 jobs for the second SH2 |
+| Main menu: Down, Down, Up (10-frame presses) | three cursor sounds, `TIME ATTACK` highlighted |
+| Special stage 1 from the Options Menu, the switches off / all on | 4.0 / 6.0 pictures a second, the game 45 / 58 frames a second; on: 1,680 jobs, its bank `SFX23.BIN` (15 effects) |
+| Tidal Tempest 1 (scripted pad), `UNDERWATER` and `STAGE SFX` off / on | 58 frames a second both; on: its bank `SFX12.BIN` (34 effects), 44 effects played (off: 29), 292 frames with a water line |
+
+- **The 68000 listener** (`hw_md.s`, built with the m68k assembler here and run in a 68000 emulator with a model of the
+  VDP and the interrupts): the H-int's set-up, the water colours at the line and only there, the normal colours back
+  each vertical blank, a left-over H-int ignored, the line interrupt off without a water line; and with records
+  without the water trailer (the switch off) the same VDP writes as R4C's listener, byte for byte. All OK.
+- **The PC checks:** the picture mode beside the engine's own picture in the title, the main menu, time attack and
+  special stage 1 (no pixel different outside the dithered parts), the main menu also with every split drawing done in
+  two halves as the two SH2s do;
+  the half see-through rows against the dither, 400,000 random rows: the same pixels; Tidal Tempest's water colours
+  through the record and the 68000 model: no pixel different; every scene's sound effects found in its bank.
+- **The delivery on its own:** R4C's files + `R4D_files.zip` + your Makefiles, built with the commands below (all but
+  the 68000 part): every one of the 339 files in `R4D_expected.txt` the same - the scene images, the act files,
+  `SCDDATA.PAK`, `IMAGE.RAW`, `KOBOSFX.BIN` (the same as R4C's), the 23 stage banks, the engine (`SONICCD.PAK`), the
+  loader (`SCDSH2.BIN`) and the engine's generated includes. **The Sub-CPU** (`cd32x/sub_main.c`: command 53's bank
+  number) is compiled only on your machine: sh2emu plays its commands from its own model.
+- **Not run here:** the console. The CD's timing (sh2emu shortens the loads), the second SH2 and the line interrupt
+  on the real hardware are what the disc tests.
+
+## What to look for on the console
+
+1. **Power-on:** as R4C - the SEGA logo, the loading picture, the title with its music.
+2. **Leave the title alone:** a demo plays (Palmtree Panic 1, then others) for half a minute or so, then the title
+   again (R4C: back after a second or two).
+3. **Start:** the main menu - smoother than R4C (about 5 pictures a second instead of 3-4). Short taps of Up / Down
+   move the cursor every time.
+4. `START GAME`, a save file: player select shows **Tails in colour**; Right, A - Palmtree Panic 1 as Tails.
+5. **A + B + C + Start, `2ND SH2` on**, then `STAGE SELECT`: `PRESENTATION` (Up) for the title or the menus,
+   `SPECIAL` (Down) for a special stage. The picture changes about twice as often as with it off (the main menu
+   about 7-8 pictures a second); the special stage about 6, the game close to full speed.
+6. **`STAGE SFX` on**, then an act: the stage's own sounds (Collision Chaos's bumpers and flippers, Tidal Tempest's
+   splashes, air bubbles and drowning alarm, ...). Off: as R4C.
+7. **`UNDERWATER` on**, Tidal Tempest 1 (`STAGE SELECT`, `REGULAR`, the 21st act): below the water line the water
+   colours, above it the normal ones; a line or two of dots at the line is expected. Off: as R4C.
+8. **A save, power off and on:** save select shows it, as R4C.
+
+| What you see | Meaning |
+|---|---|
+| a demo still ends after a second or two | the scene images are from an old build (the demo files are in the act images: `build_game_data.py` step) |
+| player select: Tails still locked | the engine is from an old build (`setup_engine.sh`: `check_patch.sh` should say OK) |
+| `2ND SH2` on, no faster | the second SH2 did not answer its test: tell me (the first SH2 then draws everything, as R4C) |
+| `2ND SH2` on, a picture with every other line missing or old, or a freeze | the second SH2's half not drawn in time: tell me where |
+| `STAGE SFX` on, a stage silent or with wrong sounds | its `SFXnn.BIN` is not on the disc: the copy step (`ls cd32x/build_engine/disc/SFX*.BIN` - 23) |
+| `UNDERWATER` on, the picture shakes, wrong colours across the screen, or a freeze in Tidal Tempest | the line interrupt: tell me where (switch it off to play on) |
+| a frozen loading bar | a CD read the Sub-CPU never finished: tell me how far the bar got |
 
 ## Build
 
@@ -169,5 +228,5 @@ sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Soni
 The first run: `VERDICT no problems found`, `backup RAM SONICCD32X_: 3 loads, 1 saves, 256 words exchanged`, `second
 SH2 0 jobs` (the switch is off), `audio ... 1 sound banks loaded`; the four pictures: the title screen, the main menu,
 player select with Tails in colour, Palmtree Panic 1. The second: `VERDICT no problems found`, `second SH2` with a few
-thousand jobs, `pictures ... in the last 10 s` about @@MENUON@@ a second (the main menu; with the switch off @@MENUOFF@@, R4C 3.6).
+thousand jobs, `pictures ... in the last 10 s` about 7.6 a second (the main menu; with the switch off 5.0, R4C 3.6).
 
