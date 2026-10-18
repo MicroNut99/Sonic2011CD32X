@@ -36,4 +36,16 @@ fit. A switch stays as set until the power goes off; `START GAME` or `STAGE SELE
 - `STAGE SFX` works from the next scene the game loads (the scene's bank is loaded with it).
 - `UNDERWATER` works from the next act the game loads (the act's first frame sends the 68000 all its colours).
 
+## Fixes from the R4C disc (your video, 17 Oct)
+
+- **The title's demos ended after a second or two.** Each demo plays an act with recorded buttons
+  (`Data/Game/Demos/Key11a.bin`, `Key43c.bin`, `Key82a.bin`, `Special1.bin`, `Special6.bin`). The acts' data packs are
+  made from PC runs that start each act directly, so those files were in no pack: on the console the demo found no
+  buttons and went back to the title. Each one is in its act's pack now (`tools/build_stage_packs.py`). Reproduced in
+  sh2emu with the R4C build: Palmtree Panic 1's demo went back to the title after 3.5 seconds (the game plays it about
+  33).
+- **A game started from the Options Menu is never a demo:** `START GAME` and `STAGE SELECT` set the game's demo flag
+  (`Options.AttractMode`) to 0, as they set the lives and the score. (Your report: an act from `STAGE SELECT` went back
+  to the main menu. Not reproduced in sh2emu - this is a guard, not a proven fix.)
+
 PLACEHOLDER
