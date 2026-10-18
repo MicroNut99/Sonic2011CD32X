@@ -1231,8 +1231,8 @@ static void bus_write(u32 p, u32 v, int size)
     if (rg == RG_SDRAM && (off & (SDRAM_SIZE - 1)) >= SLAVE_BOX_OFF && (off & (SDRAM_SIZE - 1)) < SLAVE_BOX_OFF + 20) {
         if (!cur_cpu) /* REV R4D: the master writes the mailbox: the slave looks again */
             slave_idle = slave_idle == 2 ? 2 : 0, slave_arm = 0;
-        else if ((off & (SDRAM_SIZE - 1)) == SLAVE_BOX_OFF + 16 && size == 4)
-            slave_jobs++; /* the slave's done */
+        else if ((off & (SDRAM_SIZE - 1)) == SLAVE_BOX_OFF + 16 && size == 4 && v)
+            slave_jobs++; /* the slave's done (not its 0 at the start) */
     }
     bus_penalty += add;
     pen_note(rg, 0, add, p);

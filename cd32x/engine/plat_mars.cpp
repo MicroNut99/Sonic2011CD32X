@@ -1041,8 +1041,8 @@ static bool slave_wait(unsigned int vbls)
     while (SLAVE_BOX[4] != slaveSeq) {
         if (VBLANK_COUNT - v0 > vbls)
             return false;
-        for (volatile int k = 0; k < 8; ++k) {
-        }
+        unsigned int k = 64; /* about 250 cycles in registers only: the bus stays free for the second SH2 */
+        __asm__ __volatile__("0:\n\tdt %0\n\tbf 0b" : "+r"(k) : : "t");
     }
     return true;
 }

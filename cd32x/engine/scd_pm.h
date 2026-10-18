@@ -261,8 +261,39 @@ static inline void pm_sprite_row_dither(unsigned int off, int x, int y, const un
     pm_run(off, n, [&]() -> unsigned char {
         unsigned char v = *s;
         s += dir;
-        return (v && row[(x + i++) & 3] < a16) ? v : 0;
+        const bool on = row[(x + i++) & 3] < a16; /* REV R4D: every pixel moves the pattern on (R4C: only a sprite's
+                                                     visible ones - after a see-through pixel the pattern slipped) */
+        return (v && on) ? v : 0;
     });
+    PM_APPROX(off, n);
+}
+/* REV R4D: a sprite row at half alpha (a16 8: DrawBlendedSprite - the menus' background, two whole-screen sprites a
+   frame). The Bayer pattern below 8 is a checkerboard: a pixel shows where its x and y are both even or both odd, so
+   one pixel of each word - one byte read and one word written a pair. The same pixels as pm_sprite_row_dither (x and
+   off have the same parity: lines are PM_STRIDE, even, apart) */
+static inline void pm_sprite_row_half(unsigned int off, int y, const unsigned char *s, int n, int dir)
+{
+    if (n <= 0)
+        return;
+    const int k0           = (int)((off ^ (unsigned int)y) & 1); /* the row's first pixel that shows: 0 or 1 */
+    const unsigned char *p = s + k0 * dir;
+    unsigned int o         = off + (unsigned int)k0;
+    int cnt                = (n - k0 + 1) >> 1;
+    const int step         = dir + dir;
+    if (o & 1) { /* odd lines: the low byte of each word */
+        for (o -= 1; cnt > 0; --cnt, o += 2, p += step) {
+            const unsigned char v = *p;
+            if (v)
+                PM_O16(o, v);
+        }
+    }
+    else {
+        for (; cnt > 0; --cnt, o += 2, p += step) {
+            const unsigned char v = *p;
+            if (v)
+                PM_O16(o, (unsigned short)(v << 8));
+        }
+    }
     PM_APPROX(off, n);
 }
 
@@ -289,6 +320,10 @@ static void pm_sprite_part(const PmSpriteJob *j, int part, int parts)
     const int step = parts * j->rowStep, offStep = parts * PM_STRIDE, width = j->width, dx = j->dx, a16 = j->a16;
     if (a16 < 0) {
         for (int r = part; r < j->height; r += parts, g += step, off += (unsigned int)offStep) pm_sprite_row(off, g, width, dx);
+    }
+    else if (a16 == 8) { /* REV R4D: half alpha (above) */
+        for (int r = part; r < j->height; r += parts, g += step, off += (unsigned int)offStep)
+            pm_sprite_row_half(off, j->y + r, g, width, dx);
     }
     else {
         for (int r = part; r < j->height; r += parts, g += step, off += (unsigned int)offStep)

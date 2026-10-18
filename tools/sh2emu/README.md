@@ -21,7 +21,9 @@ Its timing matches the console (measured on R1S): the game speed it reports is t
 **R4D:** it runs the 32X's **second SH2** too, from its own boot-table entry (Kobo's crt0, then the loader's
 `secondary()`): both SH2s on the 32X's one bus (an access waits for the other's), each with its own registers, cache,
 divider and interrupt mask. The engine's jobs for it (the Options Menu's `2ND SH2` switch) come through the loader's
-mailbox (SDRAM `0x06001F40`); while it waits for one it is not stepped (it costs no time). `-noslave` leaves it out
+mailbox (SDRAM `0x06001F40`); while it waits for one it is not stepped (it costs no time: the loader's wait is in
+registers, two reads of the mailbox every 1000 cycles or so, so on the console it leaves the bus to the first SH2 too;
+a wait that wrote memory would slow the first SH2 on the console and not here). `-noslave` leaves it out
 (as sh2emu before R4D). It plays the Sub-CPU's command 53 with a bank number (`SFX<n>.BIN`, the `STAGE SFX` switch)
 and the 68000's underwater colours (the records' water trailer: the water colours below the water line in `-shot`
 pictures, the normal ones above).

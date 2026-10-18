@@ -166,9 +166,11 @@ void secondary(void)
             SLAVE_BOX[4] = seq;
         }
         else {
-            volatile int k;
-            for (k = 0; k < 16; k++) {
-            }
+            /* about 1000 cycles in registers only (dt + bf: no memory) between two looks at the mailbox: waiting, this
+               SH2 leaves the bus to the first one (R4C's loop to itself did not use it either; a counter on the stack
+               would write the SDRAM all the time, the cache writes through) */
+            uint32_t k = 256;
+            __asm__ __volatile__("0:\n\tdt %0\n\tbf 0b" : "+r"(k) : : "t");
         }
     }
 }
