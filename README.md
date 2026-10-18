@@ -86,7 +86,7 @@ SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 6800
 ```
 
 The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
-the disc's steps are in [docs/R4D_NOTES.md](docs/R4D_NOTES.md) (R4C: [docs/R4C_NOTES.md](docs/R4C_NOTES.md), R4B: [docs/R4B_NOTES.md](docs/R4B_NOTES.md), R4A: [docs/R4_NOTES.md](docs/R4_NOTES.md), R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
+the disc's steps are in [docs/R4D_NOTES.md](docs/R4D_NOTES.md) (next: a bigger RAM cart with bank switching - [docs/CART16_HANDOFF.md](docs/CART16_HANDOFF.md)) (R4C: [docs/R4C_NOTES.md](docs/R4C_NOTES.md), R4B: [docs/R4B_NOTES.md](docs/R4B_NOTES.md), R4A: [docs/R4_NOTES.md](docs/R4_NOTES.md), R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
 
 ## Checking a build before burning: tools/sh2emu
 
