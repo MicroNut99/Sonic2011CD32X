@@ -4645,7 +4645,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void LoadTextFile(TextMenu *menu, const char *filePath, byte mapCode);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp engine/Userdata.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Userdata.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Userdata.cpp	2026-10-17 09:26:24.300152325 -0700
++++ engine/Userdata.cpp	2026-10-17 18:15:34.851182845 -0700
 @@ -53,10 +53,30 @@
  
  int globalVariablesCount;
@@ -4677,7 +4677,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  Achievement achievements[ACHIEVEMENT_COUNT];
  LeaderboardEntry leaderboards[LEADERBOARD_COUNT];
  
-@@ -99,6 +119,15 @@
+@@ -99,6 +119,17 @@
  {
      useSGame = false;
      char buffer[0x180];
@@ -4686,6 +4686,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +        saveRAM[33] = bgmVolume;
 +        saveRAM[34] = sfxVolume;
 +        int r       = plat_save_read();
++        saveRAM[36] = 1; // REV R4D: Tails unlocked from the start - the game's own flag (its ending sets it; the main
++                         // menu's script reads it into Options.TailsUnlocked), kept in the file with the next save
 +        if (r >= 0)
 +            return r != 0;
 +    }
@@ -4693,7 +4695,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
  #if RETRO_USE_MOD_LOADER
  #if RETRO_PLATFORM == RETRO_UWP
-@@ -182,7 +211,22 @@
+@@ -182,7 +213,22 @@
              return false;
          useSGame = true;
      }
@@ -4716,7 +4718,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  
      fClose(saveFile);
      return true;
-@@ -191,6 +235,15 @@
+@@ -191,6 +237,15 @@
  bool WriteSaveRAMData()
  {
      char buffer[0x180];
@@ -4732,7 +4734,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (!useSGame) {
  #if RETRO_USE_MOD_LOADER
  #if RETRO_PLATFORM == RETRO_UWP
-@@ -273,7 +326,20 @@
+@@ -273,7 +328,20 @@
  #endif
  #endif
  
@@ -4753,7 +4755,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      fClose(saveFile);
      return true;
  }
-@@ -627,6 +693,25 @@
+@@ -627,6 +695,25 @@
  #endif
      }
  
@@ -4779,7 +4781,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      // Loaded here so it can be disabled
  #if RETRO_PLATFORM == RETRO_WIN && _MSC_VER
      if (Engine.useSteamDir) {
-@@ -733,6 +818,7 @@
+@@ -733,6 +820,7 @@
          WriteUserdata();
      }
  
@@ -4787,7 +4789,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      StrCopy(achievements[0].name, "88 Miles Per Hour");
      StrCopy(achievements[1].name, "Just One Hug is Enough");
      StrCopy(achievements[2].name, "Paradise Found");
-@@ -745,6 +831,7 @@
+@@ -745,6 +833,7 @@
      StrCopy(achievements[9].name, "Dr Eggman Got Served");
      StrCopy(achievements[10].name, "Just In Time");
      StrCopy(achievements[11].name, "Saviour of the Planet");
