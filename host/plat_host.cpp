@@ -1082,6 +1082,7 @@ struct ScdSfx {
 #include "../engine/SFXBank.inc"
 #endif
 static int sfxSceneBank = 0, sfxSceneList = 0, sfxScenePos = 0; // REV R4D: the bank the console loads for the scene
+static char hostSfxName[0x100][0x40]; // REV R4D: the effects' names as loaded (the SH2 configuration's sfxList has none)
 static void sfx_scene_loading()
 {
 #ifdef SCD_SFX_BANKS
@@ -1093,16 +1094,17 @@ static void sfx_scene_loading()
 void plat_sfx_play(int sfx, int loop)
 {
     hostInit();
-    ev("SFX %d %s%s", sfx, sfxList[sfx].name, loop ? " loop" : "");
+    ev("SFX %d %s%s", sfx, sfx >= 0 && sfx < 0x100 ? hostSfxName[sfx] : "?", loop ? " loop" : ""); // REV R4D: (the names as loaded)
 #ifdef SCD_SFX_BANKS
     // REV R4D: the scene's own bank (the STAGE SFX switch on, tools/build_audio.py: the bank the console loaded with the
     // scene - audio_before_load) has it?
     int bank = sfxSceneBank, id = 0;
-    for (int i = 0; i < SCD_SFX_NAMES; ++i)
-        if (!strcasecmp(sfxList[sfx].name, scdSfxNames[i]))
+    const char *nm = sfx >= 0 && sfx < 0x100 ? hostSfxName[sfx] : "";
+    for (int i = 0; nm[0] && i < SCD_SFX_NAMES; ++i)
+        if (!strcasecmp(nm, scdSfxNames[i]))
             id = scdSfxBankMap[bank][i];
-    if (!id)
-        ev("SFXBANK-MISS %s (scene %d:%d, bank %d)", sfxList[sfx].name, sfxSceneList, sfxScenePos, bank);
+    if (!id && nm[0])
+        ev("SFXBANK-MISS %s (scene %d:%d, bank %d)", nm, sfxSceneList, sfxScenePos, bank);
 #endif
 }
 
@@ -1110,6 +1112,10 @@ static size_t sfxBytes = 0;
 void plat_sfx_loaded(int sfx, const char *name, int rate, int channels, int bits, int samples)
 {
     hostInit();
+    if (sfx >= 0 && sfx < 0x100) { // REV R4D
+        strncpy(hostSfxName[sfx], name, sizeof hostSfxName[sfx] - 1);
+        hostSfxName[sfx][sizeof hostSfxName[sfx] - 1] = 0;
+    }
     sfxBytes += (size_t)samples * 2;
     ev("SFXLOAD %d %s %d Hz %d ch %d bit, %d samples (sfx total %zu KB as 16-bit)", sfx, name, rate, channels, bits, samples, sfxBytes / 1024);
 }
