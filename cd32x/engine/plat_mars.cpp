@@ -1078,51 +1078,61 @@ static bool slave_ready()
             fn(job, 0, 1);                                                                                              \
     } while (0)
 #include "scd_pm.h"
+static void pad_service(); /* REV R4D: the pad during a long picture (below) */
 void scd_pm_clear(int index)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_clear(index);
 }
 void scd_pm_sprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID, int alpha)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_sprite(XPos, YPos, width, height, sprX, sprY, direction, sheetID, alpha);
 }
 void scd_pm_sprite_scaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX,
                           int sprY, int sheetID)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_sprite_scaled(direction, XPos, YPos, pivotX, pivotY, scaleX, scaleY, width, height, sprX, sprY, sheetID);
 }
 void scd_pm_sprite_rotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                             int scale, bool zoom, int sheetID)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_sprite_rotozoom(direction, XPos, YPos, pivotX, pivotY, sprX, sprY, width, height, rotation, scale, zoom, sheetID);
 }
 void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_rect(XPos, YPos, width, height, R, G, B, A);
 }
 void scd_pm_face(void *v, unsigned int colour)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_face(v, colour);
 }
 void scd_pm_tex_face(void *v, int sheetID)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_tex_face(v, sheetID);
 }
 void scd_pm_draw3dscene(int sheetID)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_draw3dscene(sheetID);
 }
 void scd_pm_sky(int layerID)
 {
     pmDrew = true;
+    pad_service(); /* REV R4D */
     pm_sky(layerID);
 }
 void scd_pm_copy_tile(int dest, int src)
@@ -1145,6 +1155,7 @@ static void pm_layer_end(int slot)
 {
     if (slot >= 0 && slot < 4) {
         pmDrew = true;
+        pad_service(); /* REV R4D */
         pm_hline(slot, pmTileY[slot], pmLines);
     }
 }
@@ -1765,10 +1776,31 @@ static unsigned int demo_pad()
 }
 #endif
 unsigned int plat_pad() SCD_HOT; /* R1W: SDRAM */
+/* REV R4D: a picture of the 32X picture mode can take 10 vertical blanks or more (the menus: 3-4 pictures a second), and
+   the engine asks for the pad once a frame - a short press between two frames was lost (the menus seemed not to react).
+   While the picture mode draws, each draw call asks for the pad again once a vertical blank (command 48 alone: no sound,
+   no music command - those wait for plat_pad); what was down goes to the next frame's pad too */
+static unsigned int padLatch = 0, padPollVbl = 0;
+static void pad_service()
+{
+    if (VBLANK_COUNT == padPollVbl)
+        return;
+    padPollVbl = VBLANK_COUNT;
+    if (padPending && comm0_free()) {
+        pad_take();
+        padLatch |= padNow;
+    }
+    if (!padPending && !musicInFlight && !musicCmd && comm0_free()) {
+        SC_COMM0   = 48;
+        padPending = true;
+    }
+}
 unsigned int plat_pad()
 {
     if (padPending && comm0_free())
         pad_take();
+    const unsigned int latched = padLatch; /* REV R4D */
+    padLatch                   = 0;
     if (musicInFlight && comm0_free())
         musicInFlight = false;
     if (musicStopAt && (int)(VBLANK_COUNT - musicStopAt) >= 0) /* REV R4: a track the game does not loop has ended */
@@ -1805,7 +1837,7 @@ unsigned int plat_pad()
         scdDemoPad = 0; /* a button pressed in a stage: the controller from now on (the menu's own presses do not count) */
     }
 #endif
-    return padNow;
+    return padNow | latched;
 }
 #if SCD_PLANES
 // REV R1: each drawn layer slot's scroll (DrawHLineScrollLayer) - layer 0 (the foreground) for

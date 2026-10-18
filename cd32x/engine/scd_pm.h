@@ -64,7 +64,8 @@
 #ifndef PM_SPLIT_FN
 #define PM_SPLIT_FN(fn, J)
 #endif
-#define PM_SPLIT_MIN 24 /* a face shorter than this: all of it here (the hand-over costs more than it saves) */
+#define PM_SPLIT_MIN 24       /* a face or sprite shorter than this: all of it here (the hand-over costs more than it saves) */
+#define PM_SPLIT_PIXELS 4096  /* a sprite smaller than this: all of it here */
 /* a value the compiler must not see through: x * (1 << s) would become x << s - a library call on the SH2 */
 static inline int pm_opaque(int x)
 {
@@ -275,6 +276,26 @@ static void pm_clear(int index) /* ClearScreen */
     for (unsigned int o = 0; o < PM_STRIDE * PM_LINES; o += 2) PM_W16(o, w);
 }
 /* DrawSprite / DrawSpriteFlipped (dir: FLIP_NONE .. FLIP_XY), and the blended kinds (alpha < 255: dithered) */
+/* REV R4D: a sprite's rows (part of parts: every parts-th row from its top) */
+struct PmSpriteJob {
+    const unsigned char *g;
+    int rowStep, dx, width, height, x, y, a16;
+    unsigned int off;
+};
+static void pm_sprite_part(const PmSpriteJob *j, int part, int parts)
+{
+    const unsigned char *g = j->g + part * j->rowStep;
+    unsigned int off       = j->off + (unsigned int)(part * PM_STRIDE);
+    const int step = parts * j->rowStep, offStep = parts * PM_STRIDE, width = j->width, dx = j->dx, a16 = j->a16;
+    if (a16 < 0) {
+        for (int r = part; r < j->height; r += parts, g += step, off += (unsigned int)offStep) pm_sprite_row(off, g, width, dx);
+    }
+    else {
+        for (int r = part; r < j->height; r += parts, g += step, off += (unsigned int)offStep)
+            pm_sprite_row_dither(off, j->x, j->y + r, g, width, dx, a16);
+    }
+}
+PM_SPLIT_FN(pm_sprite_part, PmSpriteJob)
 static void pm_sprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID, int alpha)
 {
     PM_FLUSH();
@@ -327,18 +348,24 @@ static void pm_sprite(int XPos, int YPos, int width, int height, int sprX, int s
             rowStep = -surface->width;
             break;
     }
-    unsigned int off = (unsigned int)(XPos + PM_STRIDE * YPos);
-    if (alpha >= 0xFF) {
-        for (int r = 0; r < height; ++r, g += rowStep, off += PM_STRIDE) pm_sprite_row(off, g, width, dx);
-    }
-    else {
-        int a16 = pm_alpha16(alpha);
+    PmSpriteJob j;
+    j.g       = g;
+    j.rowStep = rowStep;
+    j.dx      = dx;
+    j.off     = (unsigned int)(XPos + PM_STRIDE * YPos);
+    j.width   = width;
+    j.height  = height;
+    j.x       = XPos;
+    j.y       = YPos;
+    j.a16     = alpha >= 0xFF ? -1 : pm_alpha16(alpha); /* (-1: no alpha) */
 #ifndef PM_CHECKING
-        if (a16 <= 0)
-            return; /* (less than 1/32 of the sprite: none of it; the PC check marks the place as approximated) */
+    if (j.a16 == 0)
+        return; /* (less than 1/32 of the sprite: none of it; the PC check marks the place as approximated) */
 #endif
-        for (int r = 0; r < height; ++r, g += rowStep, off += PM_STRIDE) pm_sprite_row_dither(off, XPos, YPos + r, g, width, dx, a16);
-    }
+    if (height >= PM_SPLIT_MIN && width * height >= PM_SPLIT_PIXELS)
+        PM_SPLIT(pm_sprite_part, &j); /* REV R4D: a big sprite (the menus' pictures) shared with the second SH2 */
+    else
+        pm_sprite_part(&j, 0, 1);
 }
 /* the engine's float steps, exactly - (int)(float)((float)(num / (float)d) * num), the last one kept (calls in a row
    share their scale) */
