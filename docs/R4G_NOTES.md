@@ -90,7 +90,7 @@ mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN 
 make -C cd32x ENGINE=1 START="0 0" ROUND=R4G
 mkdir -p /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs
 python3 tools/build_audio_disc.py cd32x/build_engine/SCDENG.bin game_data/music --out /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R4G
-md5sum -c --quiet R4G_expected.txt && echo "R4G_expected: all EXPECTEDCOUNT OK"
+md5sum -c --quiet R4G_expected.txt && echo "R4G_expected: all 340 OK"
 grep -ac "BUILD: SONIC CD R4G GAME START" cd32x/build_engine/disc/APP.BIN       # 1: the round's label is in
 grep -ac "SH2-VR4D" cd32x/build_engine/disc/APP.BIN                              # 1: the SH2 loader (unchanged since R4D)
 ```
@@ -98,7 +98,26 @@ grep -ac "SH2-VR4D" cd32x/build_engine/disc/APP.BIN                             
 `python3 tools/build_preload.py game_data` prints `SCDDATA.PAK: the preload table, 280 entries (140 images, 140 act
 files)`. Burn `discs/SONICCD_R4G.cue`.
 
-SH2EMU
+Then sh2emu, before burning - three runs: the power-on on the 4 MB cart (as R4D), the 16 MB cart's first power-on
+(empty cart: Palmtree Panic 1 present with its preload, the past, act 2's present), and a second power-on with the
+cart's contents kept (the battery: act 2's present, past and good future from the cart). The cart's 16 MB are kept in
+`sh2emu_cart16.bin` between runs 2 and 3.
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+gcc -O2 -o /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu.c
+rm -f /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 6000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -bram /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin -shot 5800 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 8500 -pad "1300:ABCS,1310:-,1450:D,1460:-,1480:A,1490:-,1510:A,1520:-,1540:S,1550:-,3700:ABCS,3710:-,3850:D,3860:-,3880:A,3890:-,3910:A,3920:-,3940:D,3950:-,3970:S,3980:-,6100:ABCS,6110:-,6250:D,6260:-,6280:A,6290:-,6310:A,6320:-,6340:D,6350:-,6370:D,6380:-,6400:D,6410:-,6430:D,6440:-,6460:S,6470:-" -cart 16 -cartkeep /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin -shot 3670 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g1.bmp -shot 6070 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g2.bmp -shot 8470 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g3.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g1.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g1.txt
+grep -E "window 0|open L1S" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g1.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 4900 -pad "1300:ABCS,1310:-,1450:D,1460:-,1480:A,1490:-,1510:A,1520:-,1540:D,1550:-,1570:D,1580:-,1600:D,1610:-,1630:D,1640:-,1660:S,1670:-,2500:ABCS,2510:-,2650:D,2660:-,2680:A,2690:-,2710:A,2720:-,2740:D,2750:-,2770:D,2780:-,2800:D,2810:-,2830:D,2840:-,2860:D,2870:-,2890:S,2900:-,3700:ABCS,3710:-,3850:D,3860:-,3880:A,3890:-,3910:A,3920:-,3940:D,3950:-,3970:D,3980:-,4000:D,4010:-,4030:D,4040:-,4060:D,4070:-,4090:D,4100:-,4120:S,4130:-" -cart 16 -cartkeep /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin -shot 2470 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g4.bmp -shot 3670 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g5.bmp -shot 4870 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g6.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g2.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g2.txt
+grep -E "window 0|open L1S|open G1S" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g2.txt
+```
+
+SH2EMU_EXPECT
 
 ## When the new cart exists
 
