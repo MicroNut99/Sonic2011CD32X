@@ -1,6 +1,6 @@
 # Hand-off: a bigger RAM cart (8 or 16 MB) with bank switching – faster loading, time travel from RAM
 
-Written 17 Oct 2026, after R4D. For the next AI helping with this. The person you work with is designing a new RAM cart
+Written 17 Oct 2026, after R4D; the cart's spec and the CART TEST added 19 Oct (R4E). For the next AI helping with this. The person you work with is designing a new RAM cart
 for this port (Sonic CD 2011, RSDKv3, on Sega CD + 32X + RAM cart). They own the hardware and burn the discs; you build
 and check everything before a disc is burned.
 
@@ -9,9 +9,11 @@ and check everything before a disc is burned.
 - "The game needs to be able to load present, past and future data for a single level." Time travel should not wait
   for the CD.
 - "There is no reason why the music cannot be delayed and/or faded out and back in to load data as a strategy."
-- 8 MB or 16 MB? Answer given: 8 MB holds every period of the current act; 16 MB also holds the next act, a special
-  stage and the menus (numbers below). Recommended 16 MB if the cost is similar. Both need bank switching: the SH2
-  sees only 4 MB of cart. **The bank switching is "the next big hurdle".**
+- 8 MB or 16 MB? With the cart's 2 MB pages (below): 16 MB holds all four periods of the current act (a page each)
+  and three more pages; 8 MB holds three of the four. Recommended 16 MB. Both need bank switching: the SH2 sees only
+  4 MB of cart. **The bank switching is "the next big hurdle".**
+- 19 Oct: the user is not testing on the console any more unless it is needed (a 30-year-old single-speed drive, lost
+  hardware): build as far as the emulator and the PC model can prove, one disc when it is worth it.
 
 ## Read first
 
@@ -93,44 +95,61 @@ The drive is single speed, about 150 KB/s plus seeks: today's act change is at l
 shortens CD reads (`sh2emu.c`, the Sub-CPU model's latencies), so its load times are not the console's. The measurement scripts were throwaway
 (md5 of each 32 KB chunk over `L1Snnn.IMG` + `G1Snnn.MDG` of the act's positions): rewrite them if you need them.
 
-Budget, everything uncompressed:
+File sizes on the R4D disc: act scene images 1.04-1.07 MB (largest 1,127,120 bytes), act files (`.MDG`) 0.35-0.43 MB
+(largest 454,260), special stage images 1.57-1.82 MB, the title's and menus' images 1.62-2.20 MB (largest 2,306,768).
+An act period (image + act file) fits a 2 MB page; a menu's image does not.
 
-| Kept in the cart | 8 MB | 16 MB |
-|---|---|---|
-| engine | 0.5 | 0.5 |
-| current act, all periods (worst) | 4.8 | 4.8 |
-| next act, all periods | - (about 1.7 compressed) | 4.8 |
-| a special stage | - | 1.4-1.7 |
-| title + main menu | 2.2 if nothing else | 2.2 |
-| total | 5.3 + about 2.7 spare | about 14-15 |
+## The cart (the user's spec, 19 Oct 2026)
 
-## The hurdles - what a design must answer
+- **Two windows of 2 MB:** window 0 = cart `0x000000-0x1FFFFF` (the 68000 in Sega CD mode: `0x400000-0x5FFFFF`; the
+  SH2: `0x02000000-0x021FFFFF`), window 1 = cart `0x200000-0x3FFFFF` (`0x600000-0x7FFFFF`; `0x02200000-0x023FFFFF`).
+- **Each shows one of 8 pages of 2 MB.** Select with a word or upper-byte write, the page number in D8-D10, to
+  `0xA130F0` (window 0) or `0xA130F2` (window 1). Power-on and /RESET: window 0 = page 0, window 1 = page 1 - today's
+  linear 4 MB, so every older disc runs unchanged.
+- Pages 0-3 are U1, 4-7 are U2; **an 8 MB build aliases 4-7 onto 0-3.**
+- With the 32X adapter on: **write the registers with RV = 1 and interrupts off, and purge the SH2 caches after a
+  switch.**
 
-1. **The SH2's window is 4 MB.** More RAM is reachable only by switching what the window shows (or by copying into
-   it). The engine's code (cart `0x000000-0x07FFFF`) must stay mapped while it runs - a switch of that part would have
-   to run from SDRAM.
-2. **The SH2 caches cart reads.** After a switch both SH2s must purge their caches (CCR purge, as the second SH2 does
-   before each job: `secondary()` in `sh2_engboot.c`, `SC_CCR = 0x11`), or they read the old bank's lines.
-3. **The SH2 does not write the cart today.** So unpacking compressed data into the cart, or copying between banks,
-   falls to the 68000 or the Sub-CPU (boot stack) - **unless the new cart lets the SH2 write**. That one design choice
-   decides where the unpacker and the copier live. Worth asking the user first.
-4. **The 68000 reads the act file during its vertical blank** (the plane record, cells from `0x900000`): a switch of the
-   act file's part must not happen mid-read. The record already goes from the SH2 to the 68000 every frame
-   (`md/sgb.h`): a bank field in it would need no new command (but it is a `hw_md.s` change).
-5. **Who writes the bank register, and where it is** - the cart's own address space (the 68000 sees it at 0x400000+),
-   the Genesis `/TIME` area (`0xA130xx`, where Sega's 512 KB-page mapper lives on 4 MB+ Genesis carts), or something
-   else. **Not verified here:** whether the 32X passes such writes to the cart and whether the SH2's window follows a
-   cart-side mapper. Ask the user (they design the cart) and test on hardware before relying on it.
-6. **Power-on must look like today's linear 4 MB**, so the existing boot (and an R4D disc) works unchanged.
+What follows from it:
 
-A layout that fits today's map: 512 KB pages. The scene area `0x080000-0x2FFFFF` is exactly pages 1-5, the data pack
-page 6, the act file page 7; page 0 (the engine) fixed. An act period = 3 pages of image (acts use about 1.1 MB) + 1
-page of act file; time travel = pointing pages 1-3 and 7 at the period's pages (no copy, then the cache purge). Pages
-waste the space a period's image does not fill and cannot share chunks between periods (4 periods ≈ 8 MB of pages vs
-4.8 MB deduplicated) - with 16 MB that is still room for the current act and most of the next. A copy design (a
-4 MB window as today + a stash the 68000 copies from) shares chunks but costs a copy at each switch (not measured).
+1. **Only the 68000 writes the registers** (the SH2 cannot reach `0xA130xx`). The 68000 listener already has the right
+   routine: MD command 26 `SAFE_CART_XFER` (interrupts off, RV = 1, byte copy, RV = 0) - a one-byte copy of the page
+   number to `0xA130F0`/`F2` is the upper-byte write. **No `hw_md.s` change.**
+2. **The Sub-CPU sends it** when the SH2 asks: R4E added it to command 46 - `COMM2 = 0xF800 | window << 8 | page`
+   (a fast run's COMM2 is at most `0x03FF`), reply COMM12 = 0. No new command number. (`cd32x/sub_main.c`.)
+3. **Window 0 never switches**: the engine's code runs from it (cart `0x000000-0x07FFFF`). Window 1 is the switchable
+   one.
+4. **While RV = 1 the SH2 must not touch the cart** - code or data. The engine's command waits (`sd_cmd`, in SDRAM)
+   already work that way for chunk loads. After the switch the SH2 purges its cache (`*(volatile unsigned char
+   *)0xFFFFFE92 = 0x11`); the second SH2 purges before every job anyway.
+5. **The SH2 does not write the cart** (assumed for the new cart too - the user gave no preference): loading into a
+   page = map it into window 1, then the usual Sub-CPU chunk loads (command 46) into `0x200000 + offset`.
 
-## Engine-side work (none started)
+**The design for the game (not built yet):** window 1 = one act period per page - its scene image at `0x200000`
+(at most 1.5 MB: acts use 1.07) and its act file at `0x380000` (where it is today). Time travel = switch window 1 to the
+period's page + cache purge: no CD. 16 MB: page 0 (window 0: the engine + what stays) + 7 pages = the current act's
+four periods + three (the next act's periods, a special stage: 1.6-1.8 MB, fits a page). The title and the menus
+(up to 2.2 MB) keep today's linear layout (window 1 = page 1, the image at `0x080000` across both windows). Needed:
+- **Act images linked for `0x200000`.** The scene image's native scripts (part 18) are SH2 code linked to its place
+  in the cart (`tools/build_game_data.py`, `--section-start=.blob=0x%08X`, today `0x02080000 + part offset`): an
+  image for window 1 is built for `0x02200000 + offset` - a 16 MB disc has its own act images.
+- The engine: `CART_STAGE` (`0x02080000`) becomes a variable (window 1 for acts), the chunk-diff loader per page, a
+  table of which period is in which page, the 68000's act file offset (command 68's COMM8) per page.
+- `SCDDATA.PAK` and the loading picture (cart `0x300000`) are in page 1: in page mode they must be somewhere the
+  engine still sees (window 0's free 1.5 MB) - check what the engine reads from `CART_PACK` after the boot.
+
+## Engine-side work
+
+**Done in R4E:** the Sub-CPU's page switch (above), sh2emu's model of the mapper (`-cart 4|8|16`, `-cartbad P`: a
+page that keeps nothing; a cache line read after a switch without a purge shows as `STALE-READ`), and the Options
+Menu's **CART TEST** (`plat_cart_test`, `cd32x/engine/plat_mars.cpp`): read-only first (window 1 showing page 0 = the
+switch works; page 4 = page 0 = an 8 MB cart; a page showing page 0 is never written), then a 32 KB pattern into each
+of pages 2-7 (2-3) from the test file `KOBOGFX.BIN` (`tools/make_cart_test.py`; file 16, which the Sub-CPU puts at
+`0x200000`), read back by the Sub-CPU through the 68000 and by the SH2 through its cache, and no page showing another's.
+The game's pages 0 and 1 are never written. The result in the Options Menu's two note rows. This is the first thing to
+run on the new cart.
+
+**Still to do:**
 
 - `cd32x/engine/plat_mars.cpp`: a table of what each bank holds (scene, act file, CRCs); `plat_stage_loading` switches
   banks for a resident period instead of loading; the chunk-diff loader writes into the bank the next period will use.
@@ -140,12 +159,11 @@ waste the space a period's image does not fill and cannot share chunks between p
   resume a track at a position: command 45 plays whole tracks only today - a Sub-CPU change (ask first). Each switch
   between music and data costs a seek: a few long bursts, not many short ones.
 - Compression (`tools/build_game_data.py`, `tools/build_mdg.sh` write the files): halves to thirds the bytes read; the
-  unpacker's CPU depends on hurdle 3.
-- `tools/sh2emu/sh2emu.c` must model the mapper (the window, the registers, a read of an unmapped page, a missing cache
-  purge, RV) **before** any disc - the rule is sh2emu first. The PC model (`host/plat_host.cpp`) loads the same way and
-  should follow.
-- Keep it behind an Options Menu switch (`engine/Debug.cpp`, the R4D switches show how), off at power-on, until the
-  console has shown it works.
+  SH2 does not write the cart, so the unpacker would be the Sub-CPU's (a boot-stack change - ask first).
+- sh2emu already models the mapper (above); the page mode needs the engine's half of it modelled the same way in the
+  PC model (`host/plat_host.cpp`) too.
+- Keep it behind a build option or an Options Menu switch (`engine/Debug.cpp`, the R4D switches show how), off at
+  power-on, until the CART TEST has passed on the console.
 
 ## How things are checked here (copy the way R4D was done)
 
@@ -158,11 +176,8 @@ waste the space a period's image does not fill and cannot share chunks between p
 - A delivery = the changed files since the last round in a zip + md5s + the expected md5s of every built file, checked
   by building the previous round's tree + the zip + the user's Makefiles from scratch.
 
-## Questions for the user before designing the software side
+## Questions for the user
 
-1. 8 or 16 MB, and the page size (512 KB pages would match today's map).
-2. Where the bank registers are and which CPU writes them (68000 only? the SH2?).
-3. Can the SH2 write the new cart?
-4. The power-on mapping (should be today's linear 4 MB).
-5. Will the first cart be tested with a small hardware test disc first (a few pages written and read back by both
-   CPUs) before the game uses it? That would be the cheapest first burn.
+Answered (19 Oct): the mapper (above); the power-on mapping (today's 4 MB); the first test on the cart is the CART
+TEST row, before the game uses the pages. Open: can the SH2 write the new cart (no preference given - assume not);
+8 or 16 MB in the end.

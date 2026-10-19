@@ -147,6 +147,7 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `record contents` | a CRC of the first 600 records (option `-reccrc N`). It depends only on the pictures, not on the speed: a speed change that keeps this CRC keeps every picture the same |
 | `controller` | (R4) the pad requests (command 48) the Sub-CPU answered - one a frame |
 | `audio` | (R4) sound effects played (command 48's upper byte; the first 40 are listed as `SUB: sound effect N`) and CD audio commands (45 play, 54 stop: `SUB: CMD 45 play track N`); (R4D) sound banks loaded (command 53: `SUB: CMD 53 load SFX06.BIN -> 28 effects`). An effect number the bank in the PCM chip does not have is the warning `A-SFX` |
+| `cart` | (R4E, with `-cart 8`/`16` or after a page switch) the cart's size, the page switches, the pages the windows show at the end |
 | `second SH2` | (R4D) the jobs it ran for the engine (the `2ND SH2` switch), its instructions outside the loader, the cycles it waited for the bus, its stack's lowest point. "waits in a loop to itself": a loader before R4D (its `secondary()` does nothing) |
 | `pictures` | (R4D) frame buffer swaps - in the 32X picture mode one a picture: how many in the run's last 10 seconds |
 | `underwater` | (R4D) frames with a water line: the 68000's H-int writes the water colours from that line down (the `UNDERWATER` switch) |
@@ -288,6 +289,11 @@ All options go after the build folder.
                again one by one, the old way (the summary's "chunks one by one")
 -oldsub        (R4C) the Sub-CPU as R4B's: no fast command 46 - the SH2 must load everything the old way
 -noslave       (R4D) the second SH2 not run (sh2emu as before R4D)
+-cart N        (R4E) the cart: 4 (default: today's 4 MB, no mapper), 8 or 16 - MicroNut99's page mapper: two 2 MB
+               windows (cart 0x000000 / 0x200000), each one of 8 pages of 2 MB (8 MB: pages 4-7 = 0-3), switched by
+               the Sub-CPU's command 46 with COMM2 = 0xF800 | window << 8 | page; power-on window 0 = page 0,
+               window 1 = page 1. A cache line read after a switch without a purge shows as STALE-READ
+-cartbad P     (R4E) page P keeps nothing written (a broken page: the CART TEST must report it)
 -h             this list
 ```
 
