@@ -228,4 +228,6 @@ page or an act file slot refuse a file bigger than the room (none is today).
 Answered (19 Oct): the mapper (above); the power-on mapping (today's 4 MB); the first test on the cart is the CART
 TEST row, before the game uses the pages. Open: can the SH2 write the new cart (no preference given - assume not);
 8 or 16 MB in the end; does the 4 MB v01 cart use `/TIME` (B31) for anything - R4G writes `0xA130F2` twice at every
-power-on (the 16 MB cart found), which R4D never did (a Fable review of R4G, 19 Oct, raised it).
+power-on (the 16 MB cart found), which R4D never did (a Fable review of R4G, 19 Oct, raised it). **On the console, 19 Oct (the owner's photo):** a disc with the new `sub_main.c` (R4F or the first R4G
+build) booted on the 4 MB cart, and the cart test's page commands were answered: `CART TEST: NO PAGE MAPPER` / `(A 4
+MB CART) - NOTHING WRITTEN`, nothing hung. The `0xF0nn` slot case (the current R4G's 4 MB slot test) is next.
