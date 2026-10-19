@@ -147,7 +147,7 @@ VERDICT           PROBLEMS FOUND - do not burn yet
 | `record contents` | a CRC of the first 600 records (option `-reccrc N`). It depends only on the pictures, not on the speed: a speed change that keeps this CRC keeps every picture the same |
 | `controller` | (R4) the pad requests (command 48) the Sub-CPU answered - one a frame |
 | `audio` | (R4) sound effects played (command 48's upper byte; the first 40 are listed as `SUB: sound effect N`) and CD audio commands (45 play, 54 stop: `SUB: CMD 45 play track N`); (R4D) sound banks loaded (command 53: `SUB: CMD 53 load SFX06.BIN -> 28 effects`). An effect number the bank in the PCM chip does not have is the warning `A-SFX` |
-| `cart` | (R4E, with `-cart 8`/`16` or after a page switch) the cart's size, the page switches, the pages the windows show at the end |
+| `cart` | (R4E, with `-cart 8`/`16` or after a page switch) the cart's size, the page switches, the pages the windows show at the end. The log lists each switch (`SUB: CMD 46 page switch: window 1 -> page 3`) and (R4F) each slot (`SUB: CMD 46 slot 16 (cart 200000)`) |
 | `second SH2` | (R4D) the jobs it ran for the engine (the `2ND SH2` switch), its instructions outside the loader, the cycles it waited for the bus, its stack's lowest point. "waits in a loop to itself": a loader before R4D (its `secondary()` does nothing) |
 | `pictures` | (R4D) frame buffer swaps - in the 32X picture mode one a picture: how many in the run's last 10 seconds |
 | `underwater` | (R4D) frames with a water line: the 68000's H-int writes the water colours from that line down (the `UNDERWATER` switch) |
@@ -200,6 +200,7 @@ Each kind of event is logged at most 4 times per instruction (option `-maxlog`).
 | `FB-NOFM` | the frame buffer was used while the SH2 did not own it | bus conflict |
 | `FB-FIFO-LOST` | words still in the frame buffer's write FIFO when the SH2 gave the frame buffer to the 68000 | lost or late record words |
 | `CART-RV` | the cart was used while the 68000 held it | bus conflict |
+| `CART-W0` | (R4F) window 0 switched to a page whose engine (the code and tables the SH2 runs, cart `0x000000` on) is not page 0's | crash |
 | `SR-HIGH` | engine code masked the vertical-blank interrupt | line 10 freezes |
 | `R-UNDEF` (warning) | a read of memory nothing has written (the frame buffer and SDRAM are not cleared at power-on) | random values |
 | `*** LINE 10 FROZEN` | the sampler stopped, as on the console; the run stops there and prints the registers and the call stack | the console's death signature |
@@ -292,7 +293,10 @@ All options go after the build folder.
 -cart N        (R4E) the cart: 4 (default: today's 4 MB, no mapper), 8 or 16 - MicroNut99's page mapper: two 2 MB
                windows (cart 0x000000 / 0x200000), each one of 8 pages of 2 MB (8 MB: pages 4-7 = 0-3), switched by
                the Sub-CPU's command 46 with COMM2 = 0xF800 | window << 8 | page; power-on window 0 = page 0,
-               window 1 = page 1. A cache line read after a switch without a purge shows as STALE-READ
+               window 1 = page 1. A cache line read after a switch without a purge shows as STALE-READ.
+               (R4F) COMM2 = 0xF000 | slot: the file command 38 opened goes to that 128 KB slot (the BIG CART's
+               engine copy and data pack, through window 1); window 0 switched under the running engine: its page
+               must hold the same engine as page 0 (else CART-W0)
 -cartbad P     (R4E) page P keeps nothing written (a broken page: the CART TEST must report it)
 -h             this list
 ```

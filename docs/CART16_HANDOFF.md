@@ -1,6 +1,6 @@
 # Hand-off: a bigger RAM cart (8 or 16 MB) with bank switching – faster loading, time travel from RAM
 
-Written 17 Oct 2026, after R4D; the cart's spec and the CART TEST added 19 Oct (R4E). For the next AI helping with this. The person you work with is designing a new RAM cart
+Written 17 Oct 2026, after R4D; the cart's spec and the CART TEST added 19 Oct (R4E); the 16 MB game mode (R4F, `BIG CART`) the same day. For the next AI helping with this. The person you work with is designing a new RAM cart
 for this port (Sonic CD 2011, RSDKv3, on Sega CD + 32X + RAM cart). They own the hardware and burn the discs; you build
 and check everything before a disc is burned.
 
@@ -11,7 +11,8 @@ and check everything before a disc is burned.
 - "There is no reason why the music cannot be delayed and/or faded out and back in to load data as a strategy."
 - 8 MB or 16 MB? With the cart's 2 MB pages (below): 16 MB holds all four periods of the current act (a page each)
   and three more pages; 8 MB holds three of the four. Recommended 16 MB. Both need bank switching: the SH2 sees only
-  4 MB of cart. **The bank switching is "the next big hurdle".**
+  4 MB of cart. **The bank switching is "the next big hurdle".** (As built in R4F - pairs of pages, no new scene
+  images - 16 MB holds an act's four periods, 8 MB two: below.)
 - 19 Oct: the user is not testing on the console any more unless it is needed (a 30-year-old single-speed drive, lost
   hardware): build as far as the emulator and the PC model can prove, one disc when it is worth it.
 
@@ -117,26 +118,35 @@ What follows from it:
    number to `0xA130F0`/`F2` is the upper-byte write. **No `hw_md.s` change.**
 2. **The Sub-CPU sends it** when the SH2 asks: R4E added it to command 46 - `COMM2 = 0xF800 | window << 8 | page`
    (a fast run's COMM2 is at most `0x03FF`), reply COMM12 = 0. No new command number. (`cd32x/sub_main.c`.)
-3. **Window 0 never switches**: the engine's code runs from it (cart `0x000000-0x07FFFF`). Window 1 is the switchable
-   one.
+3. **Window 0 switches only to a page holding the same engine**: the engine's code runs from it (cart
+   `0x000000-0x07FFFF`). R4E's test never switches it; R4F's pairs do, each pair's page 2k with its own copy of the
+   engine, compared byte for byte with the running one before the first switch (sh2emu: `CART-W0`).
 4. **While RV = 1 the SH2 must not touch the cart** - code or data. The engine's command waits (`sd_cmd`, in SDRAM)
    already work that way for chunk loads. After the switch the SH2 purges its cache (`*(volatile unsigned char
    *)0xFFFFFE92 = 0x11`); the second SH2 purges before every job anyway.
 5. **The SH2 does not write the cart** (assumed for the new cart too - the user gave no preference): loading into a
    page = map it into window 1, then the usual Sub-CPU chunk loads (command 46) into `0x200000 + offset`.
 
-**The design for the game (not built yet):** window 1 = one act period per page - its scene image at `0x200000`
-(at most 1.5 MB: acts use 1.07) and its act file at `0x380000` (where it is today). Time travel = switch window 1 to the
-period's page + cache purge: no CD. 16 MB: page 0 (window 0: the engine + what stays) + 7 pages = the current act's
-four periods + three (the next act's periods, a special stage: 1.6-1.8 MB, fits a page). The title and the menus
-(up to 2.2 MB) keep today's linear layout (window 1 = page 1, the image at `0x080000` across both windows). Needed:
-- **Act images linked for `0x200000`.** The scene image's native scripts (part 18) are SH2 code linked to its place
-  in the cart (`tools/build_game_data.py`, `--section-start=.blob=0x%08X`, today `0x02080000 + part offset`): an
-  image for window 1 is built for `0x02200000 + offset` - a 16 MB disc has its own act images.
-- The engine: `CART_STAGE` (`0x02080000`) becomes a variable (window 1 for acts), the chunk-diff loader per page, a
-  table of which period is in which page, the 68000's act file offset (command 68's COMM8) per page.
-- `SCDDATA.PAK` and the loading picture (cart `0x300000`) are in page 1: in page mode they must be somewhere the
-  engine still sees (window 0's free 1.5 MB) - check what the engine reads from `CART_PACK` after the boot.
+**The design built in R4F (`BIG CART`, `cd32x/engine/plat_mars.cpp`, "THE BIG CART"):** the first idea - acts
+linked for window 1 - needs a second set of scene images (the native scripts are linked to `0x02080000 + offset`) and
+moves `CART_STAGE`. R4F does without: the cart is used as **pairs of pages**, pair k = page 2k in window 0 + page
+2k + 1 in window 1, each pair laid out exactly as today's 4 MB cart (the engine at `0x000000`, the scene image at
+`0x080000`, `SCDDATA.PAK` with the loading picture at `0x300000`, the act file at `0x380000`). Pair 0 = pages 0/1 = the
+cart at power-on. 16 MB = four pairs, 8 MB = two.
+- A scene a pair holds: both windows switched to it (window 1 first, then window 0 - the same engine code in both
+  pages, so the SH2 runs on; its cache purged after each). No CD read; the screen stays black for the change.
+- A new act scene: into a pair holding none of the same act's periods (the least recently used); if every other pair
+  holds one (8 MB), the least recently used of them - never the pair in use, so the period being left stays in.
+  An act = (player, zone, act): Sonic's and Tails's images are different scenes.
+- Other scenes (the title, the menus, the special stages, the dev menu's font) use the pair in use.
+- A pair used the first time: `SONICCD.PAK` (file 21) into page 2k and `SCDDATA.PAK` (22) into page 2k + 1, each
+  through window 1 (command 38, then 46 `0xF000 | slot`: slot 16 = `0x200000`, 24 = `0x300000`, then the usual
+  chunk runs); the engine copy compared with window 0 before the pair is used. About 520 KB more to read the first
+  time (396 KB + 127 KB: about 3.5 s at 150 KB/s, plus seeks - computed, not measured), never again until power-off.
+- Each pair keeps its own scene number, act file number and size; the chunk-diff loader works per pair unchanged
+  (it compares with the image in the pair's own page).
+- The Options Menu's last row, `BIG CART`: A runs the cart test (R4E's) and, when it passes, turns the mode on (16 MB
+  or 8 MB); A again turns it off (the next scene load goes back to pages 0/1). Off at power-on: the game is R4E's.
 
 ## Engine-side work
 
@@ -149,10 +159,12 @@ of pages 2-7 (2-3) from the test file `KOBOGFX.BIN` (`tools/make_cart_test.py`; 
 The game's pages 0 and 1 are never written. The result in the Options Menu's two note rows. This is the first thing to
 run on the new cart.
 
+**Done in R4F:** the pairs (above) - `pair_for`, `pair_prepare`, `pair_use`, `scene_resident` in `plat_mars.cpp`;
+`BIG CART` in `engine/Debug.cpp`; the Sub-CPU's slot command (command 46, COMM2 `0xF000 | slot`: `cur_img` = slot);
+sh2emu's slot command and its `CART-W0` check. Checked in sh2emu only (docs/R4F_NOTES.md).
+
 **Still to do:**
 
-- `cd32x/engine/plat_mars.cpp`: a table of what each bank holds (scene, act file, CRCs); `plat_stage_loading` switches
-  banks for a resident period instead of loading; the chunk-diff loader writes into the bank the next period will use.
 - Prefetch in the moments the game already has: the act's title card (load all periods), the results tally (the next
   act, a special stage when the big ring is possible), death and restart, pause, the warp itself (each period has its
   own music track, so the track changes there anyway). Fading the music out for a data burst needs the Sub-CPU to
@@ -160,10 +172,9 @@ run on the new cart.
   between music and data costs a seek: a few long bursts, not many short ones.
 - Compression (`tools/build_game_data.py`, `tools/build_mdg.sh` write the files): halves to thirds the bytes read; the
   SH2 does not write the cart, so the unpacker would be the Sub-CPU's (a boot-stack change - ask first).
-- sh2emu already models the mapper (above); the page mode needs the engine's half of it modelled the same way in the
-  PC model (`host/plat_host.cpp`) too.
-- Keep it behind a build option or an Options Menu switch (`engine/Debug.cpp`, the R4D switches show how), off at
-  power-on, until the CART TEST has passed on the console.
+- The engine copy from the CD costs about 2.6 s per new pair (396 KB at 150 KB/s): the 68000 could copy page 0's engine into page 2k
+  (`CHILLY_RV_MEMCPY` from `0x400000` to `0x600000`, in 32 KB pieces) - a Sub-CPU change, ask first.
+- The PC model (`host/plat_host.cpp`) has no cart: `BIG CART` stays off there.
 
 ## How things are checked here (copy the way R4D was done)
 

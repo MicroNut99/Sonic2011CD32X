@@ -2166,10 +2166,11 @@ static bool cart_same(unsigned int a, unsigned int b, unsigned int bytes) /* two
    (0x300000) and the act file (0x380000). Pair 0 is pages 0 and 1: the cart at power-on, as the 4 MB game. A scene
    another pair holds is a switch of both windows (and the cache purge): no CD read. A new scene of an act goes to a
    pair that holds none of that act's time periods (the least recently used), so the act's periods stay in: present,
-   past and the futures each in its pair, the warps between them without the CD. Other scenes (the title, the menus,
-   the special stages) take the pair in use. A pair used the first time gets the engine's copy and the data pack
-   through window 1 (the engine's copy compared with the running engine byte for byte before window 0 shows it). The
-   scene images are the 4 MB game's: nothing moves, nothing is linked again. */
+   past and the futures each in its pair, the warps between them without the CD (when every other pair holds one of
+   the act's periods - 8 MB, two pairs - the least recently used of them: the period being left stays in). Other
+   scenes (the title, the menus, the special stages) take the pair in use. A pair used the first time gets the engine's
+   copy and the data pack through window 1 (the engine's copy compared with the running engine byte for byte before
+   window 0 shows it). The scene images are the 4 MB game's: nothing moves, nothing is linked again. */
 #define CART_PAIRS_MAX 4
 struct CartPair {
     unsigned int scene, mdg, mdgBytes, used; /* (the pair in use: SCD_BOOT_RECORD[5], mdgInCart, mdgBytes) */
@@ -2256,12 +2257,16 @@ static void pair_for(unsigned int file) /* before a scene loads: the pair it goe
         const unsigned int g = scene_group(file);
         k                    = pairNow;
         if (g && scene_group(pair_scene(pairNow)) == g) { /* the pair in use holds another period of this act: keep it */
-            int best = -1;
-            for (int j = 0; j < cartPairs; ++j)
-                if (j != pairNow && scene_group(pair_scene(j)) != g && (best < 0 || cartPair[j].used < cartPair[best].used))
+            int best = -1, any = -1; /* the least recently used pair without this act; else the least recently used one */
+            for (int j = 0; j < cartPairs; ++j) {
+                if (j == pairNow)
+                    continue;
+                if (scene_group(pair_scene(j)) != g && (best < 0 || cartPair[j].used < cartPair[best].used))
                     best = j;
-            if (best >= 0)
-                k = best;
+                if (any < 0 || cartPair[j].used < cartPair[any].used)
+                    any = j;
+            }
+            k = best >= 0 ? best : any; /* (8 MB: present and future in, the past out - the period left is kept) */
         }
     }
     if (k != pairNow && (cartPair[k].ready || pair_prepare(k)))
@@ -2270,6 +2275,8 @@ static void pair_for(unsigned int file) /* before a scene loads: the pair it goe
 }
 static bool scene_resident(unsigned int file, unsigned int mdg) /* the scene and its act file in the cart already */
 {
+    if (!cartPairs && pairNow != 0) /* the switch turned off: the next load goes back to pair 0 */
+        return cartPair[0].scene == file && cartPair[0].mdg == mdg;
     if (file == SCD_BOOT_RECORD[5] && mdg == mdgInCart)
         return true;
     const int k = cartPairs ? pair_holding(file) : -1;
