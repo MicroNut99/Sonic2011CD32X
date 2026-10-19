@@ -62,8 +62,8 @@ something else, don't run it there.) After a test with problems, press reset bef
 | `CART TEST`, `-cart 8` | `CART 8 MB: PAGES 2-3 OK` / `PAGE SWITCH OK, GAME PAGES UNTOUCHED`; 9 page switches |
 | `CART TEST`, `-cart 16` | `CART 16 MB: PAGES 2-7 OK` / `PAGE SWITCH OK, GAME PAGES UNTOUCHED`; 21 page switches |
 | `CART TEST`, `-cart 16 -cartbad 5` | `CART 16 MB: OK 2 3 4 6 7` / `BAD 5` |
-| `CART TEST` on 16 MB, then `START GAME` | @@CTGAME@@ |
-| Power-on to Palmtree Panic 1 (`-cart 16`, the test not run) | @@OFF16@@ |
+| `CART TEST` on 16 MB, then `START GAME` | Palmtree Panic 1 plays (window 1 back on page 1): the game unaffected by the test |
+| Power-on to Palmtree Panic 1 (`-cart 16`, the test not run) | as R4D: the title, the main menu, save select, Palmtree Panic 1; 1 save written; no page switch |
 
   No `STALE-READ` (the cache purge after each switch works) and no `CART-RV` (the SH2 off the cart while the 68000
   holds it) in any run. sh2emu found one real bug on the way: the test's first page switch was written while the pad
@@ -91,7 +91,7 @@ sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_
 mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
 make -C cd32x ENGINE=1 START="0 0" ROUND=R4E
 python3 tools/build_audio_disc.py cd32x/build_engine/SCDENG.bin game_data/music
-md5sum -c --quiet R4E_expected.txt && echo "R4E_expected: all @@NEXP@@ OK"
+md5sum -c --quiet R4E_expected.txt && echo "R4E_expected: all 340 OK"
 grep -ac "BUILD: SONIC CD R4E GAME START" cd32x/build_engine/disc/APP.BIN       # 1: the round's label is in
 grep -ac "SH2-VR4D" cd32x/build_engine/disc/APP.BIN                              # 1: the SH2 loader (unchanged since R4D)
 ```
