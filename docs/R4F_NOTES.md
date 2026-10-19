@@ -98,14 +98,15 @@ place, so in these runs a scene that comes back reads its act file again; the ti
 - **The Sub-CPU's addition:** `sub_main.c` checked here with clang for the 68000 (the C only, no warnings - not
   assembled: your build uses gcc). Not run: sh2emu plays the Sub-CPU's commands itself (its model of `0xF0nn` does
   what the three lines do: the slot, COMM12 = 0, COMM0 = 0).
-- **The delivery on its own:** R4E's files + `R4F_files.zip` + your Makefiles, built with the commands below (all but
+- **The delivery on its own:** R4D's files (your folder as it is) + `R4F_files.zip` + your Makefiles, built with the commands below (all but
   the 68000 part): every one of the 340 files in `R4F_expected.txt` the same.
 - **Not run here:** your cart (the page writes through the 32X adapter, the pages themselves), the Sub-CPU's and the
   68000's code on the console, the CD's real speed (sh2emu reads the disc faster: its load times are not the console's).
 
 ## Build
 
-In WSL, as R4E. The only difference: `ROUND=R4F`.
+In WSL, as R4E. `R4F_files.zip` holds every file changed since R4D - R4E's too: your folder is at R4D (`R4E_files.zip`
+was not unpacked, and need not be). The only difference from R4E's commands: `ROUND=R4F`.
 
 ```bash
 cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
