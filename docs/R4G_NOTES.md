@@ -2,8 +2,9 @@
 
 **Goal of the R4G disc:** with MicroNut99's 16 MB cart (battery-backed: what is in it stays through power-off), the
 act you play is in the cart **with every time period and the next act's start**, so warps and the next act need no
-CD, and after a power-off the game is **ready to play** - unless you continue a save in another act. Nothing changes
-on the 4 MB cart. Checked in sh2emu only (its model of the mapper, R4E, and now of the battery).
+CD, and after a power-off the game is **ready to play** - unless you continue a save in another act. On the 4 MB
+cart the game is R4D's, plus two writes to the page register when the title starts (below). Checked in sh2emu only
+(its model of the mapper, R4E, and now of the battery).
 
 R4F's "pairs" are gone: they held 4 scenes, and the boot loader's title took the first one at every power-on.
 
@@ -35,15 +36,24 @@ R4F's "pairs" are gone: they held 4 scenes, and the boot loader's title took the
   cart, so a warp back to that first scene is a page switch.
 - **4 MB cart, or `BIG CART` off:** none of this - the game is R4E's (= R4D's).
 
-The 16 MB cart is found at power-on (read only: window 1 switched to page 0, then to page 4, compared, back to page
-1). On the 4 MB cart these are two writes to the page register `0xA130F2` (window 1 to page 0, back to page 1), as
-R4E's `CART TEST` does: a cart without the mapper ignores them.
+The 16 MB cart is found when the title starts (read only: window 1 switched to page 0, then to page 4, compared, back
+to page 1). **On the 4 MB cart these are two writes R4D never made:** to the page register `0xA130F2` (the even byte
+in the cart's `/TIME` area, `0xA13000-0xA130FF`; window 1 to page 0, back to page 1), as R4E's `CART TEST` did - but
+now at every power-on, not only when you choose the test. A cart that does not use `/TIME` ignores them. Whether your
+4 MB cart (v01) uses `/TIME` for anything could not be checked here: the 16 MB repo has only v01's edge connector,
+where the `/TIME` pad (B31) is a named net, not its board. You designed it - if v01 does use `/TIME`, keep R4D on the
+4 MB cart.
 
 ## The Options Menu
 
 The last row reads `BIG CART   16 MB` (or `8 MB`) when the cart was found, `OFF` otherwise. A turns it off (the 4 MB
 way); A again runs R4E's cart test and, if it passes, turns it on. The test writes into pages 2-7, so the act pages
 are looked up again at the next act.
+
+The test does not run while page 0 holds an act scene (`BIG CART` was off and you played an act, or a title demo is
+playing): an act page holding the same scene would look like page 0 itself. The note rows then read `CART TEST: AN ACT
+IS IN PAGE 0` / `RUN IT FROM THE TITLE - NOTHING DONE`, and the row stays `OFF`: open the menu from the title screen
+and try again.
 
 ## The boot stack
 
@@ -95,9 +105,12 @@ SH2EMU
 1. Burn R4G (an 80-minute CD-R).
 2. Power on. With the 16 MB cart the Options Menu's last row reads `BIG CART   16 MB` (A + B + C + Start, Up twice to
    see it). Play as always: title, `START GAME`, a save.
-3. **The first act start loads longer than today**, once: the act's four periods and the next act's start, with
-   the loading picture's bar (the first time ever also each page's copy of the engine). Then warp: past, present -
-   no loading picture, no disc, the act back after a moment.
+3. **An act's start loads much longer than today**: the act's other three periods and the next act's start, each an
+   image of about 1.1 MB and an act file of about 0.43 MB - up to about 6 MB, about 40 s at the CD's 150 KB/s plus the
+   seeks (computed, not measured; less when a page already holds parts of the same zone). The first time ever also
+   each act page's copy of the engine (5 x 400 KB, about 13 s more). The loading picture's bar shows it. Then warp:
+   past, present - no loading picture, no disc, the act back after a moment. The next act starts the same way, no
+   disc for its own scene (Time Attack too: each new act there pays its preload, the next act's start included).
 4. Power off, power on, continue the same save: the act starts after the usual boot without its scene loads (a few
    seconds of checking the pages, the loading picture's bar standing).
 5. Run the cart test too if you like (the row, A to turn it off, A again): `CART 16 MB: PAGES 2-7 OK`. It writes into

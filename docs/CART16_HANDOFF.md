@@ -186,7 +186,9 @@ sh2emu's slot command and its `CART-W0` check. Checked in sh2emu only (docs/R4F_
 
 **Done in R4G:** the preload (above): `big_prepare`, `big_preload`, `big_identify`, `big_detect` in `plat_mars.cpp`;
 `tools/build_preload.py`; sh2emu `-cartkeep FILE` (the cart's 16 MB kept between runs: the battery). The `CART TEST`
-tells an alias of page 0 by the engine and the scene image together (an act page has the engine's copy).
+tells an alias of page 0 by the engine and the scene image together (an act page has the engine's copy), and does
+not run while page 0 holds an act scene (an act page with the same scene would look like page 0). Loads into an act
+page or an act file slot refuse a file bigger than the room (none is today).
 
 **Still to do:**
 
@@ -220,4 +222,5 @@ tells an alias of page 0 by the engine and the scene image together (an act page
 
 Answered (19 Oct): the mapper (above); the power-on mapping (today's 4 MB); the first test on the cart is the CART
 TEST row, before the game uses the pages. Open: can the SH2 write the new cart (no preference given - assume not);
-8 or 16 MB in the end.
+8 or 16 MB in the end; does the 4 MB v01 cart use `/TIME` (B31) for anything - R4G writes `0xA130F2` twice at every
+power-on (the 16 MB cart found), which R4D never did (a Fable review of R4G, 19 Oct, raised it).
