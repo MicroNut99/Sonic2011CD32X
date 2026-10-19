@@ -2278,6 +2278,8 @@ void plat_cart_test()
 {
     char *d0 = scdMenuNote[0], *e0 = scdMenuNote[0] + SCD_MENU_NOTE - 1;
     char *d1 = scdMenuNote[1], *e1 = scdMenuNote[1] + SCD_MENU_NOTE - 1;
+    comm_idle(); /* the pad request (command 48, not waited for) done first: a command written while it runs is lost
+                    (sh2emu: the first page switch never reached the Sub-CPU) */
     if (sd_page(1, 0) < 0) {
         d0  = note_put(d0, "CART TEST: NO ANSWER (SUB-CPU)", e0);
         *d0 = 0, *d1 = 0;

@@ -2517,7 +2517,9 @@ static void sub_poll(void)
     if (c == 46) {
         lat       = 200000;
         rv_active = 1;
-        if ((COMM(2) & 0xFF00) && !opt_oldsub) /* REV R4C: a run - more data, the same one read (shortened here too) */
+        if ((COMM(2) & 0xF800) == 0xF800 && !opt_oldsub) /* REV R4E: a page switch - three 68000 commands */
+            lat = 60000;
+        else if ((COMM(2) & 0xFF00) && !opt_oldsub) /* REV R4C: a run - more data, the same one read (shortened here too) */
             lat = 120000u * (u64)(((COMM(2) >> 8) & 0xFF) + 1) + 80000u;
     }
     if (c == 38)
