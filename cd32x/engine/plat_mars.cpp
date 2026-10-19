@@ -2461,6 +2461,9 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
                 }
             if (i >= bigN)
                 break;
+            if (!start && big_scene_of(i) && scene_group(big_scene_of(i)) == g)
+                break; /* (8 MB: one act page) it holds this act's start: it stays, this period loads in page 0 as on the
+                          4 MB cart */
             at[j] = i;
             used |= 1u << i;
             if (j) {
@@ -2473,7 +2476,8 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
         barImgTo = 4, barMdgFrom = 28; /* the bar: the scene 0-4, the preload 4-28, its act file 28-32 */
     splash_part(0, 0);                 /* (an engine copy loaded now: no share of the bar) */
     if (at[0] < 0 || !big_engine(at[0])) {
-        STATE(0x5CB3); /* the scene in page 0, as the 4 MB game */
+        if (at[0] >= 0)
+            STATE(0x5CB3); /* the act page not usable: the scene in page 0, as the 4 MB game */
         for (int i = 0; i < bigN; ++i) bigTodo[i] = 0;
         barImgTo = barMdgFrom = 20;
         big_show(-1);

@@ -30,7 +30,9 @@ R4F's "pairs" are gone: they held 4 scenes, and the boot loader's title took the
   every power-on) by its header's fingerprint, and checks it whole with the loader's checksum. A page that was half
   loaded when the power went off does not match and is loaded again. A few seconds of checking, no disc.
 - **Title demos** play in page 0, as on the 4 MB cart: they never push your act out.
-- **8 MB cart:** one act page (2), its act file in page 3: the scene you play stays through a power-off.
+- **8 MB cart:** one act page (2), its act file in page 3: it holds the act's first scene (the one you start or
+  continue in), which stays there - through a power-off too; the act's other periods load in page 0 as on the 4 MB
+  cart, so a warp back to that first scene is a page switch.
 - **4 MB cart, or `BIG CART` off:** none of this - the game is R4E's (= R4D's).
 
 The 16 MB cart is found at power-on (read only: window 1 switched to page 0, then to page 4, compared, back to page

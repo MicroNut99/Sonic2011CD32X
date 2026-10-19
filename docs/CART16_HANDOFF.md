@@ -145,7 +145,8 @@ power-on the first act scene looks every act page and slot up in the preload tab
 at every power-on) and checks it whole; a page loaded halfway when the power went off is loaded again, in full (its
 header's chunk list is not trusted). Found at power-on, read only (window 1 to page 0 and page 4, compared with
 window 0 at the engine's code and at the scene image's header). Only the commands R4E/R4F added (`0xF8nn` page,
-`0xF0nn` slot) besides 38 and 46. The rest of this section is R4F's design, kept for the record.
+`0xF0nn` slot) besides 38 and 46. 8 MB: one act page (2, its act file in page 3) for the act's first
+scene; the act's other periods load in page 0 as on the 4 MB cart. The rest of this section is R4F's design, kept for the record.
 
 **The design built in R4F (`BIG CART`, `cd32x/engine/plat_mars.cpp`, "THE BIG CART" - replaced by R4G):** the first idea - acts
 linked for window 1 - needs a second set of scene images (the native scripts are linked to `0x02080000 + offset`) and
