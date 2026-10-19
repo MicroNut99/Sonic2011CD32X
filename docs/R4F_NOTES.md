@@ -63,7 +63,45 @@ The last row of the Options Menu (A + B + C + Start; from `START GAME`, Up twice
 
 ## Checked before burning
 
-RESULTS
+- **sh2emu** (its model of the mapper: `-cart 4 / 8 / 16`), on the build made from scratch with the commands below -
+  `VERDICT no problems found` in every run, no `STALE-READ`, no `CART-RV`, no `CART-W0` (sh2emu's new check: window 0
+  switched to a page whose engine is not page 0's):
+
+**Real time warps** (Palmtree Panic 1 from `STAGE SELECT` with `DEMO PAD` on; each warp started the game's own way -
+`Warp.Destination` and `Warp.Timer` set while the scripted pad runs - the light flash, then the load):
+
+| Warp | 16 MB | 8 MB |
+|---|---|---|
+| present → past | a new pair (1): the engine copy (checked) and `SCDDATA.PAK`, window 0 to page 2, then `L1S001.IMG` and `G1S001.MDG` | the same |
+| past → present | **both windows to pair 0: no file read at all** (not the scene, not the act file); the act runs 63 frames later | the same |
+| present → bad future | a new pair (2): the engine copy and `SCDDATA.PAK`, window 0 to page 4, then `L1S003.IMG` and `G1S003.MDG` | into pair 1 (the past goes, the present stays): `L1S003.IMG` and `G1S003.MDG` |
+| future → present | **switch to pair 0: no file read** | the same |
+
+  A fifth warp (to the past again) did not start in that scripted run (where the scripted pad had Sonic at the time),
+  so it is not in the table. 63 frames (about a second) is the engine's own stage set-up; on the console the switch
+  adds the two page writes and nothing else - no CD.
+
+**Through the Options Menu** (A + B + C + Start, `STAGE SELECT` each time - the menu loads its font into the act file's
+place, so in these runs a scene that comes back reads its act file again; the time warps above do not):
+
+| Run | Result |
+|---|---|
+| 16 MB: `BIG CART` → `16 MB`; present, past, good future, bad future of Palmtree Panic 1, then present, good future, past, bad future | the first four each fill a pair (pairs 0-3, window 0 to pages 0 / 2 / 4 / 6); the last four: window switches, **no scene image read**. The pictures: the right period each time |
+| 16 MB: present, past, Palmtree Panic 2 present, 2 past, 1 present, 2 present, then `BIG CART` off, 1 past | Palmtree Panic 2 present into the pair in use (a new act), 2 past into a new pair; 1 present still in pair 0 (switch); 2 present still in pair 1 (switch); off: back to pages 0 / 1, the past loaded there as the 4 MB game does. Window 0 page 0, window 1 page 1 at the end |
+| 8 MB: `BIG CART` → `8 MB`; present, past, present, good future, present, past | two pairs: the present stays in pair 0, the past and the future take turns in pair 1 |
+| 4 MB (today's cart): `BIG CART` | `CART TEST: NO PAGE MAPPER`, the row stays `OFF`; the stages load as R4E's (the test's two page commands only) |
+| 16 MB, Tails: Sonic's present, Tails's present, past, present, Sonic's present | Tails's acts are other scenes (another act for the pairs): the same behaviour |
+| Power-on to Palmtree Panic 1, `BIG CART` not touched (`-cart 16`) | as R4E: the same pictures (record CRC `2F19502C`, as R4E's run), the same loads (39 runs, 153 chunks + 9 one by one), 1 save, **no page switch** |
+
+  sh2emu found its own bug on the way: after a page switch it still took the old scene's native scripts for the code
+  (`EXEC OUTSIDE CODE` when the engine ran the other pair's scripts); it now reads them again after every switch.
+- **The Sub-CPU's addition:** `sub_main.c` checked here with clang for the 68000 (the C only, no warnings - not
+  assembled: your build uses gcc). Not run: sh2emu plays the Sub-CPU's commands itself (its model of `0xF0nn` does
+  what the three lines do: the slot, COMM12 = 0, COMM0 = 0).
+- **The delivery on its own:** R4E's files + `R4F_files.zip` + your Makefiles, built with the commands below (all but
+  the 68000 part): every one of the 340 files in `R4F_expected.txt` the same.
+- **Not run here:** your cart (the page writes through the 32X adapter, the pages themselves), the Sub-CPU's and the
+  68000's code on the console, the CD's real speed (sh2emu reads the disc faster: its load times are not the console's).
 
 ## Build
 
@@ -83,12 +121,29 @@ sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_
 mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
 make -C cd32x ENGINE=1 START="0 0" ROUND=R4F
 python3 tools/build_audio_disc.py cd32x/build_engine/SCDENG.bin game_data/music
-md5sum -c --quiet R4F_expected.txt && echo "R4F_expected: all EXPECTEDCOUNT OK"
+md5sum -c --quiet R4F_expected.txt && echo "R4F_expected: all 340 OK"
 grep -ac "BUILD: SONIC CD R4F GAME START" cd32x/build_engine/disc/APP.BIN       # 1: the round's label is in
 grep -ac "SH2-VR4D" cd32x/build_engine/disc/APP.BIN                              # 1: the SH2 loader (unchanged since R4D)
 ```
 
-SH2EMU
+Then sh2emu, before burning - the power-on run (as R4E), then `BIG CART` against the 16 MB model (present, past,
+present):
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+gcc -O2 -o /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu.c
+rm -f /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 6000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -bram /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin -shot 5800 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 4000 -pad "1300:ABCS,1310:-,1450:U,1460:-,1470:U,1480:-,1500:A,1510:-,1600:D,1610:-,1630:D,1640:-,1660:D,1670:-,1700:A,1710:-,1730:A,1740:-,1760:S,1770:-,2200:ABCS,2210:-,2350:D,2360:-,2380:A,2390:-,2410:A,2420:-,2440:D,2450:-,2470:S,2480:-,3100:ABCS,3110:-,3250:D,3260:-,3280:A,3290:-,3310:A,3320:-,3340:S,3350:-" -cart 16 -shot 2170 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_big1.bmp -shot 3070 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_big2.bmp -shot 3970 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_big3.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_big.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_big.txt
+grep -E "window 0|open L1S" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_big.txt
+```
+
+The first: `VERDICT no problems found`, `backup RAM SONICCD32X_: 3 loads, 1 saves`, Palmtree Panic 1 in the picture.
+The second: `VERDICT no problems found`, `cart 16 MB (page mapper), 28 page switches; window 0 page 0, window 1 page 1
+at the end`; the grep: `open L1S000.IMG`, `window 0 -> page 2`, `open L1S001.IMG`, `window 0 -> page 0` - and no
+third `open L1S...` (the present came back from pair 0). The pictures: Palmtree Panic 1 present, past, present.
 
 ## When the new cart exists
 
