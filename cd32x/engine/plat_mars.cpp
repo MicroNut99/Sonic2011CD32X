@@ -2274,6 +2274,8 @@ static int big_file(unsigned short number, unsigned int at) /* a whole file to c
     const unsigned int len = SC_COMM8_32;
     if ((int)len <= 0)
         return -1;
+    if (len > 0x80000u)
+        return 1; /* more than its 512 KB slot: not loaded */
     if (sd_slot(at >> 17) < 0)
         return 1;
     loadLen            = len;
@@ -2606,7 +2608,9 @@ static int scene_load_at(unsigned int file, unsigned int base, int barFrom, int 
         SC_COMM2 = (unsigned short)file;
         r        = sd_cmd(38) < 0 ? -2 : (int)SC_COMM8_32 <= 0 ? -1 : 0;
         if (r == 0) {
-            loadLen     = SC_COMM8_32;
+            loadLen = SC_COMM8_32;
+            if (loadLen > 0x180000u)
+                return 1; /* more than an act page holds (0x080000-0x1FFFFF): not loaded */
             SC_COMM8_32 = loadLen;
             r           = sd_slot(base >> 17) < 0 ? -2 : 0;
             SC_COMM2    = 0;
@@ -2746,6 +2750,16 @@ int plat_cart_test() /* the cart's size if its pages work (16, 8 MB), else 0 - R
                     (sh2emu: the first page switch never reached the Sub-CPU) */
     if (bigN)
         big_show(-1); /* REV R4G: pages 0 and 1 (the menu's text is in the VDP already) */
+    if (scene_group(SCD_BOOT_RECORD[5])) { /* REV R4G: page 0 holds an act scene (BIG CART was off, or a title demo
+                                              plays): an act page holding the same scene would look like page 0 itself
+                                              (the same engine, the same image) - the test from the title, nothing done */
+        char *d0 = scdMenuNote[0], *e0 = scdMenuNote[0] + SCD_MENU_NOTE - 1;
+        char *d1 = scdMenuNote[1], *e1 = scdMenuNote[1] + SCD_MENU_NOTE - 1;
+        d0  = note_put(d0, "CART TEST: AN ACT IS IN PAGE 0", e0);
+        d1  = note_put(d1, "RUN IT FROM THE TITLE - NOTHING DONE", e1);
+        *d0 = 0, *d1 = 0;
+        return 0;
+    }
     const int mb = cart_test();
     bigW1        = 1; /* (the test leaves window 1 on page 1) */
     big_forget();     /* it wrote into pages 2-7: what the act pages hold is looked up again */
