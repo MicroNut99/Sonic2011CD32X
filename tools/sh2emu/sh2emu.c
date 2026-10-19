@@ -2098,6 +2098,8 @@ static int opt_noslave = 0;          /* REV R4D */
 static int opt_oldsub = 0;           /* -oldsub: a Sub-CPU program without the fast command 46 (R4B's): a run's COMM2 is
                                         taken as one chunk number past the file's end - nothing copied, COMM8 untouched */
 static const char *opt_bram = 0;     /* -bram FILE: the backup RAM's SONICCD32X_ file, kept between runs */
+static const char *opt_cartfile = 0; /* REV R4G: -cartkeep FILE: the cart's RAM (16 MB, battery-backed) read at power-on
+                                        if FILE exists, written at the end of the run - a power cycle */
 static u8 bram_buf[512];             /* the Sub-CPU's buffer (BRAM_BYTES) */
 static int bram_file_ok = 0;         /* the file exists in the (modelled) backup RAM */
 static u64 bram_loads, bram_saves, bram_words;
@@ -3275,8 +3277,21 @@ static void parse_layout(void)
     if (sdt_hi)
         printf("layout: engine code in SDRAM (.sdtext) %08X-%08X (%u bytes)\n", sdt_lo, sdt_hi, sdt_hi - sdt_lo);
 }
+static void cart_keep_save(void) /* REV R4G: -cartkeep - the cart's RAM as the battery keeps it (the run's end = power off) */
+{
+    if (!opt_cartfile)
+        return;
+    FILE *f = fopen(opt_cartfile, "wb");
+    if (!f || fwrite(cart, 1, CART_PHYS, f) != CART_PHYS)
+        printf("-cartkeep: %s could not be written\n", opt_cartfile);
+    else
+        printf("-cartkeep: the cart's 16 MB written to %s (the power off)\n", opt_cartfile);
+    if (f)
+        fclose(f);
+}
 static void summary(void)
 {
+    cart_keep_save();
     printf("\n==================== SUMMARY ====================\n");
     printf("build folder      %s\n", opt_dir);
     printf("run               %d frames (%.1f s of console time)%s%s\n", frame_no(), frame_no() / 60.0,
@@ -3459,7 +3474,9 @@ int main(int argc, char **argv)
                    "  -oldsub        (R4C) a Sub-CPU program without the fast command 46 (R4B's): the SH2 must load\n"
                    "                 everything the old way\n"
                    "  -bram FILE     (R4C) the backup RAM's SONICCD32X_ file (512 bytes): read by command 56, written by\n"
-                   "                 command 59 - kept between runs (a reset with the save in place)\n");
+                   "                 command 59 - kept between runs (a reset with the save in place)\n"
+                   "  -cartkeep FILE (R4G) the cart's RAM (16 MB): read at power-on if FILE is there, written at the end\n"
+                   "                 of the run - MicroNut99's battery-backed cart through a power cycle\n");
             return 0;
         }
         if (argv[i][0] != '-') {
@@ -3581,6 +3598,8 @@ int main(int argc, char **argv)
             opt_cartbad = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-oldsub")) /* REV R4C */
             opt_oldsub = 1;
+        else if (!strcmp(argv[i], "-cartkeep") && i + 1 < argc) /* REV R4G */
+            opt_cartfile = argv[++i];
         else if (!strcmp(argv[i], "-bram") && i + 1 < argc) /* REV R4C */
             opt_bram = argv[++i];
         else if (!strcmp(argv[i], "-fbword") && i + 1 < argc)
@@ -3600,6 +3619,17 @@ int main(int argc, char **argv)
     fill_garbage(fb[0], FB_SIZE, &seed);
     fill_garbage(fb[1], FB_SIZE, &seed);
     fill_garbage(cart, CART_PHYS, &seed);
+    if (opt_cartfile) { /* REV R4G: the battery kept the cart's RAM through the power off */
+        FILE *f = fopen(opt_cartfile, "rb");
+        if (f && fread(cart, 1, CART_PHYS, f) == CART_PHYS) {
+            memset(cart_def, 1, CART_PHYS);
+            printf("-cartkeep: the cart's 16 MB read from %s (kept through the power off)\n", opt_cartfile);
+        }
+        else
+            printf("-cartkeep: %s not there - the cart's RAM as new (garbage)\n", opt_cartfile);
+        if (f)
+            fclose(f);
+    }
     sprintf(path, "%s/engine_symbols.txt", opt_dir);
     load_engine_syms(path);
     sprintf(path, "%s/sh2.map", opt_dir);

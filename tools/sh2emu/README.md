@@ -298,6 +298,8 @@ All options go after the build folder.
                engine copy and data pack, through window 1); window 0 switched under the running engine: its page
                must hold the same engine as page 0 (else CART-W0)
 -cartbad P     (R4E) page P keeps nothing written (a broken page: the CART TEST must report it)
+-cartkeep FILE (R4G) the cart's RAM (16 MB): read at power-on if FILE is there, written at the end of the run -
+               MicroNut99's battery-backed cart through a power cycle (the page registers start at pages 0 and 1)
 -h             this list
 ```
 

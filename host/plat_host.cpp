@@ -1041,7 +1041,7 @@ int plat_cart_test() // REV R4E: the Options Menu's CART TEST - the console's ca
     ev("CART TEST (the console's: cd32x/engine/plat_mars.cpp plat_cart_test)");
     return 0; // REV R4F: no big cart on the PC (BIG CART stays off)
 }
-void plat_big_cart(int) {} // REV R4F
+int plat_big_cart(int) { return 0; } // REV R4G: no cart on the PC (BIG CART stays off)
 static char menuCur[28][41], menuShown[28][41];
 static bool menuDrawn = false;
 void plat_menu_clear()
