@@ -137,7 +137,9 @@ slot at 0x380000); **act pages 2-6**: each its own copy of the engine (byte for 
 switches under the running code) and one act scene's image at 0x080000, used in place; page 7: the act files of act
 pages 2-5 (512 KB slots at window-1 0x200000/0x280000/0x300000/0x380000; page 6's in page 1's slot). At an act's start
 (not a title demo: `Options.AttractMode`) the act's other periods and the next act's start (act 2's present, act 3's
-bad future, the next zone's act 1) go into the other act pages; warps and restarts are page switches. After a
+bad future, the next zone's act 1) go into the other act pages, the most needed first (present, past, next act,
+bad future, good future: the last into page 6, whose act file shares page 1's slot with the demos, the credits and
+the dev menu's font); warps and restarts are page switches. After a
 power-on the first act scene looks every act page and slot up in the preload table at the end of `SCDDATA.PAK`
 (`tools/build_preload.py`: number, length, the loader's checksum, a header fingerprint - the boot loader brings it in
 at every power-on) and checks it whole; a page loaded halfway when the power went off is loaded again, in full (its

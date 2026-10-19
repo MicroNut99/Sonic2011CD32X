@@ -2385,17 +2385,35 @@ static void big_identify() /* what each act page and slot holds, whole - after a
     big_use_slot(bigSlot); /* window 1 as it was */
     bigKnown = true;
 }
-static int big_targets(unsigned int file, unsigned short *t) /* the act's scenes - `file` first - and the next act's start */
+static int big_targets(unsigned int file, unsigned short *t) /* the act's scenes and the next act's start - `file` first,
+                                                                 then the most needed: the present, the past, the next
+                                                                 act's start, the bad future, the good future (the last
+                                                                 one gets the act page whose act file shares page 1's slot
+                                                                 with the menus and the title demos) */
 {
-    const unsigned int pl = file & 0x80u, pos = file & 0x7Fu, z = pos / 10u, a = pos % 10u;
-    const unsigned int first = a < 4 ? 0u : a < 8 ? 4u : 8u, last = a < 4 ? 3u : a < 8 ? 7u : 9u;
+    const unsigned int pl = file & 0x80u, pos = file & 0x7Fu, z = pos / 10u, a = pos % 10u, base = z * 10u + (a < 4 ? 0u : 4u);
+    const unsigned int next = 0x200u | pl | (a < 4 ? base + 4u : a < 8 ? z * 10u + 9u : (z + 1u) * 10u); /* act 2's present,
+                                                                                   act 3's bad future (the usual one), the
+                                                                                   next zone's act 1 */
+    unsigned int order[5];
+    int m = 0;
+    if (a < 8) {
+        order[m++] = 0x200u | pl | base;        /* present */
+        order[m++] = 0x200u | pl | (base + 1u); /* past */
+        order[m++] = next;
+        order[m++] = 0x200u | pl | (base + 3u); /* bad future */
+        order[m++] = 0x200u | pl | (base + 2u); /* good future */
+    }
+    else {
+        order[m++] = 0x200u | pl | (z * 10u + (a == 8 ? 9u : 8u)); /* act 3's other future */
+        if (z < 6)
+            order[m++] = next;
+    }
     int n  = 0;
     t[n++] = (unsigned short)file;
-    for (unsigned int k = first; k <= last; ++k)
-        if (k != a)
-            t[n++] = (unsigned short)(0x200u | pl | (z * 10u + k));
-    if (a < 8 || z < 6) /* act 2's present, act 3's bad future (the usual one), the next zone's act 1 */
-        t[n++] = (unsigned short)(0x200u | pl | (a < 4 ? z * 10u + 4u : a < 8 ? z * 10u + 9u : (z + 1u) * 10u));
+    for (int k = 0; k < m; ++k)
+        if (order[k] != file)
+            t[n++] = (unsigned short)order[k];
     return n < bigN ? n : bigN;
 }
 static bool big_attract() { return GetGlobalVariableByName("Options.AttractMode") != 0; } /* a title demo plays */
@@ -2435,9 +2453,12 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
     }
     int pending = 0;
     for (int j = 0; j < n; ++j)
-        if (at[j] < 0 && (j == 0 || start)) { /* a page for it: one holding none of these */
+        if (at[j] < 0 && (j == 0 || start)) { /* a page for it: one holding none of these (page 1's act file slot the last) */
             int i = 0;
-            while (i < bigN && (used >> i & 1)) ++i;
+            while (i < bigN && ((used >> i & 1) || big_slot_of(i) == 0)) ++i;
+            if (i >= bigN)
+                for (i = 0; i < bigN && (used >> i & 1); ++i) {
+                }
             if (i >= bigN)
                 break;
             at[j] = i;

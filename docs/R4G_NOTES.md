@@ -20,7 +20,10 @@ R4F's "pairs" are gone: they held 4 scenes, and the boot loader's title took the
   act's other time periods and **the next act's start** are loaded into the other act pages, with the loading
   picture and its bar, the music off (a CD data read stops it anyway). After act 1: act 2's present; after act 2:
   act 3's bad future (the usual one - the good future loads at its start, as today); after act 3: the next zone's
-  act 1. Then the act starts as always.
+  act 1. Then the act starts as always. The order, the most needed first: the present, the past, the next act's
+  start, the bad future, the good future. The last one goes into page 6, whose act file shares page 1's slot with the
+  title demos, the credits and the dev menu's font: after those, only that period's act file is read again (about
+  400 KB: near 3 s at 150 KB/s, computed), never its image.
 - **Warps and restarts** inside the act: page switches only.
 - **After a power-on** the game knows nothing about the pages: the first act scene looks each act page and act file
   slot up in the **preload table** (`tools/build_preload.py`: in `SCDDATA.PAK`, which the boot loader brings in at
