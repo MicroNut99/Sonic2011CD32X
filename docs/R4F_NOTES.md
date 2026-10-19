@@ -78,7 +78,8 @@ The last row of the Options Menu (A + B + C + Start; from `START GAME`, Up twice
 | future → present | **switch to pair 0: no file read** | the same |
 
   A fifth warp (to the past again) did not start in that scripted run (where the scripted pad had Sonic at the time),
-  so it is not in the table. 63 frames (about a second) is the engine's own stage set-up; on the console the switch
+  so it is not in the table. The same four warps on the 4 MB model (every period read from the CD, as R4E): the same
+  periods and the same places in the pictures (not pixel for pixel: the warps started a few frames apart). 63 frames (about a second) is the engine's own stage set-up; on the console the switch
   adds the two page writes and nothing else - no CD.
 
 **Through the Options Menu** (A + B + C + Start, `STAGE SELECT` each time - the menu loads its font into the act file's
