@@ -2719,7 +2719,8 @@ static void menu_note_missing(unsigned int file) /* REV R4: the dev menu's two l
    the same as page 0 = an 8 MB cart, a page that shows page 0 is not written (it would be the engine's code). Pages 2-7
    (2-3) each get chunk p of the test file KOBOGFX.BIN (Kobo's file 16: cart 0x200000, window 1) at window 1 + p * 32 KB
    - the Sub-CPU reads each back through the 68000 - then this SH2 reads every page back through its cache and checks
-   that no page shows another page's chunk (nor page 1). Window 1 goes back to page 1. The result: the note rows. */
+   that no page shows another page's chunk (nor page 1). Window 1 goes back to page 1. The result: the note rows.
+   REV R4G: on a 4 MB cart (no mapper) the test tries the Sub-CPU's slot command instead (slot_test). */
 #define CART_TEST_FILE 16
 #define CART_TEST_CHUNK 0x8000u
 static unsigned int cart_pattern(unsigned int c, unsigned int i) /* tools/make_cart_test.py: word i of chunk c */
@@ -2742,6 +2743,54 @@ static char *note_pages(char *d, unsigned int mask, char *end) /* " 2 3 5" */
             d = note_put(d, t, end);
         }
     return d;
+}
+static char *slot_test(char *d, char *e) /* REV R4G - THE SLOT TEST (a 4 MB cart: no page to switch). The Sub-CPU's
+                                            other new case, command 46 COMM2 0xF000 | slot, tried on the cart there is:
+                                            the test file (command 38 puts it in slot 16, cart 0x200000) goes to the
+                                            first free 128 KB slot after page 0's scene image instead - below the data
+                                            pack (0x300000), room the game keeps nothing in - chunk by chunk, each read
+                                            back by the Sub-CPU; then this SH2 reads them through its cache, and slot 16
+                                            must not show them (the case ignored). Page 0's scene is loaded whole at the
+                                            next scene load (were the case ignored, the chunks would be in its image). */
+{
+    const volatile unsigned int *h = (const volatile unsigned int *)(0x22000000u + 0x080000u); /* the scene's header */
+    const unsigned int np          = h[2];
+    if (h[0] != 0x53434342u || np == 0 || np >= 64 || h[3 + 5 * np] != SCHK_MAGIC || h[4 + 5 * np] > SCD_CHUNKS_MAX)
+        return note_put(d, "SLOT TEST NOT RUN: NO SCENE", e);
+    const unsigned int end = 0x080000u + h[4 + 5 * np] * CART_TEST_CHUNK, slot = (end + 0x1FFFFu) >> 17;
+    unsigned int n         = slot < 24u ? (24u - slot) * (0x20000u / CART_TEST_CHUNK) : 0u;
+    if (n > 8)
+        n = 8;
+    if (n < 2)
+        return note_put(d, "SLOT TEST NOT RUN: NO ROOM", e);
+    SC_COMM2 = CART_TEST_FILE;
+    if (sd_cmd(38) < 0)
+        return note_put(d, "SLOT TEST: NO ANSWER (SUB-CPU)", e);
+    if (SC_COMM8_32 < n * CART_TEST_CHUNK)
+        return note_put(d, "SLOT TEST NOT RUN: NO KOBOGFX.BIN", e);
+    loadLen            = SC_COMM8_32;
+    SCD_BOOT_RECORD[5] = 0; /* (page 0's scene: not trusted any more) */
+    if (sd_slot(slot) < 0)
+        return note_put(d, "SLOT TEST: NO ANSWER (SUB-CPU)", e);
+    unsigned int bad68 = 0, badSh2 = 0;
+    for (unsigned int c = 0; c < n; ++c)
+        if (sd_load_one(c) != 0) /* chunk c at slot * 128 KB + c * 32 KB, read back by the Sub-CPU */
+            bad68 |= 1u << c;
+    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: the cart's contents changed */
+    for (unsigned int c = 0; c < n; ++c)
+        if (!cart_chunk_is(slot * 0x20000u + c * CART_TEST_CHUNK, c, CART_TEST_CHUNK / 4))
+            badSh2 |= 1u << c;
+    const bool ignored = slot != CART_TEST_FILE && cart_chunk_is(CART_TEST_FILE * 0x20000u, 0, 64);
+    const char num[3]  = { (char)('0' + slot / 10), (char)('0' + slot % 10), 0 };
+    if (ignored)
+        return note_put(d, "SLOT CMD IGNORED: DATA IN SLOT 16", e);
+    d = note_put(d, "SLOT ", e);
+    d = note_put(d, num, e);
+    if (!(bad68 | badSh2))
+        return note_put(d, " LOAD OK (SUB-CPU AND SH2)", e);
+    d = note_put(d, " BAD:", e);
+    d = note_pages(d, bad68 | badSh2, e);
+    return note_put(d, bad68 ? " (SUB-CPU)" : " (SH2)", e);
 }
 static int cart_test(); /* REV R4G: plat_cart_test's body */
 int plat_cart_test() /* the cart's size if its pages work (16, 8 MB), else 0 - REV R4G: the act pages looked up again */
@@ -2776,8 +2825,8 @@ static int cart_test()
     }
     if (!cart_same(CART_PROBE, CART_W1 + CART_PROBE, 0x1000)) { /* window 1 did not show page 0 */
         sd_page(1, 1);
-        d0  = note_put(d0, "CART TEST: NO PAGE MAPPER", e0);
-        d1  = note_put(d1, "(A 4 MB CART) - NOTHING WRITTEN", e1);
+        d0  = note_put(d0, "CART TEST: NO PAGE MAPPER (4 MB)", e0);
+        d1  = slot_test(d1, e1); /* REV R4G: the slot command instead (R4E/R4F: "NOTHING WRITTEN") */
         *d0 = 0, *d1 = 0;
         return 0;
     }
