@@ -36,8 +36,8 @@ R4F's "pairs" are gone: they held 4 scenes, and the boot loader's title took the
   cart, so a warp back to that first scene is a page switch.
 - **4 MB cart, or `BIG CART` off:** none of this - the game is R4E's (= R4D's).
 
-The 16 MB cart is found when the title starts (read only: window 1 switched to page 0, then to page 4, compared, back
-to page 1). **On the 4 MB cart these are two writes R4D never made:** to the page register `0xA130F2` (the even byte
+The 16 MB cart is found when the title starts (no cart RAM written - only the window 1 page register: to page 0,
+then to page 4, each compared with window 0, back to page 1). **On the 4 MB cart these are two writes R4D never made:** to the page register `0xA130F2` (the even byte
 in the cart's `/TIME` area, `0xA13000-0xA130FF`; window 1 to page 0, back to page 1), as R4E's `CART TEST` did - but
 now at every power-on, not only when you choose the test. A cart that does not use `/TIME` ignores them. Whether your
 4 MB cart (v01) uses `/TIME` for anything could not be checked here: the 16 MB repo has only v01's edge connector,
@@ -57,11 +57,26 @@ and try again.
 
 ## The boot stack
 
-As R4F - nothing new in R4G. Against R4D (your last disc), `cd32x/sub_main.c` has R4E's and R4F's two additions, both
-under command 46 and both used only with the 8 / 16 MB cart: `0xF8nn` writes a page register (through the 68000's
-existing command 26, RV = 1, interrupts off) and `0xF0nn` puts the opened file into another 128 KB slot. The 68000's
-`hw_md.s` and the SH2 loader (`SCDSH2.BIN`, `SH2-VR4D`) are R4D's. The power-on still reads the engine, the data pack
-and the title from the disc, as today.
+**Changed against R4D (your last disc that works): `cd32x/sub_main.c`, the Sub-CPU's program - 23 lines added, two
+cases inside the existing command 46** (no new command number; R4E added the first, R4F the second, R4G adds nothing
+more):
+
+- COMM2 `0xF8nn` (`0xF800 | window << 8 | page`): writes a page register - the page into Word RAM, then the 68000's
+  existing command 26 (`SAFE_CART_XFER`: interrupts off, RV = 1) copies that byte to `0xA130F0` (window 0) or
+  `0xA130F2` (window 1). Reply COMM12 = 0.
+- COMM2 `0xF0nn` (`0xF000 | slot`, 0-31): the file command 38 opened goes to 128 KB slot nn of the cart instead of
+  its own (`cur_img = slot`) until the next command 38. Reply COMM12 = 0.
+
+Both cases are checked before the chunk runs; a chunk run's COMM2 is never `0xF0nn` or `0xF8nn`, so R4D's commands
+behave as before. **Why they are needed:** only the 68000 can write the page registers, and only when the Sub-CPU
+asks it to; none of R4D's commands lets the SH2 choose where the 68000 writes (every cart write goes into the first
+4 MB). Without the first case the game can never see past 4 MB. The second puts the engine's copy and an act scene's
+image at a page's own `0x000000` / `0x080000` through window 1 (window 0 cannot point at a page that does not hold
+the engine yet).
+
+Unchanged since R4D: the 68000's `hw_md.s`, the SH2 boot loader (`SCDSH2.BIN`, `SH2-VR4D`, md5 below), the power-on
+(the engine, the data pack and the title from the disc). Neither the R4E nor the R4F disc was burned: **R4G's disc
+is the first to run the new `sub_main.c` on the console.**
 
 ## Checked before burning
 
@@ -117,7 +132,39 @@ sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Soni
 grep -E "window 0|open L1S|open G1S" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g2.txt
 ```
 
-SH2EMU_EXPECT
+What they print (checked here on the build made from scratch with these commands):
+
+- **Run 1 (4 MB):** `VERDICT no problems found`; `cart 4 MB (no mapper), 2 page switches; window 0 page 0, window 1
+  page 1 at the end`; `loading 39 fast runs (153 chunks ...), 10 chunks one by one`; `backup RAM SONICCD32X_: 3 loads,
+  1 saves`. The picture: Palmtree Panic 1. (R4F's run read 9 chunks one by one: `SCDDATA.PAK` is one 32 KB chunk
+  longer with the preload table.)
+- **Run 2 (16 MB, first power-on):** `VERDICT no problems found`; `cart 16 MB (page mapper), 38 page switches; window 0
+  page 4, window 1 page 7 at the end`. The grep: `window 0 -> page 2`, then `open L1S000`, `L1S001`, `L1S004`,
+  `L1S003`, `L1S002` (the act start and its preload, in that order); `window 0 -> page 3` (the past: no file);
+  `window 0 -> page 4` (act 2's present: no file), then `open L1S005`, `L1S009`, `L1S007`, `L1S006` (act 2's preload).
+  The pictures: Palmtree Panic 1 present, past, Palmtree Panic 2 present.
+- **Run 3 (16 MB, power on again, the cart kept):** `VERDICT no problems found`; `cart 16 MB (page mapper), 29 page
+  switches; window 0 page 6, window 1 page 1 at the end`. The grep: `window 0 -> page 4`, `window 0 -> page 2`,
+  `window 0 -> page 6` and **no `open L1S` at all** (all three scenes from the cart); one `open G1S006.MDG` (the good
+  future's act file shares page 1's slot with the menu's font). The pictures: Palmtree Panic 2 present, past, good
+  future.
+
+## The test burn on your 4 MB cart (the new boot stack)
+
+This disc is the first to run the changed `sub_main.c` on the console. On the 4 MB cart the game is R4D's; what is
+new there:
+
+1. Power on: the loading picture and the title as R4D (the boot loader is R4D's).
+2. When the title starts, the game sends the new page command twice (window 1 to page 0, back to page 1): two writes
+   to `0xA130F2`. Nothing to see: the title comes as always. If the loading picture stood and the title never came,
+   it would point at this step.
+3. A + B + C + Start at the title, Up twice: the last row reads `BIG CART   OFF`. A on it runs the cart test - two
+   more page commands; the note rows read `CART TEST: NO PAGE MAPPER` / `(A 4 MB CART) - NOTHING WRITTEN`, the row
+   stays `OFF`. This is the whole new path on the console: the SH2 -> the Sub-CPU's command 46 `0xF8nn` -> the
+   68000's command 26 -> `0xA130F2`.
+4. Then play as with R4D: `START GAME`, a save, Palmtree Panic 1, a warp, the next act. Everything loads from the
+   CD as R4D (the second new case, `0xF0nn`, is never sent on the 4 MB cart).
+5. Anything different from R4D: line 10's code if the text shows, or a photo.
 
 ## When the new cart exists
 

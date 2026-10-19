@@ -143,9 +143,14 @@ the dev menu's font); warps and restarts are page switches. After a
 power-on the first act scene looks every act page and slot up in the preload table at the end of `SCDDATA.PAK`
 (`tools/build_preload.py`: number, length, the loader's checksum, a header fingerprint - the boot loader brings it in
 at every power-on) and checks it whole; a page loaded halfway when the power went off is loaded again, in full (its
-header's chunk list is not trusted). Found at power-on, read only (window 1 to page 0 and page 4, compared with
-window 0 at the engine's code and at the scene image's header). Only the commands R4E/R4F added (`0xF8nn` page,
-`0xF0nn` slot) besides 38 and 46. 8 MB: one act page (2, its act file in page 3) for the act's first
+header's chunk list is not trusted). Found when the title starts, no cart RAM written (only the window 1 page
+register: to page 0 and page 4, compared with window 0 at the engine's code and at the scene image's header, back to
+page 1). **The boot stack against R4D (the last disc proven on the console):** `sub_main.c` has the two cases R4E/R4F
+added inside the existing command 46 (`0xF8nn` page register write through the 68000's command 26, `0xF0nn` the
+opened file's slot) - needed, because none of R4D's commands lets the SH2 choose where the 68000 writes, so R4D can
+never switch a page; the user accepted them on 19 Oct after asking for no boot-stack edits (say this plainly: an
+earlier claim that R4G needed "no boot-stack edit" compared with R4F, not with R4D, and misled the user). Nothing else:
+`hw_md.s` and `sh2_engboot.c` are R4D's. 8 MB: one act page (2, its act file in page 3) for the act's first
 scene; the act's other periods load in page 0 as on the 4 MB cart. The rest of this section is R4F's design, kept for the record.
 
 **The design built in R4F (`BIG CART`, `cd32x/engine/plat_mars.cpp`, "THE BIG CART" - replaced by R4G):** the first idea - acts
