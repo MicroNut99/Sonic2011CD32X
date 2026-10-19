@@ -2235,6 +2235,7 @@ static void sub_finish(void)
                     }
             }
             win_page[w] = pg;
+            blob_update(); /* REV R4F: the scene image now in view (another pair's) - its native scripts are the code */
         }
         page_switches++;
         if (page_switches <= 64)
