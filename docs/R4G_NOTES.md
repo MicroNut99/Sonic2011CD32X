@@ -80,7 +80,34 @@ is the first to run the new `sub_main.c` on the console.**
 
 ## Checked before burning
 
-RESULTS
+- **sh2emu**, on the build made from scratch with the commands below (its model of the mapper `-cart 4 / 8 / 16`, of
+  the battery `-cartkeep`): `VERDICT no problems found` in every run, no `STALE-READ`, no `CART-W0`.
+
+| Run | Result |
+|---|---|
+| 4 MB: power-on to Palmtree Panic 1 through the game's menus | the same pictures as R4E's and R4F's runs (record CRC `2F19502C`), the same loads but one more 32 KB chunk of `SCDDATA.PAK` (the table), 1 save; 2 page commands at the title, nothing else |
+| 4 MB: the cart test | `CART TEST: NO PAGE MAPPER` / `(A 4 MB CART) - NOTHING WRITTEN`; the row stays `OFF` |
+| 16 MB, empty cart: Palmtree Panic 1 present, past, act 2 present (`STAGE SELECT`) | the act start loads the present into page 2 and preloads past, act 2's present, bad future, good future (pages 3-6); the past: a page switch, no file; act 2's present: a page switch, then its own preload (past, act 3's bad future, bad future, good future) |
+| 16 MB, power on again with that cart: act 2 present, past, good future | the pages looked up (about 2.5 s), all three scenes from the cart, no image read; the good future's act file read again (its slot is shared with the menu's font) |
+| 16 MB through the game's own menus (title, `START GAME`, a save) | the same preload at Palmtree Panic 1's start |
+| 16 MB: the power cut 12 frames into the good future's preload, then on again | the half-loaded page found and loaded again in full; the others from the cart |
+| 16 MB: real time warps (the game's own, `DEMO PAD`): present → past → present → bad future → present | four page switches, **no file opened**; the right period each time |
+| 8 MB: real time warps, the same | the present stays in page 2: back to it is a page switch; the past and the bad future load in page 0 as on the 4 MB cart |
+| 8 MB: present, past, present (`STAGE SELECT`) | the same: the second present without a file |
+| 16 MB: the cart test after a preload | `CART 16 MB: PAGES 2-7 OK` / `PAGE SWITCH OK, GAME PAGES UNTOUCHED`; the next act start reloads the engine copies it overwrote |
+| 16 MB: `BIG CART` off, an act played (in page 0), then the test | `CART TEST: AN ACT IS IN PAGE 0` / `RUN IT FROM THE TITLE - NOTHING DONE`; the row stays `OFF` |
+| 16 MB: the title left alone (title demos) | the demos play in page 0, nothing preloaded |
+| 16 MB: a title demo, then a game | the game's act start preloads as usual |
+| 16 MB, Tails | Tails's scenes (the same order) |
+
+- **The delivery checked on its own:** R4D's tree (your folder before R4E) + `R4G_files.zip` + your Makefiles, built
+  from scratch with the commands below: `R4G_md5: all OK`, `R4G_expected: all 340 OK`, `SH2-VR4D` in the loader.
+- **A review by another model (Fable)** read the whole repository. It found that the cart test could take an act
+  page for page 0 when page 0 holds the same act (now refused, above), and that loads into an act page or slot had no
+  size guard (added; no file today is too big). It raised the 4 MB cart's two page register writes (above). It found
+  the page bookkeeping, the cache purges, the table's format and the boot-stack additions correct.
+- **Not checked:** anything on the console - the new `sub_main.c` cases, the 4 MB cart with the page register writes,
+  the 16 MB cart (not built), the CD's real speed (sh2emu reads faster).
 
 ## Build
 
