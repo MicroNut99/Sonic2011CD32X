@@ -69,7 +69,8 @@ something else, don't run it there.) After a test with problems, press reset bef
   holds it) in any run. sh2emu found one real bug on the way: the test's first page switch was written while the pad
   request was still with the Sub-CPU and was lost - the test now waits for it, as the scene loads do.
 - **The delivery on its own:** R4D's files + `R4E_files.zip` + your Makefiles, built with the commands below (all but
-  the 68000 part): @@DELIVER@@.
+  the 68000 part): every one of the 340 files in `R4E_expected.txt` the same (the scene images, the act files, the
+  sound banks, the engine, the loader - the same `SCDSH2.BIN` as R4D - and the test file `KOBOGFX.BIN`).
 - **Not run here:** your cart. The page register writes through the 32X adapter, the RV timing and the pages
   themselves are what the test on the new cart shows.
 
