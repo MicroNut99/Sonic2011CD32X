@@ -750,6 +750,21 @@ int main(void)
             }
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0); 
         }
+        else if (cmd == CMD_CHUNK_TO_CART && (do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 0xF800) == 0xF800) {
+            /* SONIC REV R4E - THE PAGE SWITCH of MicroNut99's 8 / 16 MB cart: two 2 MB windows (window 0 = cart
+               0x000000-0x1FFFFF, window 1 = 0x200000-0x3FFFFF), each showing one of 8 pages of 2 MB. COMM2 = 0xF800 |
+               window << 8 | page (a fast run's COMM2 is at most 0x03FF). The page goes to 0xA130F0 (window 0) or
+               0xA130F2 (window 1) in D8-D10: a byte write to the even address - the 68000's SAFE_CART_XFER (command 26:
+               interrupts off, RV = 1, as the cart needs; nothing new in hw_md.s). The SH2 purges its cache after it. A
+               cart without the mapper ignores the write (the 4 MB game never sends this). COMM12 = 0. */
+            int arg = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
+            PB(0) = (uint8_t)(arg & 7);
+            switch_banks();
+            cx(XM(0), (arg & 0x100) ? 0xA130F2 : 0xA130F0, 1);
+            switch_banks();
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, 0);
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
+        }
         else if (cmd == CMD_CHUNK_TO_CART && (do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 0xFF00)) {
             /* SONIC REV R4C - FAST LOAD: COMM2 = first chunk | (more chunks) << 8 - up to CHUNK_RUN_MAX chunks of the
                open file in ONE CD read (one seek instead of one a chunk) into this side's Word RAM bank (128 KB), then

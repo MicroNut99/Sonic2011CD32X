@@ -2223,6 +2223,138 @@ static void menu_note_missing(unsigned int file) /* REV R4: the dev menu's two l
         d = note_put(d, stageList[activeStageList][stageListPosition].name, end);
     *d = 0;
 }
+/* REV R4E: CART TEST (the Options Menu) - MicroNut99's 8 / 16 MB cart: two 2 MB windows (window 0 = cart 0x000000-
+   0x1FFFFF, the engine's code: never switched; window 1 = 0x200000-0x3FFFFF), each showing one of 8 pages of 2 MB (an
+   8 MB cart: pages 4-7 are 0-3 again). The Sub-CPU switches a window with command 46, COMM2 = 0xF800 | window << 8 |
+   page (the 68000 writes the page register with RV = 1 and interrupts off); this SH2 purges its cache after each switch.
+   Pages 0 and 1 (the 4 MB game's) are only read: page 0 shown in window 1 must be window 0 (the switch works), page 4
+   the same as page 0 = an 8 MB cart, a page that shows page 0 is not written (it would be the engine's code). Pages 2-7
+   (2-3) each get chunk p of the test file KOBOGFX.BIN (Kobo's file 16: cart 0x200000, window 1) at window 1 + p * 32 KB
+   - the Sub-CPU reads each back through the 68000 - then this SH2 reads every page back through its cache and checks
+   that no page shows another page's chunk (nor page 1). Window 1 goes back to page 1. The result: the note rows. */
+#define CART_TEST_FILE 16
+#define CART_TEST_CHUNK 0x8000u
+#define CART_W1 0x200000u
+#define CART_PROBE 0x10000u /* (the engine's code: page 0 at this place is not a run of equal words) */
+static unsigned int cart_pattern(unsigned int c, unsigned int i) /* tools/make_cart_test.py: word i of chunk c */
+{
+    return (i * 0x9E3779B1u) ^ (0x43540000u | c << 8 | c);
+}
+static int sd_page(int window, int page)
+{
+    SC_COMM2  = (unsigned short)(0xF800u | (unsigned)window << 8 | ((unsigned)page & 7u));
+    SC_COMM12 = 0xFFFF;
+    const int r = sd_cmd(46);
+    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: window 1 shows other RAM */
+    return r;
+}
+static bool cart_same(unsigned int a, unsigned int b, unsigned int bytes) /* two cart places, uncached */
+{
+    const volatile unsigned int *p = (const volatile unsigned int *)(0x22000000u + a);
+    const volatile unsigned int *q = (const volatile unsigned int *)(0x22000000u + b);
+    for (unsigned int i = 0; i < bytes / 4; ++i)
+        if (p[i] != q[i])
+            return false;
+    return true;
+}
+static bool cart_chunk_is(unsigned int at, unsigned int c, unsigned int words) /* the test chunk c there (cached reads) */
+{
+    const unsigned int *p = (const unsigned int *)(0x02000000u + at);
+    for (unsigned int i = 0; i < words; ++i)
+        if (p[i] != cart_pattern(c, i))
+            return false;
+    return true;
+}
+static char *note_pages(char *d, unsigned int mask, char *end) /* " 2 3 5" */
+{
+    for (int p = 0; p < 8; ++p)
+        if (mask >> p & 1) {
+            char t[3] = { ' ', (char)('0' + p), 0 };
+            d = note_put(d, t, end);
+        }
+    return d;
+}
+void plat_cart_test()
+{
+    char *d0 = scdMenuNote[0], *e0 = scdMenuNote[0] + SCD_MENU_NOTE - 1;
+    char *d1 = scdMenuNote[1], *e1 = scdMenuNote[1] + SCD_MENU_NOTE - 1;
+    if (sd_page(1, 0) < 0) {
+        d0  = note_put(d0, "CART TEST: NO ANSWER (SUB-CPU)", e0);
+        *d0 = 0, *d1 = 0;
+        return;
+    }
+    if (!cart_same(CART_PROBE, CART_W1 + CART_PROBE, 0x1000)) { /* window 1 did not show page 0 */
+        sd_page(1, 1);
+        d0  = note_put(d0, "CART TEST: NO PAGE MAPPER", e0);
+        d1  = note_put(d1, "(A 4 MB CART) - NOTHING WRITTEN", e1);
+        *d0 = 0, *d1 = 0;
+        return;
+    }
+    sd_page(1, 4);
+    const int last = cart_same(CART_PROBE, CART_W1 + CART_PROBE, 0x1000) ? 3 : 7; /* page 4 = page 0: 8 MB */
+    unsigned int pages = 0, skip = 0, bad68 = 0, badSh2 = 0, alias = 0;
+    for (int p = 2; p <= last; ++p) {
+        sd_page(1, p);
+        if (cart_same(CART_PROBE, CART_W1 + CART_PROBE, 0x1000) || cart_same(p * CART_TEST_CHUNK, CART_W1 + p * CART_TEST_CHUNK, 0x100))
+            skip |= 1u << p; /* it shows page 0: not written */
+        else
+            pages |= 1u << p;
+    }
+    SC_COMM2 = CART_TEST_FILE;
+    if (sd_cmd(38) < 0 || SC_COMM8_32 < (unsigned int)(last + 1) * CART_TEST_CHUNK) {
+        sd_page(1, 1);
+        d0  = note_put(d0, "CART TEST: KOBOGFX.BIN NOT ON THE DISC", e0);
+        *d0 = 0, *d1 = 0;
+        return;
+    }
+    loadLen = SC_COMM8_32;
+    for (int p = 2; p <= last; ++p)
+        if (pages >> p & 1) {
+            sd_page(1, p);
+            if (sd_load_one((unsigned int)p) != 0) /* chunk p at window 1 + p * 32 KB, read back by the Sub-CPU */
+                bad68 |= 1u << p;
+        }
+    for (int p = 2; p <= last; ++p)
+        if (pages >> p & 1) {
+            sd_page(1, p);
+            if (!cart_chunk_is(CART_W1 + p * CART_TEST_CHUNK, (unsigned int)p, CART_TEST_CHUNK / 4))
+                badSh2 |= 1u << p;
+            for (int q = 2; q <= last; ++q)
+                if (q != p && (pages >> q & 1) && cart_chunk_is(CART_W1 + q * CART_TEST_CHUNK, (unsigned int)q, 64))
+                    alias |= 1u << p; /* page p shows page q's chunk: the same RAM */
+        }
+    sd_page(1, 1);
+    for (int q = 2; q <= last; ++q)
+        if ((pages >> q & 1) && cart_chunk_is(CART_W1 + q * CART_TEST_CHUNK, (unsigned int)q, 64))
+            alias |= 1u << 1; /* page 1 shows a test chunk: written through another page's number */
+    const unsigned int ok = pages & ~(bad68 | badSh2 | alias);
+    d0 = note_put(d0, last == 7 ? "CART 16 MB: " : "CART 8 MB: ", e0);
+    if (ok == pages && !skip && !(alias & 2)) {
+        d0 = note_put(d0, last == 7 ? "PAGES 2-7 OK" : "PAGES 2-3 OK", e0);
+        d1 = note_put(d1, "PAGE SWITCH OK, GAME PAGES UNTOUCHED", e1);
+    }
+    else {
+        d0 = note_put(d0, "OK", e0);
+        d0 = ok ? note_pages(d0, ok, e0) : note_put(d0, " NONE", e0);
+        if (bad68 | badSh2) {
+            d1 = note_put(d1, "BAD", e1);
+            d1 = note_pages(d1, bad68 | badSh2, e1);
+            d1 = note_put(d1, " ", e1);
+        }
+        if (alias) {
+            d1 = note_put(d1, "SAME RAM", e1);
+            d1 = note_pages(d1, alias, e1);
+            d1 = note_put(d1, " ", e1);
+        }
+        if (skip) {
+            d1 = note_put(d1, "AS PAGE 0:", e1);
+            d1 = note_pages(d1, skip, e1);
+        }
+    }
+    *d0 = 0, *d1 = 0;
+}
+#else
+void plat_cart_test() {}
 #endif
 bool plat_stage_loading()
 {

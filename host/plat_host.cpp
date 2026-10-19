@@ -1034,6 +1034,12 @@ bool plat_boot_menu()
 const void *plat_native_blob() { return 0; } // REV R4: the PC builds bind the engine's part only
 unsigned int plat_engine_sum() { return 0; }
 void plat_credits() { ev("CREDITS (the console's credits screen: cd32x/engine/scd_credits.inc)"); } // REV R4
+void plat_cart_test() // REV R4E: the Options Menu's CART TEST - the console's cart only (cd32x/engine/plat_mars.cpp)
+{
+    snprintf(scdMenuNote[0], SCD_MENU_NOTE, "CART TEST: ON THE CONSOLE ONLY");
+    scdMenuNote[1][0] = 0;
+    ev("CART TEST (the console's: cd32x/engine/plat_mars.cpp plat_cart_test)");
+}
 static char menuCur[28][41], menuShown[28][41];
 static bool menuDrawn = false;
 void plat_menu_clear()

@@ -57,12 +57,29 @@ static const char *opt_dump_file = 0;
 /* ------------------------------------------------------------------ memories */
 #define SDRAM_SIZE 0x40000
 #define FB_SIZE 0x20000
-#define CART_SIZE 0x400000
+#define CART_SIZE 0x400000  /* the 32X's cart window: the SH2 at 0x02000000, the 68000 at 0x400000 (Sega CD mode) */
+#define CART_PHYS 0x1000000 /* REV R4E: the cart's RAM - up to 16 MB (-cart 16) */
 static u8 sdram[SDRAM_SIZE], sdram_def[SDRAM_SIZE];
 static u32 sdram_wpc[SDRAM_SIZE];
 static u8 fb[2][FB_SIZE], fb_def[2][FB_SIZE];
-static u8 cart[CART_SIZE], cart_def[CART_SIZE];
-static u32 cart_wpc[CART_SIZE / 2];
+static u8 cart[CART_PHYS], cart_def[CART_PHYS];
+static u32 cart_wpc[CART_PHYS / 2];
+/* REV R4E: MicroNut99's page mapper (-cart 8 / 16; -cart 4 = the 4 MB cart, no mapper): two 2 MB windows - window 0
+   cart 0x000000-0x1FFFFF, window 1 0x200000-0x3FFFFF - each showing one of 8 pages of 2 MB (an 8 MB cart: pages 4-7 are
+   0-3 again). The page registers (0xA130F0 window 0, 0xA130F2 window 1) are written by the 68000 with RV = 1 and
+   interrupts off: here through the Sub-CPU's command 46 with COMM2 = 0xF800 | window << 8 | page (cd32x/sub_main.c).
+   Power-on: window 0 = page 0, window 1 = page 1 - the 4 MB cart's layout. -cartbad P: page P keeps nothing written. */
+static int opt_cart = 4, opt_cartbad = -1;
+static int win_page[2] = { 0, 1 };
+static u64 page_switches;
+static inline u32 cmap(u32 o) /* a cart address (window offset) -> the RAM behind it */
+{
+    o &= CART_SIZE - 1;
+    if (opt_cart < 8)
+        return o;
+    u32 page = (u32)win_page[o >> 21] & (opt_cart == 8 ? 3u : 7u);
+    return page << 21 | (o & 0x1FFFFFu);
+}
 static u8 sysreg[0x100]; /* 0x4000-0x40FF, big-endian bytes */
 static u8 vdpreg[0x100]; /* 0x4100-0x41FF */
 static u8 cram[0x200];   /* 0x4200-0x43FF */
@@ -530,7 +547,7 @@ static const char *cart_area(u32 off, char *buf) /* what lies at this cart offse
         return buf;
     }
     if (off < 0x300000) { /* the scene slot (cd32x/engine/plat_mars.cpp CART_STAGE - CART_PACK) */
-        const u8 *h = cart + 0x080000;
+        const u8 *h = cart + cmap(0x080000);
         u32 n = (u32)h[8] << 24 | (u32)h[9] << 16 | (u32)h[10] << 8 | h[11];
         if (h[0] == 'S' && h[1] == 'C' && h[2] == 'C' && h[3] == 'B')
             for (u32 k = 0; k < n && k < 19; ++k) {
@@ -722,7 +739,7 @@ static void cost_report(void)
                         slow[k] += row[k];
                 }
             }
-            const u8 *h = cart + 0x080000; /* the stage image's type names (part 9) */
+            const u8 *h = cart + cmap(0x080000); /* the stage image's type names (part 9) */
             u32 tn = (u32)h[12 + 20 * 9] << 24 | (u32)h[13 + 20 * 9] << 16 | (u32)h[14 + 20 * 9] << 8 | h[15 + 20 * 9];
             printf("  scripts per engine frame by object type and event, all frames vs the slowest tenth, in vertical blanks:\n");
             for (int r = 0; r < 16; ++r) {
@@ -1095,7 +1112,7 @@ static u32 bus_read(u32 p, int size, int ifetch)
                 b = cram[o & 0x1FF];
                 break;
             case RG_CART:
-                b = cart[o & (CART_SIZE - 1)];
+                b = cart[cmap(o)];
                 break;
             case RG_FB:
             case RG_FBOV:
@@ -1189,7 +1206,7 @@ static void bus_write(u32 p, u32 v, int size)
                 cram[o & 0x1FF] = b;
                 break;
             case RG_CART:
-                o &= CART_SIZE - 1;
+                o                = cmap(o);
                 cart[o]          = b;
                 cart_def[o]      = 1;
                 cart_wpc[o >> 1] = cur_pc;
@@ -1379,7 +1396,7 @@ static void check_data_access(u32 a, int size, int write, u32 v)
             u32 o = off + i;
             if (rg == RG_SDRAM && !sdram_def[o & (SDRAM_SIZE - 1)])
                 undef = 1;
-            if (rg == RG_CART && !cart_def[o & (CART_SIZE - 1)])
+            if (rg == RG_CART && !cart_def[cmap(o)])
                 undef = 1;
             if ((rg == RG_FB || rg == RG_FBOV) && !fb_def[fs_bit][o & (FB_SIZE - 1)])
                 undef = 1;
@@ -1795,7 +1812,7 @@ static const char *shots_prefix;
 static u32 rd_be32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
 static void vdp_planes_on(u32 mdg_off)
 {
-    const u8 *m = &cart[mdg_off & (CART_SIZE - 1)];
+    const u8 *m = &cart[cmap(mdg_off)];
     u32 cells = rd_be16(m + 6), oCell = rd_be32(m + 12), oCram = rd_be32(m + 32);
     memset(vram, 0, sizeof vram); /* the planes are cleared by command 68; the rest is the font - not shown */
     for (u32 i = 0; i < cells * 16 && i < 0x6000; ++i) vram[i] = rd_be16(m + oCell + 2 * i);
@@ -2151,7 +2168,7 @@ static void set_comm32(int n, u32 v)
 }
 static void blob_update(void) /* REV R4: where the scene image (cart 0x080000) has its native scripts - code from now on */
 {
-    const u8 *h = cart + 0x080000;
+    const u8 *h = cart + cmap(0x080000);
     u32 lo = 0, hi = 0;
     if (h[0] == 'S' && h[1] == 'C' && h[2] == 'C' && h[3] == 'B' && rd_be32(h + 8) > 18) {
         u32 o = rd_be32(h + 12 + 20 * 18), l = rd_be32(h + 16 + 20 * 18);
@@ -2177,6 +2194,10 @@ static void sub_finish(void)
             strcpy(nm, "SONICCD.PAK");
             cur_img = 0;
         }
+        else if (idx == 16) { /* Kobo's graphics pack's number: KOBOGFX.BIN at cart 0x200000 (REV R4E: the cart test's file) */
+            strcpy(nm, "KOBOGFX.BIN");
+            cur_img = 16;
+        }
         else if (idx == 22) {
             strcpy(nm, "SCDDATA.PAK");
             cur_img = 24;
@@ -2199,6 +2220,23 @@ static void sub_finish(void)
         set_comm32(8, cur_file < 0 ? 0 : files[cur_file].len);
         SET_COMM(0, 0);
     }
+    else if (cmd == 46 && (COMM(2) & 0xF800) == 0xF800 && !opt_oldsub) {
+        /* REV R4E: the page switch (cd32x/sub_main.c): COMM2 = 0xF800 | window << 8 | page - the 68000's SAFE_CART_XFER
+           (interrupts off, RV = 1) writes the page to 0xA130F0 / 0xA130F2; a cart without the mapper ignores it */
+        int w = (COMM(2) >> 8) & 1, pg = COMM(2) & 7;
+        if (opt_cart >= 8) {
+            if (w == 0 && pg != 0 && engine_started)
+                evlog("CART-W0", "window 0 to page %d - the engine's code is in window 0", pg);
+            win_page[w] = pg;
+        }
+        page_switches++;
+        if (page_switches <= 64)
+            printf("[f%5d] SUB: CMD 46 page switch: window %d -> page %d%s\n", frame_no(), w, pg,
+                   opt_cart >= 8 ? "" : " (no mapper: nothing changes)");
+        rv_active = 0;
+        SET_COMM(12, 0);
+        SET_COMM(0, 0);
+    }
     else if (cmd == 46 && (COMM(2) & 0xFF00) && !opt_oldsub) {
         /* REV R4C: the fast command 46 (cd32x/sub_main.c): COMM2 = first chunk | (more) << 8, up to 4 chunks in one
            read, no read-back; COMM8 = load_sum of the bytes read, COMM12 = 0 (1: nothing read) */
@@ -2217,8 +2255,10 @@ static void sub_finish(void)
         for (int i = 0; i < n * 2048; ++i) {
             u32 src = off + i;
             u8 b    = (cur_file >= 0 && src < files[cur_file].len) ? files[cur_file].data[src] : 0;
-            u32 o   = (coff + i) & (CART_SIZE - 1);
+            u32 o   = cmap(coff + i);
             rd[i]            = b;
+            if ((int)(o >> 21) == opt_cartbad) /* REV R4E: -cartbad - this page keeps nothing */
+                continue;
             cart[o]          = b;
             cart_def[o]      = 1;
             cart_wpc[o >> 1] = 0xC0DE0046;
@@ -2244,7 +2284,7 @@ static void sub_finish(void)
         int chunk  = COMM(2);
         u32 length = comm32(8);
         u32 off    = (u32)chunk * 32768;
-        int n      = 0;
+        int n      = 0, bad = 0;
         load_singles++;
         if (off < length)
             n = (int)((length - off + 2047) / 2048);
@@ -2254,13 +2294,17 @@ static void sub_finish(void)
         for (int i = 0; i < n * 2048; ++i) {
             u32 src = off + i;
             u8 b    = (cur_file >= 0 && src < files[cur_file].len) ? files[cur_file].data[src] : 0;
-            u32 o   = (coff + i) & (CART_SIZE - 1);
+            u32 o   = cmap(coff + i);
+            if ((int)(o >> 21) == opt_cartbad) { /* REV R4E: -cartbad - this page keeps nothing */
+                bad = 1;
+                continue;
+            }
             cart[o]          = b;
             cart_def[o]      = 1;
             cart_wpc[o >> 1] = 0xC0DE0046;
         }
         rv_active = 0;
-        SET_COMM(12, 0);
+        SET_COMM(12, bad); /* REV R4E: the Sub-CPU reads each chunk back through the 68000: 1 = not the same */
         SET_COMM(0, 0);
         if (cur_img == 4)
             blob_update();
@@ -2406,8 +2450,7 @@ static void sub_finish(void)
         int ok   = 0;
         if (op == 1) {
             /* REV R4: the Sub-CPU's own checks (cd32x/sub_main.c, SGB_CMD): an act file it would refuse is refused here */
-            u32 o = off & (CART_SIZE - 1);
-            const u8 *m = &cart[o];
+            const u8 *m = &cart[cmap(off)];
             u32 magic = rd_be32(m), size = rd_be32(m + 8), oCell = rd_be32(m + 12), oZero = rd_be32(m + 28), oCram = rd_be32(m + 32);
             int ver = rd_be16(m + 4), cells = rd_be16(m + 6);
             if (!(off & 1) && magic == 0x53434D47u && ver == 1 && cells > 0 && cells <= 1536 && (off & 0xFFFFF) + size <= 0x100000 &&
@@ -2416,7 +2459,7 @@ static void sub_finish(void)
                 planes_on = 1;
                 if (ms_planes < 0)
                     ms_planes = frame_no();
-                vdp_planes_on(o);
+                vdp_planes_on(off & (CART_SIZE - 1));
                 md_display = 1; /* REV R4B: the Sub-CPU's register list ends with 0x8174 */
                 SET_COMM(6, 0);
             }
@@ -2531,7 +2574,7 @@ static void note_plat_log(void)
     for (u32 p = R[4]; n < 95; ++p, ++n) {
         u32 q = p & 0x1FFFFFFF;
         u8 c  = q >= 0x06000000u && q < 0x06000000u + SDRAM_SIZE ? sdram[(q - 0x06000000u) & (SDRAM_SIZE - 1)]
-                : q < CART_SIZE + 0x02000000u && q >= 0x02000000u ? cart[(q - 0x02000000u) & (CART_SIZE - 1)] : 0;
+                : q < CART_SIZE + 0x02000000u && q >= 0x02000000u ? cart[cmap(q - 0x02000000u)] : 0;
         if (!c)
             break;
         t[n] = (char)c;
@@ -3271,6 +3314,9 @@ static void summary(void)
     if (water_frames) /* REV R4D */
         printf("underwater        %llu frames with a water line (the 68000's H-int writes the water colours there)\n",
                (unsigned long long)water_frames);
+    if (opt_cart != 4 || page_switches) /* REV R4E */
+        printf("cart              %d MB%s, %llu page switches; window 0 page %d, window 1 page %d at the end\n", opt_cart,
+               opt_cart >= 8 ? " (page mapper)" : " (no mapper)", (unsigned long long)page_switches, win_page[0], win_page[1]);
     if (load_runs || load_singles) /* REV R4C */
         printf("loading           %llu fast runs (%llu chunks, one CD read each run), %llu chunks one by one (verified by "
                "the Sub-CPU)\n", (unsigned long long)load_runs, (unsigned long long)load_run_chunks, (unsigned long long)load_singles);
@@ -3504,6 +3550,15 @@ int main(int argc, char **argv)
             opt_badrun = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-noslave")) /* REV R4D: the second SH2 not run (as sh2emu before R4D) */
             opt_noslave = 1;
+        else if (!strcmp(argv[i], "-cart") && i + 1 < argc) { /* REV R4E: 4 (no mapper), 8 or 16 MB */
+            opt_cart = atoi(argv[++i]);
+            if (opt_cart != 4 && opt_cart != 8 && opt_cart != 16) {
+                fprintf(stderr, "-cart: 4, 8 or 16\n");
+                return 1;
+            }
+        }
+        else if (!strcmp(argv[i], "-cartbad") && i + 1 < argc) /* REV R4E: this page keeps nothing written */
+            opt_cartbad = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-oldsub")) /* REV R4C */
             opt_oldsub = 1;
         else if (!strcmp(argv[i], "-bram") && i + 1 < argc) /* REV R4C */
@@ -3524,7 +3579,7 @@ int main(int argc, char **argv)
     fill_garbage(sdram, SDRAM_SIZE, &seed);
     fill_garbage(fb[0], FB_SIZE, &seed);
     fill_garbage(fb[1], FB_SIZE, &seed);
-    fill_garbage(cart, CART_SIZE, &seed);
+    fill_garbage(cart, CART_PHYS, &seed);
     sprintf(path, "%s/engine_symbols.txt", opt_dir);
     load_engine_syms(path);
     sprintf(path, "%s/sh2.map", opt_dir);
