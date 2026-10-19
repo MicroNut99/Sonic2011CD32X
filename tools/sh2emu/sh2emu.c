@@ -2225,14 +2225,30 @@ static void sub_finish(void)
            (interrupts off, RV = 1) writes the page to 0xA130F0 / 0xA130F2; a cart without the mapper ignores it */
         int w = (COMM(2) >> 8) & 1, pg = COMM(2) & 7;
         if (opt_cart >= 8) {
-            if (w == 0 && pg != 0 && engine_started)
-                evlog("CART-W0", "window 0 to page %d - the engine's code is in window 0", pg);
+            if (w == 0 && engine_started) { /* REV R4F: window 0 switched under the running engine - its page must hold
+                                               the same engine (code, data image) as page 0 */
+                u32 base = ((u32)pg & (opt_cart == 8 ? 3u : 7u)) << 21;
+                for (u32 i = 0; i < eng_img_end_off; ++i)
+                    if (cart[base + i] != cart[i] || !cart_def[base + i]) {
+                        evlog("CART-W0", "window 0 to page %d - its engine differs from page 0's at +%06X", pg, i);
+                        break;
+                    }
+            }
             win_page[w] = pg;
         }
         page_switches++;
         if (page_switches <= 64)
             printf("[f%5d] SUB: CMD 46 page switch: window %d -> page %d%s\n", frame_no(), w, pg,
                    opt_cart >= 8 ? "" : " (no mapper: nothing changes)");
+        rv_active = 0;
+        SET_COMM(12, 0);
+        SET_COMM(0, 0);
+    }
+    else if (cmd == 46 && (COMM(2) & 0xFFE0) == 0xF000 && !opt_oldsub) {
+        /* REV R4F: the opened file's cart slot (cd32x/sub_main.c): COMM2 = 0xF000 | slot (128 KB each) */
+        cur_img = COMM(2) & 0x1F;
+        if (opt_verbose)
+            printf("[f%5d] SUB: CMD 46 slot %d (cart %06X)\n", frame_no(), cur_img, cur_img * 0x20000);
         rv_active = 0;
         SET_COMM(12, 0);
         SET_COMM(0, 0);
@@ -2517,7 +2533,8 @@ static void sub_poll(void)
     if (c == 46) {
         lat       = 200000;
         rv_active = 1;
-        if ((COMM(2) & 0xF800) == 0xF800 && !opt_oldsub) /* REV R4E: a page switch - three 68000 commands */
+        if (((COMM(2) & 0xF800) == 0xF800 || (COMM(2) & 0xFFE0) == 0xF000) && !opt_oldsub) /* REV R4E: a page switch
+                                                                                         (R4F: or a slot) - a few 68000 commands */
             lat = 60000;
         else if ((COMM(2) & 0xFF00) && !opt_oldsub) /* REV R4C: a run - more data, the same one read (shortened here too) */
             lat = 120000u * (u64)(((COMM(2) >> 8) & 0xFF) + 1) + 80000u;

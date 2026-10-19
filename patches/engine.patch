@@ -614,14 +614,14 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      byte type;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Debug.cpp engine/Debug.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Debug.cpp	2026-10-19 02:48:09.339602366 -0700
++++ engine/Debug.cpp	2026-10-19 03:38:58.442724446 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +#include <stdarg.h> // PORT32X: was pulled in by SDL.h
  
  int touchFlags = 0;
  
-@@ -44,6 +45,133 @@
+@@ -44,6 +45,137 @@
      }
  }
  
@@ -636,7 +636,9 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +// sound effects in the PCM chip, from its next load) and UNDERWATER (the act's underwater colours below the water line,
 +// on the Genesis planes); the blank rows under the title and the version taken out (26 rows from y = 8)
 +// REV R4E: CART TEST after CREDITS - the 8 / 16 MB cart's page mapper tried (plat_cart_test: the result in the two note
-+// rows); the blank row under the notes taken out (27 rows from y = 8)
++// rows); the blank row under the notes taken out (27 rows from y = 8). REV R4F: the row is the BIG CART switch (off at
++// power-on): switched on, the test runs, and if the pages work the game keeps each act's time periods in their own
++// pages (plat_big_cart: 16 MB four pairs of pages, 8 MB two)
 +#define SCD_MENU_PLAYER  6
 +#define SCD_MENU_START   8
 +#define SCD_MENU_STAGES  10
@@ -647,9 +649,10 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +#define SCD_MENU_SFX     20 // REV R4D
 +#define SCD_MENU_WATER   22 // REV R4D
 +#define SCD_MENU_CREDITS 24 // REV R4: the credits screen (plat_credits)
-+#define SCD_MENU_CART    26 // REV R4E: CART TEST
++#define SCD_MENU_CART    26 // REV R4E: CART TEST (REV R4F: BIG CART)
 +int scdDebugSwitch                = 0;
 +int scdSh2Switch = 0, scdSfxSwitch = 0, scdWaterSwitch = 0; // REV R4D (engine/plat.hpp)
++static int scdBigCart = 0;                                  // REV R4F: 0 off, 2 (8 MB) or 4 (16 MB) pairs of pages
 +static int scdPlayer              = 0; // REV R4B: 0 Sonic, 1 Tails
 +static int scdLives               = 3; // REV R4B: the lives a game starts with
 +char scdMenuNote[2][SCD_MENU_NOTE] = { "", "" };
@@ -663,6 +666,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +        case SCD_MENU_SH2: return scdSh2Switch ? "2ND SH2    ON   " : "2ND SH2    OFF  ";
 +        case SCD_MENU_SFX: return scdSfxSwitch ? "STAGE SFX  ON   " : "STAGE SFX  OFF  ";
 +        case SCD_MENU_WATER: return scdWaterSwitch ? "UNDERWATER ON   " : "UNDERWATER OFF  ";
++        case SCD_MENU_CART: return scdBigCart == 4 ? "BIG CART   16 MB" : scdBigCart == 2 ? "BIG CART   8 MB " : "BIG CART   OFF  "; // REV R4F
 +        default: return scdDebugSwitch ? "DEBUG MODE ON   " : "DEBUG MODE OFF  ";
 +    }
 +}
@@ -698,7 +702,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +    AddTextMenuEntry(&gameMenu[0], " ");
 +    AddTextMenuEntry(&gameMenu[0], "CREDITS");
 +    AddTextMenuEntry(&gameMenu[0], " ");
-+    AddTextMenuEntry(&gameMenu[0], "CART TEST"); // REV R4E
++    AddTextMenuEntry(&gameMenu[0], scd_switch_text(SCD_MENU_CART)); // REV R4E: CART TEST - REV R4F: BIG CART
 +    gameMenu[0].alignment        = 2;
 +    gameMenu[0].selectionCount   = 2;
 +    gameMenu[0].selection1       = 0;
@@ -755,7 +759,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void InitDevMenu()
  {
  #if RETRO_USE_MOD_LOADER
-@@ -70,6 +198,9 @@
+@@ -70,6 +202,9 @@
      SetPaletteEntry(-1, 0xF0, 0x00, 0x00, 0x00);
      SetPaletteEntry(-1, 0xFF, 0xFF, 0xFF, 0xFF);
      stageMode = DEVMENU_MAIN;
@@ -765,7 +769,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      SetupTextMenu(&gameMenu[0], 0);
      AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
      AddTextMenuEntry(&gameMenu[0], " ");
-@@ -102,6 +233,7 @@
+@@ -102,6 +237,7 @@
      gameMenu[0].selection2       = 9;
      gameMenu[1].visibleRowCount  = 0;
      gameMenu[1].visibleRowOffset = 0;
@@ -773,7 +777,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (renderType == RENDER_HW) {
          Engine.highResMode = false;
          render3DEnabled    = false;
-@@ -144,6 +276,9 @@
+@@ -144,6 +280,9 @@
  void ProcessStageSelect()
  {
      ClearScreen(0xF0);
@@ -783,7 +787,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      keyDown.start = false;
      keyDown.B     = false;
      keyDown.up    = false;
-@@ -210,16 +345,96 @@
+@@ -210,16 +349,97 @@
                  gameMenu[0].selection2 -= 2;
  
              int count = 13;
@@ -813,8 +817,9 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +                const bool go = keyPress.start || keyPress.A, side = keyPress.left || keyPress.right;
 +                if (row == SCD_MENU_CART) { // REV R4E: the cart test - its result in the note rows (the menu made again:
 +                                            // EditTextMenuEntry writes in place, a longer text would run into the next rows)
-+                    if (go) {
-+                        plat_cart_test();
++                    if (go || side) { // REV R4F: BIG CART - on: the test first, the pages used only if it passed; off
++                        scdBigCart = scdBigCart ? 0 : plat_cart_test(); // (the test's two lines in the notes)
++                        plat_big_cart(scdBigCart);
 +                        scd_main_menu(SCD_MENU_CART);
 +                    }
 +                    break;
@@ -881,7 +886,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyPress.start || keyPress.A) {
                  if (gameMenu[0].selection2 == 9) {
                      ClearGraphicsData();
-@@ -326,6 +541,10 @@
+@@ -326,6 +546,10 @@
              }
              else if (keyPress.B) {
                  stageMode = DEVMENU_MAIN;
@@ -892,7 +897,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
                  AddTextMenuEntry(&gameMenu[0], " ");
-@@ -421,6 +640,11 @@
+@@ -421,6 +645,11 @@
                  stageMode                    = DEVMENU_STAGESEL;
              }
              else if (keyPress.B) {
@@ -904,7 +909,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "SELECT A PLAYER");
                  SetupTextMenu(&gameMenu[1], 0);
-@@ -437,6 +661,28 @@
+@@ -437,6 +666,28 @@
  
          case DEVMENU_STAGESEL: // Selecting Stage
          {
@@ -933,7 +938,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyDown.down) {
                  gameMenu[1].timer += 1;
                  if (gameMenu[1].timer > 8) {
-@@ -456,6 +702,7 @@
+@@ -456,6 +707,7 @@
                      gameMenu[1].timer = 0;
                  }
              }
@@ -941,7 +946,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyPress.down) {
                  gameMenu[1].selection1++;
                  if (gameMenu[1].selection1 - gameMenu[1].visibleRowOffset >= gameMenu[1].visibleRowCount) {
-@@ -480,7 +727,12 @@
+@@ -480,7 +732,12 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX - 4, 40);
              DrawTextMenu(&gameMenu[1], SCREEN_CENTERX + 100, 64);
              if (keyPress.start || keyPress.A) {
@@ -954,7 +959,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  stageMode         = STAGEMODE_LOAD;
                  Engine.gameMode   = ENGINE_MAINGAME;
                  stageListPosition = gameMenu[1].selection1;
-@@ -511,6 +763,10 @@
+@@ -511,6 +768,10 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 72);
              if (keyPress.start || keyPress.A) {
                  stageMode = DEVMENU_MAIN;
@@ -4939,8 +4944,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
-+++ engine/plat.hpp	2026-10-19 02:45:41.233179419 -0700
-@@ -0,0 +1,149 @@
++++ engine/plat.hpp	2026-10-19 03:38:47.942026895 -0700
+@@ -0,0 +1,150 @@
 +#ifndef PLAT_H
 +#define PLAT_H
 +// PORT32X: the platform layer of the Sega CD32X port.
@@ -5002,7 +5007,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +extern int scdWaterSwitch; // 1: the act's underwater colours below the water line on the Genesis planes (the 68000's H-int)
 +#define SCD_MENU_NOTE 40
 +extern char scdMenuNote[2][SCD_MENU_NOTE]; // two lines the dev menu shows: why the platform came back to it
-+void plat_cart_test(); // REV R4E: the Options Menu's CART TEST - the 8 / 16 MB cart's pages tried; the result in scdMenuNote
++int plat_cart_test(); // REV R4E: the 8 / 16 MB cart's pages tried, the result in scdMenuNote - REV R4F: the pairs it gives (4, 2, 0)
++void plat_big_cart(int pairs); // REV R4F: the Options Menu's BIG CART - 0 off, 2 (8 MB) or 4 (16 MB) pairs of pages
 +// REV R4: the dev menu (engine/Debug.cpp). plat_boot_menu: true = the engine starts in the dev menu, not the first stage.
 +// Each menu frame: plat_menu_clear, then every text entry drawn - n characters of a menu's text at pixel x, y (8 x 8
 +// characters, highlight 0 / 1). The SH2 shows the text on Genesis plane A (cd32x/engine/plat_mars.cpp).

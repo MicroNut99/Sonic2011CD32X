@@ -2138,8 +2138,150 @@ static int sd_load_whole(unsigned short number, unsigned int *bytes) /* REV R4B:
     *bytes  = loadLen;
     return r + (bad < 0 ? 1 : bad);
 }
+/* REV R4E/R4F: MicroNut99's 8 / 16 MB cart - two 2 MB windows (window 0 = cart 0x000000-0x1FFFFF, window 1 =
+   0x200000-0x3FFFFF), each showing one of 8 pages of 2 MB (an 8 MB cart: pages 4-7 are 0-3 again). The Sub-CPU switches
+   a window with command 46, COMM2 = 0xF800 | window << 8 | page (the 68000 writes the page register with RV = 1 and
+   interrupts off); this SH2 purges its cache after each switch (the second SH2 purges before each job). */
+#define CART_W1 0x200000u
+static int sd_page(int window, int page)
+{
+    SC_COMM2  = (unsigned short)(0xF800u | (unsigned)window << 8 | ((unsigned)page & 7u));
+    SC_COMM12 = 0xFFFF;
+    const int r = sd_cmd(46);
+    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: a window shows other RAM */
+    return r;
+}
+static bool cart_same(unsigned int a, unsigned int b, unsigned int bytes) /* two cart places, uncached */
+{
+    const volatile unsigned int *p = (const volatile unsigned int *)(0x22000000u + a);
+    const volatile unsigned int *q = (const volatile unsigned int *)(0x22000000u + b);
+    for (unsigned int i = 0; i < bytes / 4; ++i)
+        if (p[i] != q[i])
+            return false;
+    return true;
+}
+/* REV R4F: THE BIG CART (the Options Menu's BIG CART switch, after its cart test) - the 16 MB cart as four PAIRS of
+   pages (8 MB: two), each pair a whole 4 MB cart as the game knows it: page 2k in window 0 - the engine (its copy at
+   0x000000) and the scene image (0x080000) - and page 2k + 1 in window 1 - the data pack with the loading picture
+   (0x300000) and the act file (0x380000). Pair 0 is pages 0 and 1: the cart at power-on, as the 4 MB game. A scene
+   another pair holds is a switch of both windows (and the cache purge): no CD read. A new scene of an act goes to a
+   pair that holds none of that act's time periods (the least recently used), so the act's periods stay in: present,
+   past and the futures each in its pair, the warps between them without the CD. Other scenes (the title, the menus,
+   the special stages) take the pair in use. A pair used the first time gets the engine's copy and the data pack
+   through window 1 (the engine's copy compared with the running engine byte for byte before window 0 shows it). The
+   scene images are the 4 MB game's: nothing moves, nothing is linked again. */
+#define CART_PAIRS_MAX 4
+struct CartPair {
+    unsigned int scene, mdg, mdgBytes, used; /* (the pair in use: SCD_BOOT_RECORD[5], mdgInCart, mdgBytes) */
+    bool ready;                              /* its engine's copy and its data pack are in */
+};
+static CartPair cartPair[CART_PAIRS_MAX] = { { 0, 0, 0, 0, true }, { 0, 0, 0, 0, false }, { 0, 0, 0, 0, false }, { 0, 0, 0, 0, false } };
+static int cartPairs = 0; /* 0: the 4 MB cart's way (pair 0 only); 2 or 4 */
+static int pairNow   = 0;
+static unsigned int pairClock = 0;
+static int sd_slot(unsigned int slot) /* the opened file's cart slot (128 KB each): the Sub-CPU's command 46 0xF0nn */
+{
+    SC_COMM2  = (unsigned short)(0xF000u | (slot & 0x1Fu));
+    SC_COMM12 = 0xFFFF;
+    return sd_cmd(46);
+}
+static bool pair_file(unsigned short number, unsigned int slot) /* a whole file into a slot of window 1 */
+{
+    SC_COMM2 = number;
+    if (sd_cmd(38) < 0)
+        return false;
+    const unsigned int len = SC_COMM8_32;
+    if ((int)len <= 0 || sd_slot(slot) < 0)
+        return false;
+    loadLen            = len;
+    unsigned int total = (len + 32767u) >> 15;
+    loadCount          = 0;
+    for (unsigned int c = 0; c < total && c < SCD_CHUNKS_MAX; ++c) loadList[loadCount++] = (unsigned short)c;
+    return sd_load_list(slot * 0x20000u) == 0;
+}
+static bool pair_prepare(int k) /* the pair's engine copy (page 2k) and data pack (page 2k + 1), through window 1 */
+{
+    bool ok = sd_page(1, 2 * k) == 0 && pair_file(21, 16) && cart_same(0, CART_W1, (loadLen + 3u) & ~3u); /* SONICCD.PAK */
+    ok      = ok && sd_page(1, 2 * k + 1) == 0 && pair_file(22, 24);                                       /* SCDDATA.PAK */
+    sd_page(1, 2 * pairNow + 1);
+    if (ok) {
+        cartPair[k].ready = true;
+        cartPair[k].scene = cartPair[k].mdg = cartPair[k].mdgBytes = 0;
+    }
+    else
+        STATE(0x5CB0 | (unsigned int)k); /* line 10: pair k could not be made ready - the scene loads into the pair in use */
+    return ok;
+}
+static void pair_use(int k) /* both windows to pair k */
+{
+    cartPair[pairNow].scene    = SCD_BOOT_RECORD[5];
+    cartPair[pairNow].mdg      = mdgInCart;
+    cartPair[pairNow].mdgBytes = mdgBytes;
+    sd_page(1, 2 * k + 1);
+    sd_page(0, 2 * k); /* the same engine in both pages: the code runs on (the cache purged) */
+    pairNow            = k;
+    SCD_BOOT_RECORD[5] = cartPair[k].scene;
+    mdgInCart          = cartPair[k].mdg;
+    mdgBytes           = cartPair[k].mdgBytes;
+}
+static unsigned int pair_scene(int k) { return k == pairNow ? SCD_BOOT_RECORD[5] : cartPair[k].scene; }
+static unsigned int scene_group(unsigned int file) /* an act's time periods share it (0: not an act scene) */
+{
+    if ((file & 0xF00u) != 0x200u)
+        return 0;
+    const unsigned int pos = file & 0x7Fu, a = pos % 10u; /* each zone: act 1 A-D, act 2 A-D, act 3 C-D */
+    return 0x10000u | (file & 0x80u) | (pos / 10u) << 2 | (a < 4 ? 0u : a < 8 ? 1u : 2u);
+}
+static int pair_holding(unsigned int file)
+{
+    if (!file)
+        return -1;
+    for (int k = 0; k < cartPairs; ++k)
+        if (pair_scene(k) == file && cartPair[k].ready)
+            return k;
+    return -1;
+}
+static void pair_for(unsigned int file) /* before a scene loads: the pair it goes to (or is in) in use */
+{
+    if (!cartPairs) {
+        if (pairNow != 0) { /* the switch off: the cart's power-on pages again */
+            comm_idle();
+            pair_use(0);
+        }
+        return;
+    }
+    comm_idle();
+    int k = pair_holding(file);
+    if (k < 0) {
+        const unsigned int g = scene_group(file);
+        k                    = pairNow;
+        if (g && scene_group(pair_scene(pairNow)) == g) { /* the pair in use holds another period of this act: keep it */
+            int best = -1;
+            for (int j = 0; j < cartPairs; ++j)
+                if (j != pairNow && scene_group(pair_scene(j)) != g && (best < 0 || cartPair[j].used < cartPair[best].used))
+                    best = j;
+            if (best >= 0)
+                k = best;
+        }
+    }
+    if (k != pairNow && (cartPair[k].ready || pair_prepare(k)))
+        pair_use(k);
+    cartPair[pairNow].used = ++pairClock;
+}
+static bool scene_resident(unsigned int file, unsigned int mdg) /* the scene and its act file in the cart already */
+{
+    if (file == SCD_BOOT_RECORD[5] && mdg == mdgInCart)
+        return true;
+    const int k = cartPairs ? pair_holding(file) : -1;
+    return k >= 0 && k != pairNow && cartPair[k].mdg == mdg;
+}
+void plat_big_cart(int pairs) /* the Options Menu's BIG CART: 0 off, 2 (8 MB) or 4 (16 MB) pairs */
+{
+    cartPairs = pairs == 2 || pairs == 4 ? pairs : 0;
+}
 static int scene_load(unsigned int file) /* the scene's image into the cart: 0 = there, -1 = not on the disc */
 {
+    pair_for(file); /* REV R4F: the big cart - the pair the scene is in, or goes to */
     if (file == SCD_BOOT_RECORD[5])
         return 0; /* in the cart already */
     comm_idle(); /* REV R4: the pad request answered first */
@@ -2234,28 +2376,10 @@ static void menu_note_missing(unsigned int file) /* REV R4: the dev menu's two l
    that no page shows another page's chunk (nor page 1). Window 1 goes back to page 1. The result: the note rows. */
 #define CART_TEST_FILE 16
 #define CART_TEST_CHUNK 0x8000u
-#define CART_W1 0x200000u
 #define CART_PROBE 0x10000u /* (the engine's code: page 0 at this place is not a run of equal words) */
 static unsigned int cart_pattern(unsigned int c, unsigned int i) /* tools/make_cart_test.py: word i of chunk c */
 {
     return (i * 0x9E3779B1u) ^ (0x43540000u | c << 8 | c);
-}
-static int sd_page(int window, int page)
-{
-    SC_COMM2  = (unsigned short)(0xF800u | (unsigned)window << 8 | ((unsigned)page & 7u));
-    SC_COMM12 = 0xFFFF;
-    const int r = sd_cmd(46);
-    *(volatile unsigned char *)0xFFFFFE92 = 0x11; /* purge the cache: window 1 shows other RAM */
-    return r;
-}
-static bool cart_same(unsigned int a, unsigned int b, unsigned int bytes) /* two cart places, uncached */
-{
-    const volatile unsigned int *p = (const volatile unsigned int *)(0x22000000u + a);
-    const volatile unsigned int *q = (const volatile unsigned int *)(0x22000000u + b);
-    for (unsigned int i = 0; i < bytes / 4; ++i)
-        if (p[i] != q[i])
-            return false;
-    return true;
 }
 static bool cart_chunk_is(unsigned int at, unsigned int c, unsigned int words) /* the test chunk c there (cached reads) */
 {
@@ -2274,23 +2398,30 @@ static char *note_pages(char *d, unsigned int mask, char *end) /* " 2 3 5" */
         }
     return d;
 }
-void plat_cart_test()
+int plat_cart_test() /* REV R4F: the pairs the big cart gives (4: 16 MB, 2: 8 MB, 0: none or a fault) */
 {
     char *d0 = scdMenuNote[0], *e0 = scdMenuNote[0] + SCD_MENU_NOTE - 1;
     char *d1 = scdMenuNote[1], *e1 = scdMenuNote[1] + SCD_MENU_NOTE - 1;
     comm_idle(); /* the pad request (command 48, not waited for) done first: a command written while it runs is lost
                     (sh2emu: the first page switch never reached the Sub-CPU) */
+    if (pairNow != 0) /* REV R4F: the cart's power-on pages (the menu's text is in the VDP already) */
+        pair_use(0);
+    for (int k = 1; k < CART_PAIRS_MAX; ++k) { /* the test writes into pages 2-7: no pair is ready after it */
+        cartPair[k].ready = false;
+        cartPair[k].scene = cartPair[k].mdg = cartPair[k].mdgBytes = 0;
+    }
+    cartPairs = 0;
     if (sd_page(1, 0) < 0) {
         d0  = note_put(d0, "CART TEST: NO ANSWER (SUB-CPU)", e0);
         *d0 = 0, *d1 = 0;
-        return;
+        return 0;
     }
     if (!cart_same(CART_PROBE, CART_W1 + CART_PROBE, 0x1000)) { /* window 1 did not show page 0 */
         sd_page(1, 1);
         d0  = note_put(d0, "CART TEST: NO PAGE MAPPER", e0);
         d1  = note_put(d1, "(A 4 MB CART) - NOTHING WRITTEN", e1);
         *d0 = 0, *d1 = 0;
-        return;
+        return 0;
     }
     sd_page(1, 4);
     const int last = cart_same(CART_PROBE, CART_W1 + CART_PROBE, 0x1000) ? 3 : 7; /* page 4 = page 0: 8 MB */
@@ -2307,7 +2438,7 @@ void plat_cart_test()
         sd_page(1, 1);
         d0  = note_put(d0, "CART TEST: KOBOGFX.BIN NOT ON THE DISC", e0);
         *d0 = 0, *d1 = 0;
-        return;
+        return 0;
     }
     loadLen = SC_COMM8_32;
     for (int p = 2; p <= last; ++p)
@@ -2331,7 +2462,8 @@ void plat_cart_test()
             alias |= 1u << 1; /* page 1 shows a test chunk: written through another page's number */
     const unsigned int ok = pages & ~(bad68 | badSh2 | alias);
     d0 = note_put(d0, last == 7 ? "CART 16 MB: " : "CART 8 MB: ", e0);
-    if (ok == pages && !skip && !(alias & 2)) {
+    const bool allOk = ok == pages && !skip && !(alias & 2);
+    if (allOk) {
         d0 = note_put(d0, last == 7 ? "PAGES 2-7 OK" : "PAGES 2-3 OK", e0);
         d1 = note_put(d1, "PAGE SWITCH OK, GAME PAGES UNTOUCHED", e1);
     }
@@ -2354,9 +2486,10 @@ void plat_cart_test()
         }
     }
     *d0 = 0, *d1 = 0;
+    return allOk ? (last == 7 ? 4 : 2) : 0;
 }
 #else
-void plat_cart_test() {}
+int plat_cart_test() { return 0; }
 #endif
 bool plat_stage_loading()
 {
@@ -2374,7 +2507,7 @@ bool plat_stage_loading()
     }
     /* REV R1: the planes off (the Sub-CPU's loading lines) - REV R4B: the loading picture in front, the Genesis display
        off; the scene and its act file in the cart already (a restart): black, nothing to wait for */
-    planes_off(scene_file() == SCD_BOOT_RECORD[5] && mdg_file() == mdgInCart ? PLANES_OFF_BLACK : PLANES_OFF_PICTURE);
+    planes_off(scene_resident(scene_file(), mdg_file()) ? PLANES_OFF_BLACK : PLANES_OFF_PICTURE); /* REV R4F: or in a pair */
     menuDrawn = false;
 #endif
     audio_before_load(); /* REV R4 */

@@ -765,6 +765,14 @@ int main(void)
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, 0);
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
         }
+        else if (cmd == CMD_CHUNK_TO_CART && (do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 0xFFE0) == 0xF000) {
+            /* SONIC REV R4F - THE FILE'S CART SLOT: COMM2 = 0xF000 | slot (0-31, 128 KB each) - the file command 38
+               opened goes to that slot instead of its own (the 16 MB cart: the engine's copy and the data pack into a
+               page shown in window 1, cart 0x200000-0x3FFFFF). Only the 16 MB game sends it. COMM12 = 0. */
+            cur_img = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 0x1F;
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, 0);
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
+        }
         else if (cmd == CMD_CHUNK_TO_CART && (do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 0xFF00)) {
             /* SONIC REV R4C - FAST LOAD: COMM2 = first chunk | (more chunks) << 8 - up to CHUNK_RUN_MAX chunks of the
                open file in ONE CD read (one seek instead of one a chunk) into this side's Word RAM bank (128 KB), then
