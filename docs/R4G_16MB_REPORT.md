@@ -161,6 +161,11 @@ engine's usual stage set-up. No disc.
     SH2), and never writes pages 0 / 1.
   - It refuses to run while page 0 holds an act scene, because an act page with the same scene would look exactly
     like page 0.
+  - **On a 4 MB cart** there is no page to switch, so the test tries the slot command instead: the 256 KB test file
+    goes to the first free 128 KB slot after page 0's scene image (from the title: slot 19, cart `0x260000`; always
+    below the data pack at `0x300000`). The Sub-CPU reads each chunk back, the SH2 reads them through its cache, and
+    the file's own slot (16, `0x200000`) must not show them. The scene in page 0 is then loaded whole at the next
+    load. **So a test burn on the 4 MB cart runs both new Sub-CPU cases on the console.**
 
 ## 10. What was checked, and what was not
 
@@ -172,7 +177,8 @@ Checked, sh2emu only, all `VERDICT no problems found`, on a build made from scra
 - a second power-on with the cart kept (`-cartkeep`), where the act's scenes came from the cart;
 - a power cut in the middle of a preload;
 - 8 MB;
-- the cart test after a preload, and on 4 MB ("NO PAGE MAPPER");
+- the cart test after a preload, and on 4 MB ("NO PAGE MAPPER (4 MB)", then the slot command into a free slot: "SLOT
+  19 LOAD OK");
 - the test refused with an act in page 0;
 - title demos;
 - a title demo, then a game (the preload still runs);

@@ -50,6 +50,15 @@ The last row reads `BIG CART   16 MB` (or `8 MB`) when the cart was found, `OFF`
 way); A again runs R4E's cart test and, if it passes, turns it on. The test writes into pages 2-7, so the act pages
 are looked up again at the next act.
 
+**On a 4 MB cart** (no page mapper: nothing to switch) the test tries the Sub-CPU's other new case instead, the slot
+command (command 46 `0xF0nn`): the test file `KOBOGFX.BIN` (256 KB, which command 38 puts at cart `0x200000`) goes to
+the first free 128 KB slot after page 0's scene image, below the data pack at `0x300000` - from the title slot 19
+(`0x260000`), from the main menu slot 21 - room the game keeps nothing in. The Sub-CPU reads each 32 KB chunk back, then
+the SH2 reads them all through its cache, and `0x200000` must not show them (the case ignored). The notes read
+`CART TEST: NO PAGE MAPPER (4 MB)` / `SLOT 19 LOAD OK (SUB-CPU AND SH2)`; otherwise `SLOT 19 BAD: 0 3 (SUB-CPU)`
+(the chunks that failed, and who found it), `SLOT CMD IGNORED: DATA IN SLOT 16`, or `SLOT TEST NOT RUN: ...`. The
+scene in page 0 is loaded whole at the next scene load either way. The row stays `OFF`.
+
 The test does not run while page 0 holds an act scene (`BIG CART` was off and you played an act, or a title demo is
 playing): an act page holding the same scene would look like page 0 itself. The note rows then read `CART TEST: AN ACT
 IS IN PAGE 0` / `RUN IT FROM THE TITLE - NOTHING DONE`, and the row stays `OFF`: open the menu from the title screen
@@ -86,7 +95,8 @@ is the first to run the new `sub_main.c` on the console.**
 | Run | Result |
 |---|---|
 | 4 MB: power-on to Palmtree Panic 1 through the game's menus | the same pictures as R4E's and R4F's runs (record CRC `2F19502C`), the same loads but one more 32 KB chunk of `SCDDATA.PAK` (the table), 1 save; 2 page commands at the title, nothing else |
-| 4 MB: the cart test | `CART TEST: NO PAGE MAPPER` / `(A 4 MB CART) - NOTHING WRITTEN`; the row stays `OFF` |
+| 4 MB: the cart test from the title, then Palmtree Panic 1 | `CART TEST: NO PAGE MAPPER (4 MB)` / `SLOT 19 LOAD OK (SUB-CPU AND SH2)`; the row stays `OFF`; Palmtree Panic 1 loads whole and plays |
+| 4 MB: the cart test from the main menu | `SLOT 21 LOAD OK (SUB-CPU AND SH2)` (the menu's image is longer) |
 | 16 MB, empty cart: Palmtree Panic 1 present, past, act 2 present (`STAGE SELECT`) | the act start loads the present into page 2 and preloads past, act 2's present, bad future, good future (pages 3-6); the past: a page switch, no file; act 2's present: a page switch, then its own preload (past, act 3's bad future, bad future, good future) |
 | 16 MB, power on again with that cart: act 2 present, past, good future | the pages looked up (about 2.5 s), all three scenes from the cart, no image read; the good future's act file read again (its slot is shared with the menu's font) |
 | 16 MB through the game's own menus (title, `START GAME`, a save) | the same preload at Palmtree Panic 1's start |
@@ -185,12 +195,14 @@ new there:
 2. When the title starts, the game sends the new page command twice (window 1 to page 0, back to page 1): two writes
    to `0xA130F2`. Nothing to see: the title comes as always. If the loading picture stood and the title never came,
    it would point at this step.
-3. A + B + C + Start at the title, Up twice: the last row reads `BIG CART   OFF`. A on it runs the cart test - two
-   more page commands; the note rows read `CART TEST: NO PAGE MAPPER` / `(A 4 MB CART) - NOTHING WRITTEN`, the row
-   stays `OFF`. This is the whole new path on the console: the SH2 -> the Sub-CPU's command 46 `0xF8nn` -> the
-   68000's command 26 -> `0xA130F2`.
-4. Then play as with R4D: `START GAME`, a save, Palmtree Panic 1, a warp, the next act. Everything loads from the
-   CD as R4D (the second new case, `0xF0nn`, is never sent on the 4 MB cart).
+3. A + B + C + Start at the title, Up twice: the last row reads `BIG CART   OFF`. A on it runs the cart test:
+   - two more page commands (the SH2 -> the Sub-CPU's command 46 `0xF8nn` -> the 68000's command 26 -> `0xA130F2`);
+   - then the slot command (`0xF0nn`): the test file into slot 19 (cart `0x260000`), each chunk read back.
+
+   The note rows must read `CART TEST: NO PAGE MAPPER (4 MB)` / `SLOT 19 LOAD OK (SUB-CPU AND SH2)`, and the row stays
+   `OFF`. **Both new cases have then run on the console.** Anything else on the second row: a photo of it.
+4. Then play as with R4D: `STAGE SELECT` or `START GAME`, a save, Palmtree Panic 1, a warp, the next act. Everything
+   loads from the CD as R4D. (The first scene after the test loads whole: a little longer.)
 5. Anything different from R4D: line 10's code if the text shows, or a photo.
 
 ## When the new cart exists
