@@ -150,7 +150,8 @@ grep -ac "SH2-VR4D" cd32x/build_engine/disc/APP.BIN                             
 `python3 tools/build_preload.py game_data` prints `SCDDATA.PAK: the preload table, 280 entries (140 images, 140 act
 files)`. Burn `discs/SONICCD_R4G.cue`.
 
-Then sh2emu, before burning - three runs: the power-on on the 4 MB cart (as R4D), the 16 MB cart's first power-on
+Then sh2emu, before burning - four runs: the power-on on the 4 MB cart (as R4D), the cart test on the 4 MB cart (the
+test burn's step 3, then Palmtree Panic 1), the 16 MB cart's first power-on
 (empty cart: Palmtree Panic 1 present with its preload, the past, act 2's present), and a second power-on with the
 cart's contents kept (the battery: act 2's present, past and good future from the cart). The cart's 16 MB are kept in
 `sh2emu_cart16.bin` between runs 2 and 3.
@@ -161,6 +162,8 @@ gcc -O2 -o /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/
 rm -f /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin
 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 6000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -bram /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin -shot 5800 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
 sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 2700 -pad "1300:ABCS,1310:-,1450:U,1460:-,1470:U,1480:-,1500:A,1510:-,1700:D,1710:-,1730:D,1740:-,1760:D,1770:-,1800:A,1810:-,1830:A,1840:-,1860:S,1870:-" -shot 1650 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_cart4.bmp -shot 2600 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_cart4_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_cart4.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_cart4.txt
 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 8500 -pad "1300:ABCS,1310:-,1450:D,1460:-,1480:A,1490:-,1510:A,1520:-,1540:S,1550:-,3700:ABCS,3710:-,3850:D,3860:-,3880:A,3890:-,3910:A,3920:-,3940:D,3950:-,3970:S,3980:-,6100:ABCS,6110:-,6250:D,6260:-,6280:A,6290:-,6310:A,6320:-,6340:D,6350:-,6370:D,6380:-,6400:D,6410:-,6430:D,6440:-,6460:S,6470:-" -cart 16 -cartkeep /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin -shot 3670 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g1.bmp -shot 6070 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g2.bmp -shot 8470 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_g3.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g1.txt
 sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g1.txt
 grep -E "window 0|open L1S" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_g1.txt
@@ -175,6 +178,9 @@ What they print (checked here on the build made from scratch with these commands
   page 1 at the end`; `loading 39 fast runs (153 chunks ...), 10 chunks one by one`; `backup RAM SONICCD32X_: 3 loads,
   1 saves`. The picture: Palmtree Panic 1. (R4F's run read 9 chunks one by one: `SCDDATA.PAK` is one 32 KB chunk
   longer with the preload table.)
+- **The 4 MB cart test:** `VERDICT no problems found`; `cart 4 MB (no mapper), 4 page switches`; `shot_cart4.bmp`:
+  the notes `CART TEST: NO PAGE MAPPER (4 MB)` / `SLOT 19 LOAD OK (SUB-CPU AND SH2)`, the last row `BIG CART   OFF`;
+  `shot_cart4_ppz1.bmp`: Palmtree Panic 1.
 - **Run 2 (16 MB, first power-on):** `VERDICT no problems found`; `cart 16 MB (page mapper), 38 page switches; window 0
   page 4, window 1 page 7 at the end`. The grep: `window 0 -> page 2`, then `open L1S000`, `L1S001`, `L1S004`,
   `L1S003`, `L1S002` (the act start and its preload, in that order); `window 0 -> page 3` (the past: no file);
