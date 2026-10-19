@@ -1,6 +1,6 @@
 # Hand-off: a bigger RAM cart (8 or 16 MB) with bank switching – faster loading, time travel from RAM
 
-Written 17 Oct 2026, after R4D; the cart's spec and the CART TEST added 19 Oct (R4E); the 16 MB game mode (R4F, `BIG CART`) the same day. For the next AI helping with this. The person you work with is designing a new RAM cart
+Written 17 Oct 2026, after R4D; the cart's spec and the CART TEST added 19 Oct (R4E); the 16 MB game mode (R4F, `BIG CART`) the same day; R4F's pairs replaced by the preload (R4G) the same day. For the next AI helping with this. The person you work with is designing a new RAM cart
 for this port (Sonic CD 2011, RSDKv3, on Sega CD + 32X + RAM cart). They own the hardware and burn the discs; you build
 and check everything before a disc is burned.
 
@@ -127,7 +127,25 @@ What follows from it:
 5. **The SH2 does not write the cart** (assumed for the new cart too - the user gave no preference): loading into a
    page = map it into window 1, then the usual Sub-CPU chunk loads (command 46) into `0x200000 + offset`.
 
-**The design built in R4F (`BIG CART`, `cd32x/engine/plat_mars.cpp`, "THE BIG CART"):** the first idea - acts
+**The cart itself** (MicroNut99/16MB-PCB-CD32X, rev 0.5, not built yet): two CY62187 SRAMs (8 MB each), a GreenPAK
+mapper, **battery backup** (CR2450, TPS3613: the SRAMs are deselected while the power changes): what the pages hold
+stays through power-off. Its README: "Detecting the build" (8 or 16 MB) and the page registers as above.
+
+**The design built in R4G (`cd32x/engine/plat_mars.cpp`, "THE PRELOAD") - what the game does now:** pages 0/1 as the
+4 MB game (the boot loader's engine and title, the menus, special stages, title demos, the data pack, one act file
+slot at 0x380000); **act pages 2-6**: each its own copy of the engine (byte for byte the running one's, so window 0
+switches under the running code) and one act scene's image at 0x080000, used in place; page 7: the act files of act
+pages 2-5 (512 KB slots at window-1 0x200000/0x280000/0x300000/0x380000; page 6's in page 1's slot). At an act's start
+(not a title demo: `Options.AttractMode`) the act's other periods and the next act's start (act 2's present, act 3's
+bad future, the next zone's act 1) go into the other act pages; warps and restarts are page switches. After a
+power-on the first act scene looks every act page and slot up in the preload table at the end of `SCDDATA.PAK`
+(`tools/build_preload.py`: number, length, the loader's checksum, a header fingerprint - the boot loader brings it in
+at every power-on) and checks it whole; a page loaded halfway when the power went off is loaded again, in full (its
+header's chunk list is not trusted). Found at power-on, read only (window 1 to page 0 and page 4, compared with
+window 0 at the engine's code and at the scene image's header). Only the commands R4E/R4F added (`0xF8nn` page,
+`0xF0nn` slot) besides 38 and 46. The rest of this section is R4F's design, kept for the record.
+
+**The design built in R4F (`BIG CART`, `cd32x/engine/plat_mars.cpp`, "THE BIG CART" - replaced by R4G):** the first idea - acts
 linked for window 1 - needs a second set of scene images (the native scripts are linked to `0x02080000 + offset`) and
 moves `CART_STAGE`. R4F does without: the cart is used as **pairs of pages**, pair k = page 2k in window 0 + page
 2k + 1 in window 1, each pair laid out exactly as today's 4 MB cart (the engine at `0x000000`, the scene image at
@@ -163,17 +181,25 @@ run on the new cart.
 `BIG CART` in `engine/Debug.cpp`; the Sub-CPU's slot command (command 46, COMM2 `0xF000 | slot`: `cur_img` = slot);
 sh2emu's slot command and its `CART-W0` check. Checked in sh2emu only (docs/R4F_NOTES.md).
 
+**Done in R4G:** the preload (above): `big_prepare`, `big_preload`, `big_identify`, `big_detect` in `plat_mars.cpp`;
+`tools/build_preload.py`; sh2emu `-cartkeep FILE` (the cart's 16 MB kept between runs: the battery). The `CART TEST`
+tells an alias of page 0 by the engine and the scene image together (an act page has the engine's copy).
+
 **Still to do:**
 
-- Prefetch in the moments the game already has: the act's title card (load all periods), the results tally (the next
-  act, a special stage when the big ring is possible), death and restart, pause, the warp itself (each period has its
-  own music track, so the track changes there anyway). Fading the music out for a data burst needs the Sub-CPU to
+- More prefetch in the moments the game already has: the results tally (a special stage when the big ring is
+  possible), death and restart, pause, the warp itself (each period has its own music track, so the track changes
+  there anyway). R4G loads at an act's start; the SH2 cannot run the game while the 68000 writes the cart (RV = 1), so
+  a load is always a pause in play. Fading the music out for a data burst needs the Sub-CPU to
   resume a track at a position: command 45 plays whole tracks only today - a Sub-CPU change (ask first). Each switch
   between music and data costs a seek: a few long bursts, not many short ones.
 - Compression (`tools/build_game_data.py`, `tools/build_mdg.sh` write the files): halves to thirds the bytes read; the
   SH2 does not write the cart, so the unpacker would be the Sub-CPU's (a boot-stack change - ask first).
-- The engine copy from the CD costs about 2.6 s per new pair (396 KB at 150 KB/s): the 68000 could copy page 0's engine into page 2k
-  (`CHILLY_RV_MEMCPY` from `0x400000` to `0x600000`, in 32 KB pieces) - a Sub-CPU change, ask first.
+- The engine copy from the CD costs about 2.6 s per new act page, once (396 KB at 150 KB/s; the battery keeps it): the
+  68000 could copy page 0's engine instead (`CHILLY_RV_MEMCPY` from `0x400000` to `0x600000`, in 32 KB pieces) - a
+  Sub-CPU change, ask first.
+- The boot loader still reads the engine, the data pack and the title at every power-on: with the battery it could
+  check them instead (`sh2_engboot.c`, the boot stack - the user said "not now").
 - The PC model (`host/plat_host.cpp`) has no cart: `BIG CART` stays off there.
 
 ## How things are checked here (copy the way R4D was done)

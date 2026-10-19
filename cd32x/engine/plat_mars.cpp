@@ -2460,7 +2460,7 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
     }
     big_show(at[0]);
 }
-static int scene_load_at(unsigned int file, unsigned int base, int barFrom, int barTo);
+static int scene_load_at(unsigned int file, unsigned int base, int barFrom, int barTo, bool trust);
 static void big_preload() /* (plat_stage_loading, the scene in) the act's other periods and the next act's start */
 {
     if (!bigN || bigNow < 0)
@@ -2485,8 +2485,9 @@ static void big_preload() /* (plat_stage_loading, the scene in) the act's other 
         if (!big_engine(i))
             continue;
         big_w1(big_page(i));
-        bigScene[i] = 0;
-        if (scene_load_at(f, CART_W1 + 0x080000u, a, m) == 0)
+        const bool whole = bigScene[i] != 0; /* (what the page holds is whole: its header's chunk list tells the truth) */
+        bigScene[i]      = 0;
+        if (scene_load_at(f, CART_W1 + 0x080000u, a, m, whole) == 0)
             bigScene[i] = (unsigned short)f;
         const int s = big_slot_of(i);
         if (bigScene[i] && big_slot_mdg(s) != f + 0x1000u) { /* its act file */
@@ -2551,20 +2552,24 @@ static void big_detect() {}
 static bool scene_resident(unsigned int, unsigned int) { return false; }
 int plat_big_cart(int) { return 0; }
 #endif
-static int scene_load_at(unsigned int file, unsigned int base, int barFrom, int barTo) /* the scene's image into the cart at
-                                                                                          `base` (0x080000: window 0's page;
-                                                                                          REV R4G: 0x280000, an act page
-                                                                                          through window 1): 0 = there, -1 =
-                                                                                          not on the disc */
+static int scene_load_at(unsigned int file, unsigned int base, int barFrom, int barTo, bool trust) /* the scene's image into
+                                                                                                      the cart at `base`
+                                                                                                      (0x080000: window 0's
+                                                                                                      page; REV R4G:
+                                                                                                      0x280000, an act page
+                                                                                                      through window 1): 0 =
+                                                                                                      there, -1 = not on the
+                                                                                                      disc */
 {
     const bool here = base == 0x080000u;
     if (here && file == SCD_BOOT_RECORD[5])
         return 0; /* in the cart already */
     comm_idle(); /* REV R4: the pad request answered first */
-    /* 1. the cart image's chunk CRCs, before chunk 0 is replaced (uncached: 0x22...) */
+    /* 1. the cart image's chunk CRCs, before chunk 0 is replaced (uncached: 0x22...) - REV R4G: only if the image there
+       is whole (an act page loaded halfway when the power went off: its header says more than it holds) */
     const volatile unsigned int *h = (const volatile unsigned int *)(0x22000000u + base);
     unsigned int np = h[2], oldN = 0;
-    if (h[0] == 0x53434342u && h[1] == 2 && np > 0 && np < 64 && h[3 + 5 * np] == SCHK_MAGIC && h[4 + 5 * np] <= SCD_CHUNKS_MAX) {
+    if (trust && h[0] == 0x53434342u && h[1] == 2 && np > 0 && np < 64 && h[3 + 5 * np] == SCHK_MAGIC && h[4 + 5 * np] <= SCD_CHUNKS_MAX) {
         oldN = h[4 + 5 * np];
         for (unsigned int i = 0; i < 2 * oldN; ++i) oldHash[i] = h[5 + 5 * np + i];
     }
@@ -2642,9 +2647,9 @@ static int scene_load_at(unsigned int file, unsigned int base, int barFrom, int 
 static int scene_load(unsigned int file) /* the scene's image into the cart: 0 = there, -1 = not on the disc */
 {
 #if SCD_PLANES
-    return scene_load_at(file, 0x080000u, 0, barImgTo);
+    return scene_load_at(file, 0x080000u, 0, barImgTo, SCD_BOOT_RECORD[5] != 0); /* (an act page not whole: 0) */
 #else
-    return scene_load_at(file, 0x080000u, 0, 20);
+    return scene_load_at(file, 0x080000u, 0, 20, true);
 #endif
 }
 #if SCD_PLANES

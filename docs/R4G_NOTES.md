@@ -42,9 +42,11 @@ are looked up again at the next act.
 
 ## The boot stack
 
-**Unchanged since R4F.** `sub_main.c` as R4F (R4E's page switch `0xF8nn`, R4F's slot `0xF0nn` - the only commands the
-preload uses besides 38 and 46), `hw_md.s` unchanged, the SH2 loader (`SCDSH2.BIN`, `SH2-VR4D`) unchanged. The power-on
-still reads the engine, the data pack and the title from the disc, as today.
+As R4F - nothing new in R4G. Against R4D (your last disc), `cd32x/sub_main.c` has R4E's and R4F's two additions, both
+under command 46 and both used only with the 8 / 16 MB cart: `0xF8nn` writes a page register (through the 68000's
+existing command 26, RV = 1, interrupts off) and `0xF0nn` puts the opened file into another 128 KB slot. The 68000's
+`hw_md.s` and the SH2 loader (`SCDSH2.BIN`, `SH2-VR4D`) are R4D's. The power-on still reads the engine, the data pack
+and the title from the disc, as today.
 
 ## Checked before burning
 
@@ -52,8 +54,48 @@ RESULTS
 
 ## Build
 
-BUILD
+In WSL. `R4G_files.zip` holds every file changed since R4D (R4E's and R4F's too: your folder is at R4D - `R4E_files.zip`
+and `R4F_files.zip` need not be unpacked). Against R4F's commands: one more step after `build_mdg.sh` (the preload
+table into `SCDDATA.PAK`), `ROUND=R4G`, and the disc image under its own name in `discs/`. The disc needs an 80-minute
+CD-R, as R4D.
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+unzip -o R4G_files.zip && md5sum -c --quiet R4G_md5.txt && echo "R4G_md5: all OK"
+rm -rf engine && sh tools/setup_engine.sh && sh tools/check_patch.sh     # engine/ = RSDKv3 decompilation + patches/engine.patch (R4G)
+make -C host clean && make -C host
+rm -rf game_data
+python3 tools/build_audio.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data
+sh tools/build_native.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk
+rm -rf cd32x/build_engine && make -C cd32x ENGINE=1 START="0 0" build_engine/engine.bin
+python3 tools/build_game_data.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data --scenes "0:*,1:*,1:*@1,3:*,3:*@1" --start 0:0 --native cd32x/build_engine
+sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data "1:*,1:*@1"
+python3 tools/build_preload.py game_data
+mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
+make -C cd32x ENGINE=1 START="0 0" ROUND=R4G
+mkdir -p /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs
+python3 tools/build_audio_disc.py cd32x/build_engine/SCDENG.bin game_data/music --out /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R4G
+md5sum -c --quiet R4G_expected.txt && echo "R4G_expected: all EXPECTEDCOUNT OK"
+grep -ac "BUILD: SONIC CD R4G GAME START" cd32x/build_engine/disc/APP.BIN       # 1: the round's label is in
+grep -ac "SH2-VR4D" cd32x/build_engine/disc/APP.BIN                              # 1: the SH2 loader (unchanged since R4D)
+```
+
+`python3 tools/build_preload.py game_data` prints `SCDDATA.PAK: the preload table, 280 entries (140 images, 140 act
+files)`. Burn `discs/SONICCD_R4G.cue`.
+
+SH2EMU
 
 ## When the new cart exists
 
-WHEN
+1. Burn R4G (an 80-minute CD-R).
+2. Power on. With the 16 MB cart the Options Menu's last row reads `BIG CART   16 MB` (A + B + C + Start, Up twice to
+   see it). Play as always: title, `START GAME`, a save.
+3. **The first act start loads longer than today**, once: the act's four periods and the next act's start, with
+   the loading picture's bar (the first time ever also each page's copy of the engine). Then warp: past, present -
+   no loading picture, no disc, the act back after a moment.
+4. Power off, power on, continue the same save: the act starts after the usual boot without its scene loads (a few
+   seconds of checking the pages, the loading picture's bar standing).
+5. Run the cart test too if you like (the row, A to turn it off, A again): `CART 16 MB: PAGES 2-7 OK`. It writes into
+   the pages, so the next act start reloads what it overwrote (the engine's copies).
+6. Anything odd: line 10's code if the text shows (5CB1 looking up, 5CB2 an engine copy, 5CB3 a page not usable, 5CB4
+   a preload), or a photo.
