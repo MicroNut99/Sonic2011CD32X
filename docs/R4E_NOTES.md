@@ -50,4 +50,74 @@ On your 4 MB cart the test writes the two page registers (`0xA130F0`, `0xA130F2`
 the mapper ignores them, and the result is `NO PAGE MAPPER`. (If your 4 MB cart decodes that address area for
 something else, don't run it there.) After a test with problems, press reset before playing.
 
-@@CHECKS@@
+## Checked before burning
+
+- **sh2emu** (its README: `-cart 4|8|16` models your mapper - two 2 MB windows, 8 pages, 8 MB aliasing; `-cartbad P`
+  a page that keeps nothing; a cached line read after a switch without the purge shows as `STALE-READ`), on the
+  build made from scratch with the commands below - `VERDICT no problems found` in every run:
+
+| Run | Result |
+|---|---|
+| `CART TEST`, `-cart 4` (your 4 MB cart) | `CART TEST: NO PAGE MAPPER` / `(A 4 MB CART) - NOTHING WRITTEN`; 2 page commands (page 0, back to page 1), nothing written |
+| `CART TEST`, `-cart 8` | `CART 8 MB: PAGES 2-3 OK` / `PAGE SWITCH OK, GAME PAGES UNTOUCHED`; 9 page switches |
+| `CART TEST`, `-cart 16` | `CART 16 MB: PAGES 2-7 OK` / `PAGE SWITCH OK, GAME PAGES UNTOUCHED`; 21 page switches |
+| `CART TEST`, `-cart 16 -cartbad 5` | `CART 16 MB: OK 2 3 4 6 7` / `BAD 5` |
+| `CART TEST` on 16 MB, then `START GAME` | @@CTGAME@@ |
+| Power-on to Palmtree Panic 1 (`-cart 16`, the test not run) | @@OFF16@@ |
+
+  No `STALE-READ` (the cache purge after each switch works) and no `CART-RV` (the SH2 off the cart while the 68000
+  holds it) in any run. sh2emu found one real bug on the way: the test's first page switch was written while the pad
+  request was still with the Sub-CPU and was lost - the test now waits for it, as the scene loads do.
+- **The delivery on its own:** R4D's files + `R4E_files.zip` + your Makefiles, built with the commands below (all but
+  the 68000 part): @@DELIVER@@.
+- **Not run here:** your cart. The page register writes through the 32X adapter, the RV timing and the pages
+  themselves are what the test on the new cart shows.
+
+## Build
+
+In WSL, as R4D. Two differences: the test file (`tools/make_cart_test.py`, in the copy step) and `ROUND=R4E`.
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+unzip -o R4E_files.zip && md5sum -c --quiet R4E_md5.txt && echo "R4E_md5: all OK"
+rm -rf engine && sh tools/setup_engine.sh && sh tools/check_patch.sh     # engine/ = RSDKv3 decompilation + patches/engine.patch (R4E)
+make -C host clean && make -C host
+rm -rf game_data
+python3 tools/build_audio.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data
+sh tools/build_native.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk
+rm -rf cd32x/build_engine && make -C cd32x ENGINE=1 START="0 0" build_engine/engine.bin
+python3 tools/build_game_data.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data --scenes "0:*,1:*,1:*@1,3:*,3:*@1" --start 0:0 --native cd32x/build_engine
+sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data "1:*,1:*@1"
+mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
+make -C cd32x ENGINE=1 START="0 0" ROUND=R4E
+python3 tools/build_audio_disc.py cd32x/build_engine/SCDENG.bin game_data/music
+md5sum -c --quiet R4E_expected.txt && echo "R4E_expected: all @@NEXP@@ OK"
+grep -ac "BUILD: SONIC CD R4E GAME START" cd32x/build_engine/disc/APP.BIN       # 1: the round's label is in
+grep -ac "SH2-VR4D" cd32x/build_engine/disc/APP.BIN                              # 1: the SH2 loader (unchanged since R4D)
+```
+
+Then sh2emu, before burning - the power-on run (as R4D), then the cart test against the 16 MB model:
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+gcc -O2 -o /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu.c
+rm -f /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 6000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -bram /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_bram.bin -shot 5800 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 1800 -pad "1300:ABCS,1320:-,1450:U,1460:-,1470:U,1480:-,1500:A,1510:-" -cart 16 -shot 1750 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_carttest.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_cart.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_cart.txt
+```
+
+The first: `VERDICT no problems found`, `backup RAM SONICCD32X_: 3 loads, 1 saves`, Palmtree Panic 1 in the picture.
+The second: `VERDICT no problems found`, `cart 16 MB (page mapper), 21 page switches; window 0 page 0, window 1 page 1
+at the end`, and the picture: the Options Menu with `CART 16 MB: PAGES 2-7 OK` / `PAGE SWITCH OK, GAME PAGES
+UNTOUCHED` under `SEGA CD32X`.
+
+## When the new cart exists
+
+1. Burn R4E (an 80-minute CD-R, as R4D).
+2. Power on, A + B + C + Start, Up twice (`CART TEST`), A. Wait for the two lines (a few seconds).
+3. `PAGES 2-7 OK`: the cart works with this software - the 16 MB game mode can be built for it. Anything else: tell
+   me the two lines (a photo is fine).
+4. The game plays as R4D either way (the test leaves window 1 on page 1).
+
