@@ -230,4 +230,6 @@ TEST row, before the game uses the pages. Open: can the SH2 write the new cart (
 8 or 16 MB in the end; does the 4 MB v01 cart use `/TIME` (B31) for anything - R4G writes `0xA130F2` twice at every
 power-on (the 16 MB cart found), which R4D never did (a Fable review of R4G, 19 Oct, raised it). **On the console, 19 Oct (the owner's photo):** a disc with the new `sub_main.c` (R4F or the first R4G
 build) booted on the 4 MB cart, and the cart test's page commands were answered: `CART TEST: NO PAGE MAPPER` / `(A 4
-MB CART) - NOTHING WRITTEN`, nothing hung. The `0xF0nn` slot case (the current R4G's 4 MB slot test) is next.
+MB CART) - NOTHING WRITTEN`, nothing hung. **Then the slot case (19 Oct, the second R4G zip, the owner's photo):**
+`CART TEST: NO PAGE MAPPER (4 MB)` / `SLOT 21 LOAD OK (SUB-CPU AND SH2)` (run from the main menu: slot 21, cart
+`0x2A0000`). Both new Sub-CPU cases have run on the console; a real page switch needs the board.

@@ -194,6 +194,11 @@ What they print (checked here on the build made from scratch with these commands
 
 ## The test burn on your 4 MB cart (the new boot stack)
 
+**Done, 19 Oct 2026 (your photos):** the first disc (R4F or the first R4G build) booted and its cart test read `CART
+TEST: NO PAGE MAPPER` - the page command answered on the console. The build with the slot test, its cart test run
+from the main menu: `CART TEST: NO PAGE MAPPER (4 MB)` / `SLOT 21 LOAD OK (SUB-CPU AND SH2)` - **both new cases ran
+on the console.** (From the main menu the free slot is 21; from the title it is 19.)
+
 This disc is the first to run the changed `sub_main.c` on the console. On the 4 MB cart the game is R4D's; what is
 new there:
 
