@@ -232,4 +232,4 @@ power-on (the 16 MB cart found), which R4D never did (a Fable review of R4G, 19 
 build) booted on the 4 MB cart, and the cart test's page commands were answered: `CART TEST: NO PAGE MAPPER` / `(A 4
 MB CART) - NOTHING WRITTEN`, nothing hung. **Then the slot case (19 Oct, the second R4G zip, the owner's photo):**
 `CART TEST: NO PAGE MAPPER (4 MB)` / `SLOT 21 LOAD OK (SUB-CPU AND SH2)` (run from the main menu: slot 21, cart
-`0x2A0000`). Both new Sub-CPU cases have run on the console; a real page switch needs the board.
+`0x2A0000`). Both new Sub-CPU cases have run on the console; a real page switch needs the board. The disc boots as R4D (videos) and "First level plays good" (the owner).
