@@ -1252,8 +1252,12 @@ static void pm_end(bool picture) /* the scene ends (another loads: the loading p
     scdPicture = false;
     pmReady    = false;
     pmShown    = false;
-    if (shown && picture)
+    if (shown && picture) {
+        big_home_w1(); /* REV R4J: window 1 to page 1 first - the loading picture is in the data pack there; the menu
+                          (pages 6 and 7) leaves window 1 on page 7, and the picture then did not come (the save
+                          screen stayed, faded, through the whole preload) */
         splash_show(); /* (into the buffer shown last: the SH2 keeps its own) */
+    }
     else
         MARS_VDP_DISPMODE = (unsigned short)(MARS_VDP_DISPMODE & 0x8000);
     statusReady = false;
