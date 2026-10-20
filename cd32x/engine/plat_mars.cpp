@@ -2221,7 +2221,7 @@ static int sd_slot(unsigned int slot) /* the opened file's cart slot (128 KB eac
    After a power-on the menu's pages are looked up as the act pages are (its header, then the checksum over both). */
 #define BIG_MAX 4
 #define BIG_MENU BIG_MAX /* (the menu's index in bigEng / bigScene: page 6) */
-#define MENU_FILE 0x101u
+#define BIG_MENU_FILE 0x101u /* (L0S001.IMG; not the Options Menu's MENU_FILE above) */
 static unsigned char bigN    = 0;     /* act pages: 4 (16 MB), 1 (8 MB), 0 (none) */
 static signed char bigNow    = -1;    /* the act page window 0 shows (-1: page 0) */
 static unsigned char bigW1   = 1;     /* the page window 1 shows */
@@ -2422,7 +2422,7 @@ static void big_identify() /* what each act page and slot holds, whole - after a
         unsigned int mlen = 0, msum = 0;
         big_w1(1); /* (the table is in page 1) */
         for (unsigned int j = 0; f6 && t && j < n; ++j)
-            if (t[j].fp == f6 && t[j].kind == 1 && t[j].file == MENU_FILE) {
+            if (t[j].fp == f6 && t[j].kind == 1 && t[j].file == BIG_MENU_FILE) {
                 mlen = t[j].len, msum = t[j].sum;
                 break;
             }
@@ -2434,7 +2434,7 @@ static void big_identify() /* what each act page and slot holds, whole - after a
             big_w1(7);
             sum_part(CART_W1, bytes - head, &a, &b); /* page 7: the rest */
             if ((a ^ (b << 13 | b >> 19)) == msum)
-                bigScene[BIG_MENU] = (unsigned short)MENU_FILE;
+                bigScene[BIG_MENU] = (unsigned short)BIG_MENU_FILE;
         }
     }
     big_use_slot(bigSlot); /* window 1 as it was */
@@ -2487,7 +2487,7 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
     const unsigned int g = scene_group(file);
     barImgTo = barMdgFrom = 20;
     const bool attract = big_attract();
-    if (file == MENU_FILE && bigN == BIG_MAX && !attract) { /* REV R4I: the menu in its own pages (6 and 7) */
+    if (file == BIG_MENU_FILE && bigN == BIG_MAX && !attract) { /* REV R4I: the menu in its own pages (6 and 7) */
         if (!bigKnown)
             big_identify();
         splash_part(0, 0);
@@ -2624,7 +2624,7 @@ static bool scene_resident(unsigned int file, unsigned int mdg) /* the scene and
 {
     if (file == SCD_BOOT_RECORD[5] && (mdg == mdgInCart || (bigN && !scene_group(file))))
         return true; /* (REV R4I: a scene without an act file - the title, the menus - needs only its image) */
-    if (file == MENU_FILE && bigN == BIG_MAX && bigKnown && !big_attract())
+    if (file == BIG_MENU_FILE && bigN == BIG_MAX && bigKnown && !big_attract())
         return big_scene_of(BIG_MENU) == file && bigEng[BIG_MENU]; /* REV R4I: the menu in its pages */
     if (!bigN || !bigKnown || scene_group(file) != bigGroup || !bigGroup || big_attract())
         return false; /* (an act's start: the loading picture - a preload may follow) */
