@@ -46,6 +46,9 @@ where the `/TIME` pad (B31) is a named net, not its board. You designed it - if 
 
 ## The Options Menu
 
+**Getting there (R4H):** pause in an act (Start), `EXIT`: the Options Menu (the title is loaded first, out of
+sight, so the cart test finds it in page 0). A + B + C + Start still works too.
+
 The last row reads `BIG CART   16 MB` (or `8 MB`) when the cart was found, `OFF` otherwise. A turns it off (the 4 MB
 way); A again runs R4E's cart test and, if it passes, turns it on. The test writes into pages 2-7, so the act pages
 are looked up again at the next act.

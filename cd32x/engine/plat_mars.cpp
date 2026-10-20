@@ -2927,6 +2927,13 @@ bool plat_stage_loading()
     }
     STATE(0x5C13);
     unsigned int file = scene_file();
+#if SCD_PLANES && SCD_DEVMENU
+    /* REV R4H: the pause menu's EXIT (and a game over) go to the title: there the Options Menu instead - the title is
+       loaded into page 0 first (so the cart test finds the title there, not an act), then the menu */
+    static bool fromAct  = false;
+    const bool toOptions = fromAct && activeStageList == 0 && stageListPosition == 0;
+    fromAct              = scene_group(file) != 0 && GetGlobalVariableByName("Options.AttractMode") == 0;
+#endif
     big_prepare(file); /* REV R4G: the act page the scene is in or goes to; an act's start: its preload planned */
     int bad = scene_load(file);
 #if SCD_PLANES
@@ -2967,6 +2974,14 @@ bool plat_stage_loading()
 #endif
     if (bad < 0)
         scene_stop(0x5CE8, "NO SCENE ", file); /* the scene's .IMG is not on the disc */
+#if SCD_PLANES && SCD_DEVMENU
+    if (toOptions) { /* REV R4H: (above) the title in the cart, the engine loads nothing: the Options Menu */
+        STATE(0x5C19);
+        scdMenuNote[0][0] = scdMenuNote[1][0] = 0;
+        Engine.gameMode   = ENGINE_INITDEVMENU;
+        return false;
+    }
+#endif
 #if SCD_PLANES
     { /* REV R4C: an image with the sheets' and the tiles' pixels is a scene of the 32X picture mode - from its load on
          (the layout pool, the tiles its scripts copy) */
