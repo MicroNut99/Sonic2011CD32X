@@ -198,6 +198,8 @@ What they print (checked here on the build made from scratch with these commands
 TEST: NO PAGE MAPPER` - the page command answered on the console. The build with the slot test, its cart test run
 from the main menu: `CART TEST: NO PAGE MAPPER (4 MB)` / `SLOT 21 LOAD OK (SUB-CPU AND SH2)` - **both new cases ran
 on the console.** (From the main menu the free slot is 21; from the title it is 19.)
+Your videos of that disc: the boot as R4D's (the green lines, `SAFE CART: FOUND`, `32X GO!`), the loading picture,
+then the title - the title start's two page commands did not stop it. The label read `R4G` (built with `ROUND=R4G`).
 
 This disc is the first to run the changed `sub_main.c` on the console. On the 4 MB cart the game is R4D's; what is
 new there:
