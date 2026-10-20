@@ -2209,22 +2209,37 @@ static int sd_slot(unsigned int slot) /* the opened file's cart slot (128 KB eac
    went off does not match and is loaded again. The 8 MB cart: one act page (2), its act file in page 3. The 4 MB cart,
    or BIG CART off: none of this (bigN 0). Line 10: 5CB1 the pages looked up, 5CB2 an engine copy loaded, 5CB3 a page
    could not be made ready (the scene in page 0, as the 4 MB game), 5CB4 a preload. */
-#define BIG_MAX 5
-static unsigned char bigN    = 0;     /* act pages: 5 (16 MB), 1 (8 MB), 0 (none) */
+/* REV R4I: the menu keeps its own pages, and four act pages remain:
+   - pages 2-5: the act pages (the act's present, past, the next act's start, the bad future - the good future, the
+     rarest, from the disc when warped to);
+   - page 6: the menu (L0S001, the save screen - 2.2 MB, more than a page) seen in window 0 with its own copy of the
+     engine, page 7 in window 1 its last 0x98000 bytes (cart 0x200000-0x297FFF);
+   - the act file slots: 1 and 2 in page 7 (cart 0x300000, 0x380000 - below the menu's tail), 3 in page 1 at
+     0x260000 (after the title's image; a bigger scene shown from page 0 - a special stage, the help, the secrets - runs
+     over it: its act file is then loaded again), 0 in page 1 at 0x380000 (shared with the Options Menu's font, the
+     credits' and the demos' act files).
+   After a power-on the menu's pages are looked up as the act pages are (its header, then the checksum over both). */
+#define BIG_MAX 4
+#define BIG_MENU BIG_MAX /* (the menu's index in bigEng / bigScene: page 6) */
+#define MENU_FILE 0x101u
+static unsigned char bigN    = 0;     /* act pages: 4 (16 MB), 1 (8 MB), 0 (none) */
 static signed char bigNow    = -1;    /* the act page window 0 shows (-1: page 0) */
 static unsigned char bigW1   = 1;     /* the page window 1 shows */
 static unsigned char bigSlot = 0;     /* the act file slot window 1 is set for (sgbOff, mdgInCart) */
 static bool bigKnown         = false; /* the act pages and slots looked up (after a power-on: not yet) */
-static unsigned char bigEng[BIG_MAX];    /* the act page's engine copy checked this session */
-static unsigned short bigScene[BIG_MAX]; /* the scene image in each act page (0: none, or not whole) */
+static unsigned char bigEng[BIG_MAX + 1];    /* the act page's engine copy checked this session (+ the menu's page) */
+static unsigned short bigScene[BIG_MAX + 1]; /* the scene image in each act page (0: none, or not whole) (+ the menu) */
 static unsigned short bigTodo[BIG_MAX];  /* the scene to preload into it */
 static unsigned short slotMdg[BIG_MAX];  /* the act file in each slot (the slot window 1 is set for: mdgInCart) */
 static unsigned int bigHome  = 0;        /* page 0's scene while an act page is shown */
 static unsigned int bigGroup = 0;        /* the act preloaded last (scene_group) */
 static int big_page(int i) { return 2 + i; }
-static int big_slot_of(int i) { return bigN == 1 ? 1 : i < 4 ? i + 1 : 0; }
-static int big_slot_page(int s) { return s == 0 ? 1 : bigN == 1 ? 3 : 7; }
-static unsigned int big_slot_off(int s) { return s == 0 ? 0x380000u : CART_W1 + (unsigned int)(s - 1) * 0x80000u; }
+static int big_slot_of(int i) { return bigN == 1 ? 1 : i < 3 ? i + 1 : 0; }
+static int big_slot_page(int s) { return s == 0 || s == 3 ? 1 : bigN == 1 ? 3 : 7; }
+static unsigned int big_slot_off(int s)
+{
+    return s == 0 ? 0x380000u : bigN == 1 ? CART_W1 : s == 1 ? 0x300000u : s == 2 ? 0x380000u : 0x260000u;
+}
 static unsigned int big_scene_of(int i) { return i == bigNow ? SCD_BOOT_RECORD[5] : bigScene[i]; }
 static unsigned int big_slot_mdg(int s) { return s == bigSlot ? mdgInCart : slotMdg[s]; }
 static void big_w1(int page)
@@ -2251,10 +2266,14 @@ static void big_home_w1() /* (planes_off) window 1 to page 1: the loading pictur
         big_use_slot(0);
     }
 }
-static void big_show(int i) /* window 0 to act page i (-1: page 0), window 1 to its act file's page */
+static void big_show(int i) /* window 0 to act page i (-1: page 0; BIG_MENU: the menu's), window 1 to its act file's page
+                               (the menu: page 7, its image's tail) */
 {
     comm_idle();
-    big_use_slot(i < 0 ? 0 : big_slot_of(i));
+    if (i == BIG_MENU)
+        big_w1(7); /* (the act file slots' bookkeeping unchanged: the menu has no act file) */
+    else
+        big_use_slot(i < 0 ? 0 : big_slot_of(i));
     if (i != bigNow) {
         if (bigNow < 0)
             bigHome = SCD_BOOT_RECORD[5];
@@ -2337,6 +2356,18 @@ static unsigned int big_head_fp(unsigned int at, int kind) /* the fingerprint of
     for (unsigned int k = 0; k < words; ++k) f = (f ^ h[k]) * 0x01000193u;
     return f;
 }
+static void sum_part(unsigned int at, unsigned int bytes, unsigned int *a, unsigned int *b) /* REV R4I: the loader's
+                                                                                        checksum (scd_cart_sum) in
+                                                                                        parts: its running sums go on */
+{
+    const unsigned int *p = (const unsigned int *)(0x02000000u + at); /* cached: the cache purged by the page switch */
+    unsigned int x = *a, y = *b;
+    for (unsigned int n = bytes >> 2; n--;) {
+        x += *p++;
+        y += x;
+    }
+    *a = x, *b = y;
+}
 static void big_identify() /* what each act page and slot holds, whole - after a power-on (or the cart test) */
 {
     STATE(0x5CB1);
@@ -2383,6 +2414,28 @@ static void big_identify() /* what each act page and slot holds, whole - after a
             mdgInCart = got;
         else
             slotMdg[s] = got;
+    }
+    bigScene[BIG_MENU] = 0; /* REV R4I: the menu - its header in page 6, its checksum over pages 6 and 7 */
+    if (bigN == BIG_MAX && cartSum) {
+        big_w1(6);
+        const unsigned int f6 = big_head_fp(CART_W1 + 0x080000u, 1);
+        unsigned int mlen = 0, msum = 0;
+        big_w1(1); /* (the table is in page 1) */
+        for (unsigned int j = 0; f6 && t && j < n; ++j)
+            if (t[j].fp == f6 && t[j].kind == 1 && t[j].file == MENU_FILE) {
+                mlen = t[j].len, msum = t[j].sum;
+                break;
+            }
+        const unsigned int bytes = (mlen + 2047u) & ~2047u, head = 0x200000u - 0x080000u;
+        if (mlen > head && bytes - head <= 0x0F0000u) {
+            unsigned int a = 0, b = 0;
+            big_w1(6);
+            sum_part(CART_W1 + 0x080000u, head, &a, &b); /* page 6: 0x080000-0x1FFFFF */
+            big_w1(7);
+            sum_part(CART_W1, bytes - head, &a, &b); /* page 7: the rest */
+            if ((a ^ (b << 13 | b >> 19)) == msum)
+                bigScene[BIG_MENU] = (unsigned short)MENU_FILE;
+        }
     }
     big_use_slot(bigSlot); /* window 1 as it was */
     bigKnown = true;
@@ -2433,7 +2486,24 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
         return;
     const unsigned int g = scene_group(file);
     barImgTo = barMdgFrom = 20;
-    if (!g || big_attract()) {
+    const bool attract = big_attract();
+    if (file == MENU_FILE && bigN == BIG_MAX && !attract) { /* REV R4I: the menu in its own pages (6 and 7) */
+        if (!bigKnown)
+            big_identify();
+        splash_part(0, 0);
+        if (big_engine(BIG_MENU)) {
+            big_show(BIG_MENU);
+            return;
+        }
+        STATE(0x5CB3);
+    }
+    if (g && attract && bigKnown) /* REV R4I: a title demo of a scene an act page holds: shown from there */
+        for (int i = 0; i < bigN; ++i)
+            if (big_scene_of(i) == file && bigEng[i]) {
+                big_show(i);
+                return;
+            }
+    if (!g || attract) {
         big_show(-1);
         return;
     }
@@ -2546,19 +2616,32 @@ static void big_detect() /* (the first scene load after power-on) MicroNut99's p
 static void big_forget() /* (the cart test wrote into pages 2-7) look the pages up again */
 {
     for (int i = 0; i < BIG_MAX; ++i) bigEng[i] = 0, bigTodo[i] = 0;
+    bigEng[BIG_MENU] = 0;
     bigKnown = false;
     bigGroup = 0;
 }
 static bool scene_resident(unsigned int file, unsigned int mdg) /* the scene and its act file in the cart already */
 {
-    if (file == SCD_BOOT_RECORD[5] && mdg == mdgInCart)
-        return true;
+    if (file == SCD_BOOT_RECORD[5] && (mdg == mdgInCart || (bigN && !scene_group(file))))
+        return true; /* (REV R4I: a scene without an act file - the title, the menus - needs only its image) */
+    if (file == MENU_FILE && bigN == BIG_MAX && bigKnown && !big_attract())
+        return big_scene_of(BIG_MENU) == file && bigEng[BIG_MENU]; /* REV R4I: the menu in its pages */
     if (!bigN || !bigKnown || scene_group(file) != bigGroup || !bigGroup || big_attract())
         return false; /* (an act's start: the loading picture - a preload may follow) */
     for (int i = 0; i < bigN; ++i)
         if (big_scene_of(i) == file)
             return big_slot_mdg(big_slot_of(i)) == mdg;
     return false;
+}
+static void big_home_spill(unsigned int len) /* REV R4I: a scene of `len` bytes loaded into page 0: one longer than the
+                                                title runs over act file slot 3 (page 1, 0x260000) */
+{
+    if (bigN == BIG_MAX && bigNow < 0 && 0x080000u + len > 0x260000u) {
+        if (bigSlot == 3)
+            mdgInCart = 0;
+        else
+            slotMdg[3] = 0;
+    }
 }
 int plat_big_cart(int set) /* the Options Menu's BIG CART: -1 asks; 0 off; 8 or 16 on (after the cart test) - 16, 8, 0 */
 {
@@ -2577,6 +2660,7 @@ static void big_prepare(unsigned int) {}
 static void big_preload() {}
 static void big_detect() {}
 static bool scene_resident(unsigned int, unsigned int) { return false; }
+static void big_home_spill(unsigned int) {}
 int plat_big_cart(int) { return 0; }
 #endif
 static int scene_load_at(unsigned int file, unsigned int base, int barFrom, int barTo, bool trust) /* the scene's image into
@@ -2657,6 +2741,7 @@ static int scene_load_at(unsigned int file, unsigned int base, int barFrom, int 
         return 0;
     }
     SCD_BOOT_RECORD[5] = file;
+    big_home_spill(loadLen); /* REV R4I */
     STATE(0x5C14); /* R1C: the scene is in the cart */
 #if SCD_SCENE_CHECK
     CartCheck r;

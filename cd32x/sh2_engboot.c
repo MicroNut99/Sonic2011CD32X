@@ -39,7 +39,7 @@
 #define SCD_SPLASH 1 /* REV R4B: the loading picture (IMAGE.RAW); 0 = the text only, as R1S - R4A */
 #endif
 
-const char sh2_build_marker[] = "SH2-VR4D"; /* the Sub-CPU looks for "SH2-V" (its line 4 shows "SH2-VR4") */
+const char sh2_build_marker[] = "SH2-VR4I"; /* REV R4I: the warm start (step 3) - the Sub-CPU looks for "SH2-V" (its line 4 shows "SH2-VR4") */
 
 #define SC_COMM2 (*(volatile uint16_t *)0x20004022)
 #define SC_COMM8_32 (*(volatile uint32_t *)0x20004028)
@@ -376,6 +376,45 @@ int scd_load_file(uint16_t number, uint32_t *bytes)
 }
 
 static uint16_t cart_read16(uint32_t offset) { return *(volatile uint16_t *)(CART_U + PAK_STAGE + offset); }
+/* REV R4I - THE WARM START. The RAM cart keeps what it holds through a power-off (MicroNut99's 16 MB cart: a battery).
+   The data pack is read from the disc first (it is small); its preload table (tools/build_preload.py: 'PRE1' before
+   the loading picture's 'SPL1' footer, 16-byte entries: u16 file, u16 kind, u32 length, u32 sum, u32 fingerprint) holds
+   the disc's own checksums of the engine (file 21) and the title (0x100). A file whose place in the cart already gives
+   the same checksum (scd_cart_sum over the length rounded up to 2 KB - what the Sub-CPU's loads leave there) is not
+   read again; any other is loaded as before. No table, no entry, a different sum: the cold start, as R4D. */
+static int pre_lookup(uint32_t dataLen, uint16_t file, uint32_t *len, uint32_t *sum) /* 1 = found */
+{
+    const volatile uint32_t *f = (const volatile uint32_t *)(CART_U + 24 * 0x20000u + dataLen - 32); /* 'PRE1' block */
+    uint32_t off, n, k;
+    if (dataLen < 64 || dataLen > DATA_MAX || f[0] != 0x50524531u) /* 'PRE1' */
+        return 0;
+    off = f[1];
+    n   = f[2];
+    if ((off & 3) || off + n * 16u > dataLen - 32 || n > 4096)
+        return 0;
+    for (k = 0; k < n; k++) {
+        const volatile uint32_t *e = (const volatile uint32_t *)(CART_U + 24 * 0x20000u + off + k * 16u);
+        if ((e[0] >> 16) == file && (e[0] & 0xFFFF) == (file == FILE_ENGINE ? 3u : 1u)) {
+            *len = e[1];
+            *sum = e[2];
+            return 1;
+        }
+    }
+    return 0;
+}
+static int warm(uint32_t dataLen, uint16_t file, uint32_t at, uint32_t max, uint32_t *bytes) /* 1 = in the cart */
+{
+    uint32_t len = 0, sum = 0;
+    if (!pre_lookup(dataLen, file, &len, &sum) || len == 0 || len > max)
+        return 0;
+    if (scd_cart_sum(at, (len + 2047) & ~2047u) != sum)
+        return 0;
+    *bytes = len;
+#if SCD_SPLASH
+    bar_chunk(1, 1); /* its share of the bar: full */
+#endif
+    return 1;
+}
 
 int main(void)
 {
@@ -408,20 +447,9 @@ int main(void)
         int r1, r2, r3;
         show_status(0x5C00);
 #if SCD_SPLASH
-        bar_part(0, 7); /* REV R4B: the bar's shares - about the files' sizes (engine 12 chunks, data 6, scene 34) */
+        bar_part(0, 4); /* REV R4B: the bar's shares - about the files' sizes (data 6 chunks, engine 12, scene 34) */
 #endif
-        r1 = scd_load_file(FILE_ENGINE, &engineLen);
-        if (r1 < 0)
-            halt(0x5CE1);
-        if (r1 > 0)
-            halt(0x5CE2);
-        if (engineLen > ENGINE_MAX)
-            halt(0x5CE3);
-        show_status(0x5C01);
-#if SCD_SPLASH
-        bar_part(7, 11);
-#endif
-        r2 = scd_load_file(FILE_DATA, &dataLen);
+        r2 = scd_load_file(FILE_DATA, &dataLen); /* REV R4I: first - its table tells what the cart may keep */
         if (r2 < 0)
             halt(0x5CE1);
         if (r2 > 0)
@@ -430,9 +458,20 @@ int main(void)
             halt(0x5CE3);
         show_status(0x5C02);
 #if SCD_SPLASH
+        bar_part(4, 11);
+#endif
+        r1 = warm(dataLen, FILE_ENGINE, 0, ENGINE_MAX, &engineLen) ? 0 : scd_load_file(FILE_ENGINE, &engineLen);
+        if (r1 < 0)
+            halt(0x5CE1);
+        if (r1 > 0)
+            halt(0x5CE2);
+        if (engineLen > ENGINE_MAX)
+            halt(0x5CE3);
+        show_status(0x5C01);
+#if SCD_SPLASH
         bar_part(11, 32);
 #endif
-        r3 = scd_load_file(FILE_FIRST_SCENE, &sceneLen);
+        r3 = warm(dataLen, FILE_FIRST_SCENE, PAK_STAGE, SCENE_MAX, &sceneLen) ? 0 : scd_load_file(FILE_FIRST_SCENE, &sceneLen);
         if (r3 < 0)
             halt(0x5CE1);
         if (r3 > 0)

@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """REV R4G - the preload table for the 16 MB cart, in SCDDATA.PAK.
 
-usage: build_preload.py <game data dir>        (after build_game_data.py and build_mdg.sh; run it again any time)
+usage: build_preload.py <game data dir> [<engine.bin>]   (after build_game_data.py and build_mdg.sh; run it again any time)
+
+REV R4I: also the title (L0S000.IMG, 0x100) and the menu (L0S001.IMG, 0x101), and - with the engine's path - the engine
+(SONICCD.PAK = cd32x/build_engine/engine.bin, file 21, kind 3): the SH2 boot loader (cd32x/sh2_engboot.c) reads this
+table from the disc at every power-on and skips the engine and the title when the cart already holds them (the same
+checksum); the engine keeps the menu in its own pages and finds it there after a power-on.
 
 The 16 MB cart (MicroNut99's, battery-backed) keeps the act scenes the game preloaded in its pages through power-off.
 After a power-on the engine (cd32x/engine/plat_mars.cpp, "THE PRELOAD") must find out what each page holds and whether
@@ -11,7 +16,7 @@ loader brings into the cart with SCDDATA.PAK at every power-on.
 One entry (16 bytes, big-endian) for every regular stage scene image (L1Snnn.IMG) and act file (G1Snnn.MDG) in the
 folder:
     u16 file number as the engine asks the Sub-CPU for it (image 0x200 + nnn, act file 0x1200 + nnn)
-    u16 kind (1 image, 2 act file)
+    u16 kind (1 image, 2 act file, 3 the engine)
     u32 length in bytes
     u32 sum: the loader's scd_cart_sum / the Sub-CPU's load_sum over the file padded with zeros to 2048 bytes (what a CD
         read puts in the cart: whole sectors)
@@ -70,6 +75,12 @@ def main():
         entries.append(entry(p, 0x200 + int(os.path.basename(p)[3:6]), 1))
     for p in sorted(glob.glob(os.path.join(gd, "G1S[0-9][0-9][0-9].MDG"))):
         entries.append(entry(p, 0x1200 + int(os.path.basename(p)[3:6]), 2))
+    for n in (0, 1):  # REV R4I: the title and the menu
+        p = os.path.join(gd, "L0S%03d.IMG" % n)
+        if os.path.exists(p):
+            entries.append(entry(p, 0x100 + n, 1))
+    if len(sys.argv) > 2:  # REV R4I: the engine (the boot loader's warm start)
+        entries.append(entry(sys.argv[2], 21, 3))
     fps = [e[12:16] for e in entries]
     assert len(set(fps)) == len(fps), "two files with the same fingerprint"
     pak = os.path.join(gd, "SCDDATA.PAK")
@@ -85,8 +96,9 @@ def main():
     out = body + b"".join(entries) + b"PRE1" + struct.pack(">3I", off, len(entries), 0) + spl
     assert len(out) <= 0x80000, "SCDDATA.PAK over its 512 KB slot (cart 0x300000-0x37FFFF)"
     open(pak, "wb").write(out)
-    print("SCDDATA.PAK: the preload table, %d entries (%d images, %d act files), %d bytes in all" % (
-        len(entries), sum(1 for e in entries if e[3] == 1), sum(1 for e in entries if e[3] == 2), len(out)))
+    print("SCDDATA.PAK: the preload table, %d entries (%d images, %d act files, %d engine), %d bytes in all" % (
+        len(entries), sum(1 for e in entries if e[3] == 1), sum(1 for e in entries if e[3] == 2),
+        sum(1 for e in entries if e[3] == 3), len(out)))
 
 
 if __name__ == "__main__":
