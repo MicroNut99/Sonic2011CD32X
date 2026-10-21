@@ -2737,7 +2737,10 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
         }
     bigGroup   = g;
     bigSpecial = 0;
-    if (bigN == BIG_MAX) { /* REV R5C: the next special stage into page 0 (big_preload), if page 0 does not hold it */
+    /* REV R5C: the next special stage into page 0 (big_preload), if page 0 does not hold it - with a load that happens
+       anyway (the loading picture is up): an act scene already in its page (the first act after power-on, a time warp)
+       stays a page switch */
+    if (bigN == BIG_MAX && at[0] >= 0 && (pending || big_scene_of(at[0]) != file)) {
         const int sp = GetGlobalVariableByName("SpecialStage.ListPos");
         if (sp >= 0 && sp < stageListCount[STAGELIST_SPECIAL]) {
             const unsigned int f = 0x400u | (file & 0x80u) | (unsigned int)sp; /* (Sonic's or Tails' files, as the act) */
@@ -2754,6 +2757,7 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
         if (at[0] >= 0)
             STATE(0x5CB3); /* the act page not usable: the scene in page 0, as the 4 MB game */
         for (int i = 0; i < bigN; ++i) bigTodo[i] = 0;
+        bigSpecial = 0; /* REV R5C: (the act itself is in page 0 now) */
         barImgTo = barMdgFrom = 20;
         big_show(-1);
         return;
