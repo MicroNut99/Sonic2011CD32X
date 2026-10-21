@@ -1401,7 +1401,8 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     SC_COMM12   = 0xFFFF;
     if (sd_cmd(80) == 0 && SC_COMM12 == 0) { /* R5B: ended on the Sub-CPU's side (another command): the SH2's floor */
         floorHW    = false;
-        genesisOff = true; 
+        genesisOff = true;
+        SC_COMM4   = 0; /* REV R5F: (the records' last id: the Sub-CPU would print a start-up fault) */
         return false;
     }
     /* the whole picture colour 0 in the SH2's buffer (the frame buffer itself: the overwrite image skips 0) - REV R5G:
@@ -1432,7 +1433,8 @@ static bool title_hw_frame(int v32)
     if (sd_cmd(80) == 0 && SC_COMM12 == 0) {
         floorHW    = false;
         flrTitle   = false;
-        genesisOff = true; 
+        genesisOff = true;
+        SC_COMM4   = 0; /* REV R5F */
         return false;
     }
     volatile unsigned short *w = SC_FB;

@@ -2194,7 +2194,7 @@ static void sub_finish(void)
     char nm[32];
     /* SONIC REV R5: the Sub-CPU ends the floor before a command that may use Word RAM (cd32x/sub_main.c, the list
        there; R5E: 56 / 59, the backup-RAM file, no longer - the BIOS's own buffers) */
-    if (flr_on && cmd != 0 && cmd != 80 && cmd != 48 && cmd != 52 && cmd != 45 && cmd != 54 && cmd != 56 && cmd != 57 &&
+    if (flr_on && cmd != 0 && cmd != 80 && (cmd & 0xFF) != 48 && cmd != 52 && cmd != 45 && cmd != 54 && cmd != 56 && cmd != 57 &&
         cmd != 58 && cmd != 59) {
         printf("[f%5d] SUB: CMD %d ends the floor first: %llu floor frames, %llu colour commands\n", frame_no(), cmd,
                (unsigned long long)flr_frames, (unsigned long long)flr_colours);

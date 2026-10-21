@@ -369,6 +369,8 @@ static uint16_t sky_pidx[48];             /* CRAM 1-47's palette indices (lines 
 static uint16_t sky_piece[2][4][3];       /* each buffer's pieces: VRAM address, first slot, slots */
 static int sky_pieces[2];
 static int sky_swirl;                     /* special stage 1: the swirl */
+static uint16_t sky_blk[64][3];           /* the sky's blocks: VRAM address, words, their offset in SKY2 */
+static int sky_nblk;
 static int sky_want = -1, sky_staged = -1, sky_cur = -1, sky_buf = 0, sky_ready = 0;
 static int floor_busy = 0;                /* 0 idle, 1 the chip drawing, 2 the copy, 3 the switch */
 static int floor_pend = 0;                /* new values came while busy */
@@ -688,6 +690,24 @@ static int floor_begin(int stage)
             floor_end();
             return 0;
         }
+        {   /* its blocks' places (Word RAM is the Sub-CPU's only until flr_to_main below) */
+            const volatile uint16_t *e = (const volatile uint16_t *)(FLR_SUB + FLR_IMG + 0x100);
+            uint32_t at = 0x100;
+            sky_nblk = 0;
+            for (;;) {
+                const uint16_t a = e[0], n = e[1];
+                if (!a && !n)
+                    break;
+                if (sky_nblk == 64 || at + 4 + 2 * (uint32_t)n > SKY_EXTRA) {
+                    floor_end();
+                    return 0;
+                }
+                sky_blk[sky_nblk][0] = a, sky_blk[sky_nblk][1] = n, sky_blk[sky_nblk][2] = (uint16_t)(at + 4);
+                sky_nblk++;
+                e += 2 + n;
+                at += 4 + 2 * (uint32_t)n;
+            }
+        }
     }
     {   /* the window name tables (the image's cells, column after column) and zeros */
         volatile uint16_t *t;
@@ -760,20 +780,13 @@ static int floor_begin(int stage)
         };
         for (i = 0; i < (int)(sizeof(regs) / sizeof(regs[0])); i++)
             do_md_cmd1(MD_CMD_SET_VDP_REG, regs[i]);
-        const volatile uint16_t *e = (const volatile uint16_t *)(FLR_SUB + FLR_IMG + 0x100);
-        uint32_t at = FLR_MAIN + FLR_IMG + 0x100;
         for (i = 0; i < 0x10000; i += 0x1000)                                        /* all of it zero */
             do_md_cmd3(MD_CMD_COPY_VRAM_, i, FLR_MAIN + FLR_ZERO, 0x800);
         /* R5G: the sky's blocks (its cells; plane A's, plane B's (B''s) rows 0-14) - the 68000 reads them from Word
-           RAM (it has it now); then the window's rows 15-27 into 0xA000 / 0xC000 (the rest of those blocks: planes) */
-        for (;;) {
-            const uint16_t a = e[0], n = e[1];
-            if (!a && !n)
-                break;
-            do_md_cmd3(MD_CMD_COPY_VRAM_, a, (int)(at + 4), n);
-            e += 2 + n;
-            at += 4 + 2 * (uint32_t)n;
-        }
+           RAM (it has it now: their places were found before, sky_blk); then the window's rows 15-27 into 0xA000 /
+           0xC000 (the rest of those blocks: planes) */
+        for (i = 0; i < sky_nblk; i++)
+            do_md_cmd3(MD_CMD_COPY_VRAM_, sky_blk[i][0], (int)(FLR_MAIN + FLR_IMG + sky_blk[i][2]), sky_blk[i][1]);
         do_md_cmd3(MD_CMD_COPY_VRAM_, 0xA780, FLR_MAIN + FLR_TABLE + 0x780, 13 * 64);
         do_md_cmd3(MD_CMD_COPY_VRAM_, 0xC780, FLR_MAIN + FLR_TABLE + 0x1780, 13 * 64);
     }
