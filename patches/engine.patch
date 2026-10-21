@@ -3569,7 +3569,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.cpp	2026-10-21 01:39:25.074959726 -0700
++++ engine/Script.cpp	2026-10-21 01:53:58.336485031 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -3892,7 +3892,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +                    sf.height = scriptEng.operands[3];
 +                    sf.sprX   = scriptEng.operands[4];
 +                    sf.sprY   = scriptEng.operands[5];
-+#if defined(SONICCD32X)
++#if defined(SONICCD32X) && !SCD32X_CARTDATA // REV R5C: (only where the frames are made: the SH2 build stores none)
 +                    // REV R4N: the pause menu's EXIT shows MENU (the owner's request; it opens the level select) - the
 +                    // English sheet (Global/Pause_EN.gif) has MENU in its DEV MENU word: x 85, y 81, 36 x 11. The frame is
 +                    // matched by its place (EXIT: 30 x 11 at 66, 69, pivot 0, -5); the cart image keeps it (the SH2 build
