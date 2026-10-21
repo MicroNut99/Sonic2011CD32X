@@ -104,13 +104,19 @@ it; here EXIT's frame points at that sheet's MENU (x 59, y 209, 36 × 11).
 | `tools/build_floor.py` | new: `FLOOR1.BIN` – `FLOOR8.BIN` |
 | `tools/sh2emu/sh2emu.c` | command 80 answered as the Sub-CPU does (the file's checks; the chip's picture is not drawn) |
 
-## Speed (sh2emu, special stage 1, the last 10 s of a 50 s run)
+## Speed (sh2emu, the last 10 s of a 50 s run from STAGE SELECT, nothing pressed in the stage)
 
-| | pictures a second |
-|---|---|
-| R4N | 5.4 |
-| R5A (the chip's floor) | 7.6 |
-| R5C | RESULT_R5C |
+| Special stage | R4N, pictures a second | R5C |
+|---|---|---|
+| 1 | 5.4 | 10.0 |
+| 2 | 4.8 | 11.6 |
+| 3 | 4.6 | 11.7 |
+| 4 | 6.0 | 10.4 |
+| 5 | 5.0 | 9.7 |
+| 6 | 4.5 | 8.6 |
+
+Special stages 7 and 8 are not in the table. With nothing pressed, those runs left the stage before their last 10 s
+(7: the white screen after it; 8: the credits), so the count there is not the floor's.
 
 ares runs the SH2s faster than the console does. In ares, R4N and R5C both show about 10 pictures a second, so ares
 can show whether the picture is right but cannot measure the speed-up.
