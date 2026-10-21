@@ -568,12 +568,12 @@ static void splash_note(const char *t)
     }
     int n = 0;
     while (t[n]) ++n;
-    const int x0 = (320 - n * 8) / 2 & ~1, y0 = 204;
+    const int x0 = (320 - n * 8) / 2 & ~1, y0 = 212; /* (the bar: rows 201-208 of IMAGE.RAW) */
     const unsigned short d = MARS_VDP_DISPMODE;
     MARS_VDP_DISPMODE = (unsigned short)(d & 0x8000);
     flip_wait(); /* (the SH2 now writes the picture's buffer) */
     volatile unsigned short *line = SC_FB + 0x100;
-    for (int y = y0 - 3; y < y0 + 13; ++y)
+    for (int y = y0 - 2; y < y0 + 12; ++y)
         for (int x = x0 - 4; x < x0 + n * 8 + 4; x += 2) line[y * 160 + x / 2] = (unsigned short)(lo << 8 | lo);
     for (int k = 0; k < n; ++k) {
         const unsigned char *g = font3x5[glyph(t[k])];
