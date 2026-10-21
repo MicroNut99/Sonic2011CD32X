@@ -3537,7 +3537,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void Draw3DScene(int spriteSheetID);
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Script.cpp engine/Script.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Script.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Script.cpp	2026-10-17 10:01:33.255616656 -0700
++++ engine/Script.cpp	2026-10-20 21:03:12.830408581 -0700
 @@ -6,8 +6,15 @@
  ScriptFunction scriptFunctionList[FUNCTION_COUNT];
  int scriptFunctionCount = 0;
@@ -3838,7 +3838,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  if (scriptEng.operands[6]) {
                      while (scriptEng.operands[4] > 0) {
                          int frameID = scriptEng.operands[3] % i / (i / 10) + scriptEng.operands[0];
-@@ -3285,12 +3422,18 @@
+@@ -3285,12 +3422,29 @@
              case FUNC_SPRITEFRAME:
                  opcodeSize = 0;
                  if (scriptSub == SUB_SETUP && scriptFrameCount < SPRITEFRAME_COUNT) {
@@ -3860,10 +3860,21 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +                    sf.height = scriptEng.operands[3];
 +                    sf.sprX   = scriptEng.operands[4];
 +                    sf.sprY   = scriptEng.operands[5];
++#if defined(SONICCD32X)
++                    // REV R4N: the pause menu's EXIT shows MENU (the owner's request; it opens the level select) - the
++                    // English sheet (Global/Pause_EN.gif) has MENU in its DEV MENU word: x 85, y 81, 36 x 11. The frame is
++                    // matched by its place (EXIT: 30 x 11 at 66, 69, pivot 0, -5); the cart image keeps it (the SH2 build
++                    // stores no frames: SCD32X_CARTDATA)
++                    if (sf.pivotX == 0 && sf.pivotY == -5 && sf.width == 30 && sf.height == 11 && sf.sprX == 66 && sf.sprY == 69) {
++                        sf.width = 36;
++                        sf.sprX  = 85;
++                        sf.sprY  = 81;
++                    }
++#endif
                      ++scriptFrameCount;
                  }
                  break;
-@@ -3440,6 +3583,9 @@
+@@ -3440,6 +3594,9 @@
              case FUNC_DRAWSPRITESCREENFX:
                  opcodeSize  = 0;
                  spriteFrame = &scriptFrames[scriptInfo->frameListOffset + scriptEng.operands[0]];
@@ -3873,7 +3884,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  switch (scriptEng.operands[1]) {
                      default: break;
                      case FX_SCALE:
-@@ -3563,6 +3709,7 @@
+@@ -3563,6 +3720,7 @@
                  opcodeSize            = 0;
                  Entity *newEnt        = &objectEntityList[scriptEng.operands[0]];
                  newEnt->type          = scriptEng.operands[1];
@@ -3881,7 +3892,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  newEnt->propertyValue = scriptEng.operands[2];
                  newEnt->XPos          = scriptEng.operands[3];
                  newEnt->YPos          = scriptEng.operands[4];
-@@ -3633,6 +3780,7 @@
+@@ -3633,6 +3791,7 @@
                      scriptEng.arrayPosition[2] = TEMPENTITY_START;
                  Entity *temp         = &objectEntityList[scriptEng.arrayPosition[2]];
                  temp->type           = scriptEng.operands[0];
@@ -3889,7 +3900,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  temp->propertyValue  = scriptEng.operands[1];
                  temp->XPos           = scriptEng.operands[2];
                  temp->YPos           = scriptEng.operands[3];
-@@ -3769,12 +3917,22 @@
+@@ -3769,12 +3928,22 @@
                  StopSfx(globalSFXCount + scriptEng.operands[0]);
                  break;
              case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
@@ -3916,7 +3927,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              case FUNC_SETIDENTITYMATRIX:
                  opcodeSize = 0;
                  switch (scriptEng.operands[0]) {
-@@ -3897,9 +4055,24 @@
+@@ -3897,9 +4066,24 @@
                  }
                  break;
              case FUNC_GETTILELAYERENTRY:
@@ -3941,7 +3952,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  stageLayouts[scriptEng.operands[1]].tiles[scriptEng.operands[2] + 0x100 * scriptEng.operands[3]] = scriptEng.operands[0];
                  break;
              case FUNC_GETBIT: scriptEng.operands[0] = (scriptEng.operands[1] & (1 << scriptEng.operands[2])) >> scriptEng.operands[2]; break;
-@@ -3923,18 +4096,39 @@
+@@ -3923,18 +4107,39 @@
                  break;
              case FUNC_ADDDRAWLISTENTITYREF: {
                  opcodeSize                                                                                           = 0;
@@ -3983,7 +3994,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  int index = tiles128x128.tileIndex[scriptEng.operands[6]];
                  switch (scriptEng.operands[3]) {
-@@ -3956,9 +4150,17 @@
+@@ -3956,9 +4161,17 @@
                  Copy16x16Tile(scriptEng.operands[0], scriptEng.operands[1]);
                  break;
              case FUNC_SET16X16TILEINFO: {
@@ -4002,7 +4013,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  scriptEng.operands[6] += ((scriptEng.operands[1] & 0x7F) >> 4) + 8 * ((scriptEng.operands[2] & 0x7F) >> 4);
                  switch (scriptEng.operands[3]) {
                      case TILEINFO_INDEX:
-@@ -4021,7 +4223,14 @@
+@@ -4021,7 +4234,14 @@
                  TextMenu *menu = &gameMenu[scriptEng.operands[1]];
                  switch (scriptEng.operands[2]) {
                      case TEXTINFO_TEXTDATA:
@@ -4017,7 +4028,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          break;
                      case TEXTINFO_TEXTSIZE: scriptEng.operands[0] = menu->entrySize[scriptEng.operands[3]]; break;
                      case TEXTINFO_ROWCOUNT: scriptEng.operands[0] = menu->rowCount; break;
-@@ -4115,6 +4324,7 @@
+@@ -4115,6 +4335,7 @@
                      case VAR_OBJECTENTITYNO: break;
                      case VAR_OBJECTTYPE: {
                          objectEntityList[arrayVal].type = scriptEng.operands[i];
@@ -4025,7 +4036,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                          break;
                      }
                      case VAR_OBJECTPROPERTYVALUE: {
-@@ -4608,7 +4818,16 @@
+@@ -4608,7 +4829,16 @@
                      case VAR_MENU1SELECTION: gameMenu[0].selection1 = scriptEng.operands[i]; break;
                      case VAR_MENU2SELECTION: gameMenu[1].selection1 = scriptEng.operands[i]; break;
                      case VAR_TILELAYERXSIZE: stageLayouts[arrayVal].xsize = scriptEng.operands[i]; break;
@@ -4043,7 +4054,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_TILELAYERTYPE: stageLayouts[arrayVal].type = scriptEng.operands[i]; break;
                      case VAR_TILELAYERANGLE:
                          stageLayouts[arrayVal].angle = scriptEng.operands[i];
-@@ -4636,6 +4855,54 @@
+@@ -4636,6 +4866,54 @@
                      case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                      case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
@@ -4098,7 +4109,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
                      case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
                      case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-@@ -4649,12 +4916,35 @@
+@@ -4649,12 +4927,35 @@
                      case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
                      case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
@@ -4135,7 +4146,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                      case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
                      case VAR_OBJECTSPRITESHEET: {
                          objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
-@@ -4704,3 +4994,165 @@
+@@ -4704,3 +5005,165 @@
          }
      }
  }
