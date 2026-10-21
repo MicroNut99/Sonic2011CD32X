@@ -2185,10 +2185,20 @@ static void blob_update(void) /* REV R4: where the scene image (cart 0x080000) h
             printf("[f%5d] scene image: native scripts at %08X-%08X\n", frame_no(), lo, hi);
     }
 }
+static int flr_on, flr_file = -1;    /* SONIC REV R5: command 80's floor (sub_finish) */
+static u64 flr_frames, flr_colours;
 static void sub_finish(void)
 {
     u16 cmd = sub_cmd;
     char nm[32];
+    /* SONIC REV R5: the Sub-CPU ends the floor before a command that may use Word RAM (cd32x/sub_main.c, the list
+       there; R5E: 56 / 59, the backup-RAM file, no longer - the BIOS's own buffers) */
+    if (flr_on && cmd != 0 && cmd != 80 && cmd != 48 && cmd != 52 && cmd != 45 && cmd != 54 && cmd != 56 && cmd != 57 &&
+        cmd != 58 && cmd != 59) {
+        printf("[f%5d] SUB: CMD %d ends the floor first: %llu floor frames, %llu colour commands\n", frame_no(), cmd,
+               (unsigned long long)flr_frames, (unsigned long long)flr_colours);
+        flr_on = 0;
+    }
     if (cmd == 38) {
         int idx = COMM(2);
         cur_file = -1;
@@ -2495,8 +2505,6 @@ static void sub_finish(void)
     }
     else if (cmd == 80) { /* SONIC REV R5: the special stages' floor on the graphics chip (cd32x/sub_main.c FLOOR_CMD) -
                              the SH2's side only: the file's checks and answers (the chip's picture is not drawn here) */
-        static int flr_on, flr_file = -1;
-        static u64 flr_frames, flr_colours;
         int op = COMM(2) & 0xFF, hi = (COMM(2) >> 8) & 0xFF;
         if (op == 0) {
             char nm[16];

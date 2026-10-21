@@ -342,7 +342,7 @@ static void pcm_play(int id) {
 #define FLR_PLANE     0x1A000             /* (R5E, the title, at the start only) plane B's name table: the planet */
 #define FLR_TABLE     0x1C000             /* (at the start only) the two window name tables, then a zero block */
 #define FLR_ZERO      0x1E000
-#define FLR_PIECE     1024                /* words copied into video RAM a pass */
+#define FLR_PIECE     2048                /* words into video RAM a pass (R5E: a DMA - was 1024 copied by the 68000) */
 /* SONIC REV R5E: two kinds - 0 a special stage's floor (FLOOR1-8.BIN), 1 the title's clouds (FLOOR9.BIN): the cloud
    ceiling of the title (its Draw3DScene: a 16 x 10 grid of textured squares, tilted 8 / 512 of a turn, scrolling
    towards the viewer) drawn by the chip with the right perspective on every line - lines 0-111, the window plane over
@@ -358,8 +358,12 @@ static int floor_busy = 0;                /* 0 idle, 1 the chip drawing, 2 the c
 static int floor_pend = 0;                /* new values came while busy */
 static int floor_buf = 0;                 /* the video RAM buffer being written (the other one is shown) */
 static int floor_done = 0;                /* words copied */
-static int32_t flr_x, flr_z, flr_y, flr_sin, flr_cos, flr_v32;
+static int flr_show = 0;                  /* R5E: the Genesis display still off (on at the first picture's switch) */
+static int32_t flr_x, flr_z, flr_y, flr_sin, flr_cos, flr_v32, flr_v32_base;
+static uint32_t flr_v32_tick;             /* R5E: when the SH2 sent flr_v32_base */
+static int flr_v32_have = 0;              /* R5E: ... and whether it has */
 static uint32_t flr_tick;
+static int flr_flip = 0;                  /* R5E: (the title) a finished buffer waits for the vertical blank's switch */
 
 static void flr_to_sub(void)              /* (2 Mbit) the 68000 gives Word RAM to the Sub-CPU: DMNA */
 {
@@ -427,38 +431,90 @@ static void floor_start(void)             /* the chip: this frame's floor into t
     floor_busy = 1;
     floor_pend = 0;
 }
+/* R5E: Word RAM -> video RAM by the VDP's DMA (the 68000 copied it a word at a time: about twice as long).  The
+   listener's own command 22 (one long write) to the VDP's control port: two registers at a time, then the address
+   with the DMA bit (the 68000 waits while it runs).  A DMA from Word RAM reads a word late: the source one word on,
+   and the first word written by the 68000 afterwards (command 7, one word).  The source registers count on through a
+   DMA: the next piece only its length.  The vertical blank's handler leaves the VDP alone here (SGB_FLAG 0: no
+   Genesis planes while the floor is on). */
+static void flr_vdp2(uint16_t a, uint16_t b) { do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, ((uint32_t)a << 16) | b); }
+static void flr_dma(uint32_t dst, uint32_t src, int n, int first)
+{
+    if (first) {
+        uint32_t s = (src + 2) >> 1;
+        flr_vdp2(0x8F02, 0x9700 | ((s >> 16) & 0x7F));         /* auto-increment 2; the source (bits 6-7 0: the */
+        flr_vdp2(0x9500 | (s & 0xFF), 0x9600 | ((s >> 8) & 0xFF));   /* 68000's side) */
+    }
+    flr_vdp2(0x9300 | (n & 0xFF), 0x9400 | ((n >> 8) & 0xFF));  /* the length in words */
+    do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0x40000080u | ((dst & 0x3FFF) << 16) | (dst >> 14));
+    do_md_cmd3(MD_CMD_COPY_VRAM_, dst, src, 1);                  /* the first word */
+}
+static void ttl_next(void)                /* R5E: the title's clouds go on by themselves between the SH2's pictures - */
+{                                         /* the engine scrolls them 8 a frame (the clouds object: += 8, & 2047); */
+    flr_v32 = (flr_v32_base + 8 * (int32_t)(GET_TICKS - flr_v32_tick)) & 0x7FF;   /* each picture the SH2 sends */
+    floor_start();                        /* the engine's own value again */
+}
+static void flr_switch(void)              /* the window shows the buffer just written */
+{
+    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8300 | (flr_win[floor_buf] >> 10));
+    if (flr_show) {                       /* R5E: the Genesis display on with the first picture (nothing before it) */
+        do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8174);
+        flr_show = 0;
+    }
+    floor_buf ^= 1;
+}
 static void floor_step(void)              /* one piece of the work after a frame (the main loop, every pass) */
 {
     const int words = 40 * flr_vcells * 16;
+    if (flr_flip && floor_on && GET_TICKS != flr_tick) {
+        flr_switch();                     /* R5E (the title): the vertical blank came - the switch, while the chip */
+        flr_flip = 0;                     /* draws the next one (it began when the copy ended) */
+    }
+    if (floor_on && !floor_busy && flr_mode == 1 && flr_v32_have) {
+        ttl_next();
+        return;
+    }
     if (!floor_on || !floor_busy)
         return;
     if (floor_busy == 1) {
         if (read_word(0xFF8058) & 0x8000)
             return;                       /* the chip still draws */
+        if (flr_flip)
+            return;                       /* R5E: the other buffer still shown until the switch */
         flr_to_main();
         floor_done = 0;
-        floor_busy = 2;
-        return;
+        floor_busy = 2;                   /* (R5E: the first piece at once) */
     }
     if (floor_busy == 2) {
-        int n = words - floor_done;
-        if (n > FLR_PIECE) n = FLR_PIECE;
-        do_md_cmd3(MD_CMD_COPY_VRAM_, flr_vram[floor_buf] + 2 * floor_done, FLR_MAIN + FLR_IMG + 2 * floor_done, n);
-        floor_done += n;
-        if (floor_done >= words) {
-            floor_busy = 3;
-            flr_tick = GET_TICKS;
+        for (;;) {
+            int n = words - floor_done;
+            if (n > FLR_PIECE) n = FLR_PIECE;
+            flr_dma(flr_vram[floor_buf] + 2 * floor_done, FLR_MAIN + FLR_IMG + 2 * floor_done, n, floor_done == 0);
+            floor_done += n;
+            if (floor_done >= words)
+                break;
+            /* R5E: the next piece at once unless the SH2 has a command waiting (the main loop's pause between COMM0's
+               reads is kept: a piece takes longer) */
+            if (do_md_cmd1(MD_CMD_READ_32X_16, 0xA15120) != 0)
+                return;
         }
+        flr_tick = GET_TICKS;
+        if (flr_mode == 1) {              /* R5E: the title - Word RAM back now and the next picture begun at once; */
+            flr_flip = 1;                 /* the switch at the next vertical blank (above) */
+            flr_to_sub();
+            floor_busy = 0;
+            if (flr_v32_have)
+                ttl_next();
+            return;
+        }
+        floor_busy = 3;
         return;
     }
     /* 3: the window shows the new buffer from the next vertical blank on (the floor: any time before line 120 - no
-       tear; R5E, the title's clouds from line 0: the switch the moment the vertical blank begins) */
-    if (flr_mode == 1)
-        while (GET_TICKS == flr_tick) bump_fm();
-    else if (GET_TICKS == flr_tick)
+       tear) */
+    if (GET_TICKS == flr_tick)
         return;
-    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8300 | (flr_win[floor_buf] >> 10));
-    floor_buf ^= 1;
+    flr_switch();
     flr_to_sub();
     floor_busy = 0;
     if (floor_pend)
@@ -479,6 +535,7 @@ static void floor_end(void)
     do_md_cmd0(MD_CMD_CLEAR_B);
     do_md_cmd0(MD_CMD_CLEAR_A);
     floor_on = 0;
+    flr_flip = 0;
 }
 /* R5E: FLOOR9.BIN's part after the Word RAM image (tools/build_floor.py): 'TTL1', u16 lines, u16 the planet's cells
    wide, high, its 15 palette indices, at 0x40 the lines (u, du, v: 3 x 16 bits each), at 0x400 the planet's cells */
@@ -611,9 +668,11 @@ static int floor_begin(int stage)
     floor_buf = 0;
     floor_busy = 0;
     floor_pend = 0;
+    flr_flip = 0;
     flr_v32 = 0;
+    flr_v32_have = 0;
     do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8300 | (flr_win[1] >> 10));   /* (buffer 1 shown: empty) */
-    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8174);                         /* the Genesis display on */
+    flr_show = 1;                         /* R5E: the Genesis display on with the first picture (floor_step) */
     return 1;
 }
 
@@ -1012,9 +1071,11 @@ int main(void)
             print_diag(temp, "SH2 NEVER EVEN REACHED THIS FILE      ", 2, 18); 
         }
 
-        /* SONIC REV R5: a command that uses Word RAM (loads, sound banks, backup RAM ...) ends the floor first */
+        /* SONIC REV R5: a command that uses Word RAM (loads, sound banks ...) ends the floor first.  R5E: the backup-RAM
+           file (56 load, 59 save) no longer - the BIOS's own buffers, no Word RAM (the title loads it once the clouds
+           are on: the clouds ended there and the SH2 drew them) */
         if (floor_on && cmd != 0 && cmd != FLOOR_CMD && cmd != 48 && cmd != 52 && cmd != 45 && cmd != 54 &&
-            cmd != 57 && cmd != 58)
+            cmd != 56 && cmd != 57 && cmd != 58 && cmd != 59)
             floor_end();
 
         if (cmd == FLOOR_CMD) {
@@ -1026,7 +1087,9 @@ int main(void)
             else if (op >= 1 && op <= 4) {
                 int32_t v = (int32_t)do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
                 if (op == 1 && flr_mode == 1) {   /* R5E: the title's clouds - COMM8 = the scroll (v32) */
-                    flr_v32 = v & 0x7FF;
+                    flr_v32 = flr_v32_base = v & 0x7FF;
+                    flr_v32_tick = GET_TICKS;
+                    flr_v32_have = 1;
                 }
                 else if (op == 1) {       /* R5B: X << 16 | Z, 13.3 each -> 12 bits of fraction */
                     flr_x = (int32_t)(int16_t)(v >> 16) << 9;

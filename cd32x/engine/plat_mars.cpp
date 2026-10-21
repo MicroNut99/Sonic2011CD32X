@@ -1208,15 +1208,17 @@ void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B,
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
-    if (floorHW && flrTitle && XPos <= 0 && YPos <= 0 && XPos + width >= SCREEN_XSIZE && YPos + height >= SCREEN_YSIZE && A >= 0xFF) {
+    if (floorHW && flrTitle && XPos <= 0 && YPos <= 0 && XPos + width >= SCREEN_XSIZE && YPos + height >= 100 && A >= 0xFF) {
         /* REV R5E: the title's sky - the Genesis backdrop shows it (behind the chip's clouds and the planet); the 32X
-           picture colour 0 (see-through) where the rectangle was */
+           picture colour 0 (see-through) where the rectangle was, and down to the clouds' last line (112: the engine's
+           clouds covered lines 100-111 below the clouds object's rectangle, 320 x 100) */
         ttlSky = (unsigned int)(R & 0xFF) << 16 | (unsigned int)(G & 0xFF) << 8 | (unsigned int)(B & 0xFF);
         PM_FLUSH();
         if (pmSkip)
             return;
+        int rows = YPos + height < 112 ? 112 : YPos + height > PM_LINES ? PM_LINES : YPos + height;
         volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
-        for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; ++i) p[i] = 0;
+        for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * rows) / 4; ++i) p[i] = 0;
         return;
     }
     pm_rect(XPos, YPos, width, height, R, G, B, A);
