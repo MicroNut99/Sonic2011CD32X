@@ -1127,15 +1127,17 @@ struct PmHlineJob {
     unsigned int ly0;
     const int *lines;
     int ylim; /* REV R5B: the lines drawn (the chip's floor covers the rest: PM_HLINE_LINES) */
+    int y0;   /* REV R5G: ... from this one (the Genesis's sky above it) */
 };
 static void pm_hline_part(const PmHlineJob *j, int part, int parts)
 {
     const TileLayer *layer = j->layer;
     const int fullW = j->fullW, fullH = j->fullH, plane = j->plane, mask = parts - 1;
     const int *lines = j->lines;
-    unsigned int ly = j->ly0, uW = (unsigned int)fullW; /* (unsigned: no library shifts on the SH2) */
+    unsigned int ly = j->ly0 + (unsigned int)j->y0, uW = (unsigned int)fullW; /* (unsigned: no library shifts on the SH2) */
     const int ylim = j->ylim;
-    for (int y = 0; y < ylim; ++y, ++ly) {
+    while (ly >= (unsigned int)fullH) ly -= (unsigned int)fullH;
+    for (int y = j->y0; y < ylim; ++y, ++ly) {
         if (ly >= (unsigned int)fullH)
             ly -= (unsigned int)fullH;
         if ((y & mask) != part)
@@ -1177,7 +1179,7 @@ static void pm_hline_part(const PmHlineJob *j, int part, int parts)
 PM_SPLIT_FN(pm_hline_part, PmHlineJob)
 /* DrawHLineScrollLayer's pixels: lines[] holds each line's x (the engine's own scroll arithmetic), tileYPos the layer
    row at the screen's top - every line of the layer, its tiles of this half (visualPlane == aboveMidPoint) */
-static void pm_hline(int layerID, int tileYPos, const int *lines)
+static void pm_hline_from(int layerID, int tileYPos, const int *lines, int y0) /* REV R5G: from line y0 */
 {
     PM_FLUSH();
     if (pmSkip)
@@ -1198,8 +1200,12 @@ static void pm_hline(int layerID, int tileYPos, const int *lines)
 #else
     j.ylim = PM_LINES;
 #endif
+    j.y0 = y0;
+    if (j.y0 >= j.ylim)
+        return;
     PM_SPLIT(pm_hline_part, &j); /* REV R4D */
 }
+static void pm_hline(int layerID, int tileYPos, const int *lines) { pm_hline_from(layerID, tileYPos, lines, 0); }
 /* Draw3DSkyLayer (the special stages' floor): rows (SCREEN_YSIZE / 2) + 12 on, 100 of them; the engine samples each
    pixel four times (two rows of samples, two samples a pixel, the later visible one wins) - here the last sample first,
    the others only where it is see-through */

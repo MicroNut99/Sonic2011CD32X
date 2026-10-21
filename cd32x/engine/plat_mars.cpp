@@ -247,6 +247,7 @@ static union {
 #define SKY_RUNS_B ((volatile unsigned short *)(0x24000000 + 0x1F400))
 #define SKY_SAVE ((volatile unsigned short *)(0x24000000 + 0x1D800))
 #define SKY_POOL_MAX (0x1D800 - PM_FB_POOL)
+#define SKY_ROW 120 /* the Genesis's sky: lines 0-119 (the window's rows from 15 on) */
 static unsigned short cramSent[64];
 static unsigned short recId = 0;
 /* REV R4D: the UNDERWATER switch (scdWaterSwitch) - the records' water trailer (md/sgb.h): the water colours the 68000
@@ -1298,6 +1299,24 @@ void scd_pm_draw3dscene(int sheetID)
         }
         SKY_RUNS_B[2 * n] = (unsigned short)(SCREEN_YSIZE - 120), SKY_RUNS_B[2 * n + 1] = 0, ++n;
         skyRB = (short)n, skyVB = 0;
+        { /* lines 120 to the floor's first row: the 32X draws them (its picture's row y: the texture's row v0 + y from x
+             x_left(y) on, 128 wide, side by side) */
+            const int rows = PM_HLINE_LINES, u0 = vertexBuffer[0].u, v0 = vertexBuffer[0].v;
+            const unsigned char *sheet = &PM_GFX[gfxSurface[sheetID].dataPosition];
+            const int rb = pm_opaque(1 << gfxSurface[sheetID].widthShifted);
+            for (int y = SKY_ROW; y < rows && y < 128; ++y) {
+                const int xl = x0 + (x2 - x0) * y / 128;
+                const unsigned char *t = sheet + (v0 + y) * rb + u0;
+                int c = (-xl) & 127, x = 0;
+                while (x < SCREEN_XSIZE) {
+                    int k = 128 - c;
+                    if (k > SCREEN_XSIZE - x)
+                        k = SCREEN_XSIZE - x;
+                    pm_sprite_row((unsigned int)(PM_STRIDE * y + x), t + c, k, 1);
+                    x += k, c = 0;
+                }
+            }
+        }
         comm_idle();
         SC_COMM2    = 8;
         SC_COMM8_32 = (unsigned int)(((vertexBuffer[0].u >> 7) & 3) | ((vertexBuffer[0].v >> 5) & 12));
@@ -1409,7 +1428,9 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
        the sky is the Genesis's planes now, the floor its window; the SH2 draws what is in front */
     const int row0 = (PM_LINES / 2) + 12 + flr_first_row(layer); /* REV R5B: the rows the chip draws */
     volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
-    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; i += 4) p[i] = p[i + 1] = p[i + 2] = p[i + 3] = 0;
+    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * SKY_ROW) / 4; i += 4) p[i] = p[i + 1] = p[i + 2] = p[i + 3] = 0;
+    p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS + PM_STRIDE * row0); /* (lines 120 - row0: the layers') */
+    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * (PM_LINES - row0)) / 4; ++i) p[i] = 0;
     if (row0 > (PM_LINES / 2) + 12)
         pm_sky_rows(layerID, row0); /* REV R5B: the rows past the map's edge, as before (after the colours: no pmSkip) */
     return true;
@@ -1585,15 +1606,19 @@ static void pm_layer_end(int slot)
         pad_service(); /* REV R4D */
         if (floorHW && !flrTitle && !pmSkip) { /* REV R5G: the special stage's sky layers are the Genesis's planes */
             const int L = activeTileLayers[slot];
+            /* (lines 120 to the floor's first row: the 32X's, as before - the window's rows start at 120, the floor at
+               124 or below: there the layers show, which plane A cannot under the window) */
             if (L == 2) { /* layer 2: plane A */
                 skyRA = (short)sky_runs(SKY_RUNS_A, pmLines);
                 skyVA = (short)pmTileY[slot];
+                pm_hline_from(slot, pmTileY[slot], pmLines, SKY_ROW);
                 return;
             }
             if (L == 1) { /* layer 1: plane B (special stage 1: the swirl covers it - its own runs) */
                 if (skyStage != 1) {
                     skyRB = (short)sky_runs(SKY_RUNS_B, pmLines);
                     skyVB = (short)pmTileY[slot];
+                    pm_hline_from(slot, pmTileY[slot], pmLines, SKY_ROW);
                 }
                 return;
             }
