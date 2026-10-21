@@ -2603,6 +2603,83 @@ static void big_preload() /* (plat_stage_loading, the scene in) the act's other 
     }
     big_use_slot(big_slot_of(cur)); /* window 1: the scene's own act file slot again */
 }
+/* REV R4L: THE BOOT PRELOAD - at power-on, before the title starts (the 16 MB cart): the pages are looked up, and what a
+   new game needs and the cart does not hold whole is loaded now, under the loading picture:
+   - the menu / save screen (pages 6 and 7, with its engine copy);
+   - Palmtree Panic 1's act set (its present, past, act 2's start, its bad future, with their act files and engine
+     copies) - only when no act page holds an act scene at all (the first power-on, a new build's first power-on, after
+     the cart test). An act kept from the last time played stays: it is what the save goes on with.
+   Then the title, the menu and a new game's first act are page switches. A save of another act loads its set at its
+   start, as before. Line 10: 5CB5 the boot preload running. */
+static void big_boot_preload()
+{
+    if (bigN != BIG_MAX || big_attract())
+        return;
+    if (!bigKnown)
+        big_identify();
+    const bool menuIn = big_scene_of(BIG_MENU) == BIG_MENU_FILE;
+    bool actIn        = false;
+    for (int i = 0; i < bigN; ++i)
+        if (scene_group(big_scene_of(i)))
+            actIn = true;
+    if (menuIn && actIn) { /* all in: only the engine copies checked (a page whose copy differs gets the engine now) */
+        big_engine(BIG_MENU);
+        for (int i = 0; i < bigN; ++i)
+            if (big_scene_of(i))
+                big_engine(i);
+        big_home_w1();
+        return;
+    }
+    STATE(0x5CB5);
+    if (!splashUp)
+        splash_show(); /* (window 1 on page 1: big_detect / big_identify leave it there) */
+    const int menuTo = menuIn ? 0 : actIn ? 32 : 8; /* the bar: the menu 0 - 8, the act set 8 - 32 */
+    if (!menuIn) {
+        splash_part(0, 0);
+        if (big_engine(BIG_MENU)) {
+            big_show(BIG_MENU);
+            if (scene_load_at(BIG_MENU_FILE, 0x080000u, 0, menuTo, false) != 0)
+                SCD_BOOT_RECORD[5] = 0; /* (not whole: the menu loads again on its first trip) */
+            big_show(-1); /* page 0 again: the title (bigScene[BIG_MENU] = what was loaded) */
+        }
+    }
+    if (!actIn) {
+        unsigned short t[BIG_MAX];
+        const int n = big_targets(0x200u, t); /* L1S000: Palmtree Panic 1, the present (Sonic's files) */
+        unsigned int used = 0;
+        for (int j = 0; j < n; ++j) {
+            int i = 0; /* a page as big_prepare picks it: page 1's act file slot the last */
+            while (i < bigN && ((used >> i & 1) || big_slot_of(i) == 0)) ++i;
+            if (i >= bigN)
+                for (i = 0; i < bigN && (used >> i & 1); ++i) {
+                }
+            if (i >= bigN)
+                break;
+            used |= 1u << i;
+            const unsigned int f = t[j];
+            const int a = menuTo + (32 - menuTo) * j / n, b = menuTo + (32 - menuTo) * (j + 1) / n, m = (a + b) / 2;
+            splash_part(a, a);
+            if (!big_engine(i))
+                continue;
+            big_w1(big_page(i));
+            bigScene[i] = 0;
+            if (scene_load_at(f, CART_W1 + 0x080000u, a, m, false) == 0)
+                bigScene[i] = (unsigned short)f;
+            const int s = big_slot_of(i);
+            if (bigScene[i] && big_slot_mdg(s) != f + 0x1000u) { /* its act file */
+                big_w1(big_slot_page(s));
+                splash_part(m, b);
+                const unsigned short got = big_file((unsigned short)(f + 0x1000u), big_slot_off(s)) == 0 ? (unsigned short)(f + 0x1000u) : 0;
+                if (s == bigSlot)
+                    mdgInCart = got;
+                else
+                    slotMdg[s] = got;
+            }
+        }
+        bigGroup = scene_group(0x200u);
+    }
+    big_home_w1(); /* window 1: page 1, the title's act file slot */
+}
 static void big_detect() /* (the first scene load after power-on) MicroNut99's page mapper, 16 or 8 MB - read only */
 {
     comm_idle();
@@ -2663,6 +2740,7 @@ static void big_home_w1() {}
 static void big_prepare(unsigned int) {}
 static void big_preload() {}
 static void big_detect() {}
+static void big_boot_preload() {}
 static bool scene_resident(unsigned int, unsigned int) { return false; }
 static void big_home_spill(unsigned int) {}
 int plat_big_cart(int) { return 0; }
@@ -3013,6 +3091,7 @@ bool plat_stage_loading()
         for (int k = 0; k < (int)h[2] && k < 32; ++k) firstOffsets[k] = h[3 + 5 * k];
         haveOffsets = true;
         big_detect(); /* REV R4G: the 16 MB cart? (after power-on: page 0 holds the boot loader's title) */
+        big_boot_preload(); /* REV R4L: the menu and a new game's first act set, before the title starts */
     }
     STATE(0x5C13);
     unsigned int file = scene_file();
