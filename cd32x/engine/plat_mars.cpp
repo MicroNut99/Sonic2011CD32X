@@ -1552,6 +1552,9 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
                 g = (ia * (int)((c & 0x7E0) >> 6) >> 8) + (a * fg >> 8);
                 b = (ia * b >> 8) + (a * fb >> 8);
             }
+            if (k == 0) /* REV R5E: the title's sky - the 32X's colour 0 itself (no through bit): the 32X shows its colour 0
+                           wherever the Genesis shows its backdrop (the clouds' gaps), the Genesis where it has a pixel */
+                cram[0] = (unsigned short)(b << 10 | g << 5 | r);
             flrGen[k] = (unsigned short)((b >> 2) << 9 | (g >> 2) << 5 | (r >> 2) << 1);
         }
     }
