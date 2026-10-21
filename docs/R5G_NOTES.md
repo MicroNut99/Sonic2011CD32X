@@ -124,3 +124,106 @@ loads that file just after the clouds begin, which used to end them.
 - **The 68000 listener (`kobo/hw_md.s`) is unchanged.** The DMA uses its existing commands 22 (a long write to the VDP's
   control port) and 34 (a VDP register). The records use its existing `sgb_poll` / `sgb_vblank`.
 - `kobo/sub_stubs.c`, `kobo/scd.c` and `sh2_engboot.c` (`SH2-VR4I`) are unchanged.
+
+## The changed files (since R5C)
+
+| File | Change |
+|---|---|
+| `cd32x/sub_main.c` | command 80: the title (stage 9), the special stages' skies, the DMA copy, records on, the swirl's pictures (op 8) |
+| `cd32x/engine/plat_mars.cpp` | the SH2's side: the records, the intercepts, the colours (CRAM 0-63), the picture cleared when it begins; R5D's notice and page-0 change |
+| `cd32x/engine/scd_pm.h` | a tile layer drawn from a given line (lines 120 down to the floor); R5D's speed-ups |
+| `tools/build_floor.py` | `FLOOR9.BIN` (the title); the sky part of `FLOOR1.BIN` – `FLOOR8.BIN` |
+| `tools/sh2emu/sh2emu.c` | command 80 as the Sub-CPU now answers it; the records on for the title and the special stages; a command that ends the floor |
+
+`patches/engine.patch` is unchanged since R5C.
+
+## Speed (sh2emu, pictures a second in the last 10 s of each check run)
+
+| | R5C | R5G |
+|---|---|---|
+| Special stage 1 | 10.0 | 20.0 |
+| Special stage 2 | 11.6 | 28.4 |
+| Special stage 3 | 11.7 | 28.2 |
+| Special stage 4 | 10.4 | 30.0 |
+| Special stage 5 | 9.7 | 15.5 |
+| Special stage 6 | 8.6 | 14.9 |
+| Special stage 7 | – | 17.7 |
+| Special stage 8 | – | 29.9 |
+| Title (30 s from power-on) | – | 18.1 |
+
+Special stages 7 and 8 have no R5C number: those runs left the stage before their last 10 s. A stage's number also
+depends on what is on screen in those 10 s.
+
+## Build (from the R5C build)
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+unzip -o R5G_files.zip && md5sum -c --quiet R5G_md5.txt && echo "R5G_md5: all OK"
+rm -rf engine && sh tools/setup_engine.sh && sh tools/check_patch.sh
+make -C host clean && make -C host
+rm -rf game_data
+python3 tools/build_audio.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data
+sh tools/build_native.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk
+rm -rf cd32x/build_engine && make -C cd32x ENGINE=1 START="0 0" build_engine/engine.bin
+python3 tools/build_game_data.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data --scenes "0:*,1:*,1:*@1,3:*,3:*@1" --start 0:0 --native cd32x/build_engine
+sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data "1:*,1:*@1"
+python3 tools/build_floor.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data
+python3 tools/build_preload.py game_data cd32x/build_engine/engine.bin
+mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW game_data/FLOOR*.BIN cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
+make -C cd32x ENGINE=1 START="0 0" ROUND=R5G
+md5sum -c --quiet R5G_expected.txt && echo "R5G_expected: all 349 OK"
+grep -ac "BUILD: SONIC CD R5G GAME START" cd32x/build_engine/disc/APP.BIN
+grep -ac "SH2-VR4I" cd32x/build_engine/disc/APP.BIN
+ls cd32x/build_engine/disc/FLOOR*.BIN | wc -l
+```
+
+The last line must print **9**: `FLOOR1.BIN` – `FLOOR8.BIN` and the title's `FLOOR9.BIN`.
+
+`build_floor.py` prints a line for each file, for example:
+- `FLOOR1.BIN: SS1 312 stamps, 15 colours, 1 merged; sky: 2 colour lines, 27 colours, plane A 123 cells, plane B the swirl 2 x 240 cells`
+- `FLOOR9.BIN: the title's clouds, 226 stamps, 4 colours; the planet, 7 colours; the mountains and the water, 124 cells, 12 colours`
+
+## sh2emu before burning
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+gcc -O2 -o /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu.c
+rm -f /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 9000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -cart 16 -cartkeep /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin -shot 2000 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c1_menu.bmp -shot 8800 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c1_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c1.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c1.txt
+grep -c "CMD 38 open" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c1.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 9000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -cart 16 -cartkeep /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin -shot 2000 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c2_menu.bmp -shot 8800 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c2_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c2.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c2.txt
+grep -c "CMD 38 open" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c2.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 4800 -pad "1400:ABCS,1410:-,1550:D,1560:-,1600:A,1610:-,1700:D,1710:-,1760:A,1770:-,1860:A,1870:-" -cart 16 -shot 4700 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c3_ss1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c3.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c3.txt
+grep "CMD 80 floor begin" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c3.txt
+```
+
+All three runs must end `VERDICT no problems found`.
+- **The two `CMD 38 open` greps:** they print **18**, then **2**, as for R4L to R5C.
+- **The third run** goes STAGE SELECT → SPECIAL → special stage 1. Its last two lines read:
+  - `CMD 80 floor begin, the title's clouds 9 -> ok`
+  - `CMD 80 floor begin, special stage 1 -> ok`
+
+  Its summary's `pictures` line reads about 20 a second.
+- **`shot_c3_ss1.bmp`:** sh2emu draws only the 32X's picture, so the shot shows the HUD and Sonic on black. The sky
+  and the floor are the Genesis's.
+
+## What to expect on the console
+
+- **Power-on:** the title comes up without a load. The first time, the cart is filled under a notice ("FIRST TIME SETTING
+  UP THE CART – THIS TAKES A FEW MINUTES").
+- **The title:**
+  - The clouds scroll toward you in perspective, drawn by the Sega CD.
+  - The water's strips slide at their own speeds.
+  - The planet bobs behind the clouds.
+  - Sonic, the emblem and PRESS START are the 32X's, in front.
+  - The clouds update about 15 times a second in ares, independently of Sonic's animation.
+- **Special stages:** the sky is the Genesis's.
+  - It scrolls line by line as you turn, and stage 6's rainbow waves.
+  - Stage 1's red swirl animates and cycles its colours.
+  - The floor is the Sega CD's.
+  - Only Sonic, the UFOs and the HUD are the 32X's.
+- **Between scenes:** no green text.
+- **If the sky or the floor stays black, or the title shows only the 32X's part**, line 10 and a photo tell me where.
