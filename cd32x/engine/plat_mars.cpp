@@ -3143,8 +3143,10 @@ bool plat_stage_loading()
     if (bad < 0)
         scene_stop(0x5CE8, "NO SCENE ", file); /* the scene's .IMG is not on the disc */
 #if SCD_PLANES && SCD_DEVMENU
-    if (toOptions) { /* REV R4H: (above) the title in the cart, the engine loads nothing: the Options Menu */
+    if (toOptions) { /* REV R4H: (above) the title in the cart, the engine loads nothing: the Options Menu - REV R4M: at
+                        STAGE SELECT (the owner: Pause > EXIT is the level select; B there: the Options Menu) */
         STATE(0x5C19);
+        scdMenuStages = 1;
         scdMenuNote[0][0] = scdMenuNote[1][0] = 0;
         Engine.gameMode   = ENGINE_INITDEVMENU;
         return false;

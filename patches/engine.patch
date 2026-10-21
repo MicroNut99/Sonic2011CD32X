@@ -614,14 +614,14 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      byte type;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/Debug.cpp engine/Debug.cpp
 --- RSDKv3-Decompilation-master/RSDKv3/Debug.cpp	2026-08-15 23:48:31.000000000 -0700
-+++ engine/Debug.cpp	2026-10-19 12:44:45.546880750 -0700
++++ engine/Debug.cpp	2026-10-20 20:12:21.410293824 -0700
 @@ -1,4 +1,5 @@
  #include "RetroEngine.hpp"
 +#include <stdarg.h> // PORT32X: was pulled in by SDL.h
  
  int touchFlags = 0;
  
-@@ -44,6 +45,140 @@
+@@ -44,6 +45,141 @@
      }
  }
  
@@ -631,7 +631,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +// (1-9) for either; the test switches: DEMO PAD (the scripted pad plays each stage from its start until a button is
 +// pressed) and DEBUG MODE (every stage with the game's debug mode); CREDITS. The platform's line (scdMenuNote): why the
 +// game came back here. A + B + C + START in a stage: back to this menu.
-+// REV R4D: three more switches before CREDITS, each off at power-on (off: as R4C) - 2ND SH2 (the 32X's second SH2 draws
++// REV R4D: three more switches before CREDITS, each off at power-on (off: as R4C; REV R4M: each ON at power-on) - 2ND SH2 (the 32X's second SH2 draws
 +// half of each picture of the 32X picture mode: the special stages, the title, the menus), STAGE SFX (each scene's own
 +// sound effects in the PCM chip, from its next load) and UNDERWATER (the act's underwater colours below the water line,
 +// on the Genesis planes); the blank rows under the title and the version taken out (26 rows from y = 8)
@@ -652,7 +652,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +#define SCD_MENU_CREDITS 24 // REV R4: the credits screen (plat_credits)
 +#define SCD_MENU_CART    26 // REV R4E: CART TEST (REV R4F: BIG CART)
 +int scdDebugSwitch                = 0;
-+int scdSh2Switch = 0, scdSfxSwitch = 0, scdWaterSwitch = 0; // REV R4D (engine/plat.hpp)
++int scdSh2Switch = 1, scdSfxSwitch = 1, scdWaterSwitch = 1; // REV R4D (engine/plat.hpp) - REV R4M: on at power-on
++int scdMenuStages = 0; // REV R4M: 1 - the menu opens at STAGE SELECT (the pause menu's EXIT: cd32x/engine/plat_mars.cpp)
 +static int scdPlayer              = 0; // REV R4B: 0 Sonic, 1 Tails
 +static int scdLives               = 3; // REV R4B: the lives a game starts with
 +char scdMenuNote[2][SCD_MENU_NOTE] = { "", "" };
@@ -762,17 +763,21 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  void InitDevMenu()
  {
  #if RETRO_USE_MOD_LOADER
-@@ -70,6 +205,9 @@
+@@ -70,6 +206,13 @@
      SetPaletteEntry(-1, 0xF0, 0x00, 0x00, 0x00);
      SetPaletteEntry(-1, 0xFF, 0xFF, 0xFF, 0xFF);
      stageMode = DEVMENU_MAIN;
 +#if defined(SONICCD32X)
 +    scd_main_menu(); // REV R4
++    if (scdMenuStages) { // REV R4M: the pause menu's EXIT - STAGE SELECT's lists at once (B: the Options Menu, as before)
++        scdMenuStages = 0;
++        scd_stage_lists();
++    }
 +#else
      SetupTextMenu(&gameMenu[0], 0);
      AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
      AddTextMenuEntry(&gameMenu[0], " ");
-@@ -102,6 +240,7 @@
+@@ -102,6 +245,7 @@
      gameMenu[0].selection2       = 9;
      gameMenu[1].visibleRowCount  = 0;
      gameMenu[1].visibleRowOffset = 0;
@@ -780,7 +785,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      if (renderType == RENDER_HW) {
          Engine.highResMode = false;
          render3DEnabled    = false;
-@@ -144,6 +283,9 @@
+@@ -144,6 +288,9 @@
  void ProcessStageSelect()
  {
      ClearScreen(0xF0);
@@ -790,7 +795,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
      keyDown.start = false;
      keyDown.B     = false;
      keyDown.up    = false;
-@@ -210,16 +352,96 @@
+@@ -210,16 +357,96 @@
                  gameMenu[0].selection2 -= 2;
  
              int count = 13;
@@ -888,7 +893,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyPress.start || keyPress.A) {
                  if (gameMenu[0].selection2 == 9) {
                      ClearGraphicsData();
-@@ -326,6 +548,10 @@
+@@ -326,6 +553,10 @@
              }
              else if (keyPress.B) {
                  stageMode = DEVMENU_MAIN;
@@ -899,7 +904,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "RETRO ENGINE DEV MENU");
                  AddTextMenuEntry(&gameMenu[0], " ");
-@@ -421,6 +647,11 @@
+@@ -421,6 +652,11 @@
                  stageMode                    = DEVMENU_STAGESEL;
              }
              else if (keyPress.B) {
@@ -911,7 +916,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  SetupTextMenu(&gameMenu[0], 0);
                  AddTextMenuEntry(&gameMenu[0], "SELECT A PLAYER");
                  SetupTextMenu(&gameMenu[1], 0);
-@@ -437,6 +668,28 @@
+@@ -437,6 +673,28 @@
  
          case DEVMENU_STAGESEL: // Selecting Stage
          {
@@ -940,7 +945,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyDown.down) {
                  gameMenu[1].timer += 1;
                  if (gameMenu[1].timer > 8) {
-@@ -456,6 +709,7 @@
+@@ -456,6 +714,7 @@
                      gameMenu[1].timer = 0;
                  }
              }
@@ -948,7 +953,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
              if (keyPress.down) {
                  gameMenu[1].selection1++;
                  if (gameMenu[1].selection1 - gameMenu[1].visibleRowOffset >= gameMenu[1].visibleRowCount) {
-@@ -480,7 +734,12 @@
+@@ -480,7 +739,12 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX - 4, 40);
              DrawTextMenu(&gameMenu[1], SCREEN_CENTERX + 100, 64);
              if (keyPress.start || keyPress.A) {
@@ -961,7 +966,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
                  stageMode         = STAGEMODE_LOAD;
                  Engine.gameMode   = ENGINE_MAINGAME;
                  stageListPosition = gameMenu[1].selection1;
-@@ -511,6 +770,10 @@
+@@ -511,6 +775,10 @@
              DrawTextMenu(&gameMenu[0], SCREEN_CENTERX, 72);
              if (keyPress.start || keyPress.A) {
                  stageMode = DEVMENU_MAIN;
@@ -4946,8 +4951,8 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
  extern int videoFilePos;
 diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -x ScriptNative.inc -x ScriptNative.ops -x CDTracks.inc -x SFXBank.inc -x Script_aot.ii RSDKv3-Decompilation-master/RSDKv3/plat.hpp engine/plat.hpp
 --- RSDKv3-Decompilation-master/RSDKv3/plat.hpp	1969-12-31 16:00:00.000000000 -0800
-+++ engine/plat.hpp	2026-10-19 12:44:31.484824809 -0700
-@@ -0,0 +1,150 @@
++++ engine/plat.hpp	2026-10-20 20:12:21.410799041 -0700
+@@ -0,0 +1,151 @@
 +#ifndef PLAT_H
 +#define PLAT_H
 +// PORT32X: the platform layer of the Sega CD32X port.
@@ -5007,6 +5012,7 @@ diff -ruN -x '*.vcxproj*' -x '*.rc' -x '*.ico' -x resource.h -x obj -x 'obj_*' -
 +extern int scdSh2Switch;   // 1: the 32X's second SH2 draws half of each 32X picture-mode picture (scd_pm.h)
 +extern int scdSfxSwitch;   // 1: each scene's own sound effects (SFX<n>.BIN, from the scene's load on)
 +extern int scdWaterSwitch; // 1: the act's underwater colours below the water line on the Genesis planes (the 68000's H-int)
++extern int scdMenuStages;  // REV R4M: 1 - the dev menu opens at STAGE SELECT (the pause menu's EXIT)
 +#define SCD_MENU_NOTE 40
 +extern char scdMenuNote[2][SCD_MENU_NOTE]; // two lines the dev menu shows: why the platform came back to it
 +int plat_cart_test(); // REV R4E: the 8 / 16 MB cart's pages tried, the result in scdMenuNote - REV R4G: the size if they work (16, 8, 0)
