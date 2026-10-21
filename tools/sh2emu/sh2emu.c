@@ -2198,8 +2198,7 @@ static void sub_finish(void)
         cmd != 58 && cmd != 59) {
         printf("[f%5d] SUB: CMD %d ends the floor first: %llu floor frames, %llu colour commands\n", frame_no(), cmd,
                (unsigned long long)flr_frames, (unsigned long long)flr_colours);
-        if (flr_title)
-            sgb_on = 0; /* REV R5F */
+        sgb_on = 0; /* REV R5F / R5G */
         flr_on = 0;
     }
     if (cmd == 38) {
@@ -2516,11 +2515,13 @@ static void sub_finish(void)
                 sprintf(nm, "FLOOR%d.BIN", hi);
                 k = find_file(nm);
             }
-            if (k >= 0 && files[k].len == (hi == 9 ? 0x44000u : 0x40000u) && !memcmp(files[k].data, "FLR1", 4) &&
-                rd_be16(files[k].data + 4) <= 0x10000 / 128 &&
-                (hi != 9 || (!memcmp(files[k].data + 0x40000, "TTL2", 4) && rd_be16(files[k].data + 0x40004) == 104)))
+            if (k >= 0 && !memcmp(files[k].data, "FLR1", 4) && rd_be16(files[k].data + 4) <= 0x10000 / 128 &&
+                (hi == 9 ? files[k].len == 0x44000u && !memcmp(files[k].data + 0x40000, "TTL2", 4) &&
+                               rd_be16(files[k].data + 0x40004) == 104
+                         : (files[k].len == 0x48000u || files[k].len == 0x48000u + 16 * 7680) &&
+                               !memcmp(files[k].data + 0x40000, "SKY2", 4))) /* REV R5G: the sky's part */
                 ok = 1;
-            if (ok && hi == 9) { /* REV R5F: the title - the SH2's records on (cd32x/sub_main.c floor_begin) */
+            if (ok) { /* REV R5F: the title (R5G: and the special stages) - the SH2's records on (sub_main.c floor_begin) */
                 sgb_on = 1;
                 sgb_ready = sgb_bad = 0;
                 sgb_last = 0;
@@ -2542,19 +2543,22 @@ static void sub_finish(void)
         }
         else if (op == 6) {
             u32 v = 0;
-            if (flr_on && hi >= 1 && hi <= 15)
-                v = rd_be16(files[flr_file].data + 8 + 2 * (hi - 1));
-            else if (flr_on && hi >= 17 && hi <= 47 && hi != 32 && files[flr_file].len > 0x40000) /* REV R5F: the */
+            /* REV R5G: COMM2 high byte = the CRAM slot: the floor's colours the title's 1-15, a special stage's 49-63 */
+            if (flr_on && (flr_title ? hi >= 1 && hi <= 15 : hi >= 49 && hi <= 63))
+                v = rd_be16(files[flr_file].data + 8 + 2 * ((hi & 15) - 1));
+            else if (flr_on && flr_title && hi >= 17 && hi <= 47 && hi != 32) /* REV R5F: the */
                 v = rd_be16(files[flr_file].data + 0x40000 + (hi < 32 ? 42 + 2 * (hi - 17) : 12 + 2 * (hi - 33)));
                 /* title's line 1 (the mountains, the water), line 2 (the planet) */
+            else if (flr_on && !flr_title && hi >= 1 && hi <= 47 && (hi & 15)) /* REV R5G: the sky's lines 0-2 */
+                v = rd_be16(files[flr_file].data + 0x40000 + 64 + 2 * hi);
             set_comm32(8, v);
         }
         else if (op == 7) {
             if (flr_on)
                 printf("[f%5d] SUB: CMD 80 floor end: %llu floor frames, %llu colour commands\n", frame_no(),
                        (unsigned long long)flr_frames, (unsigned long long)flr_colours);
-            if (flr_on && flr_title)
-                sgb_on = 0; /* REV R5F */
+            if (flr_on)
+                sgb_on = 0; /* REV R5F / R5G */
             flr_on = 0;
         }
         SET_COMM(0, 0);

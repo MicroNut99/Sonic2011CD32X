@@ -214,8 +214,10 @@ static union {
     struct {
         int lines[SCREEN_YSIZE];      /* a tile layer's x per line (DrawHLineScrollLayer's own) */
         DrawListEntry3D list[0xA0];   /* the 3D scene's faces, sorted */
-        unsigned short fIdx[48], fGen[48], fSent[48]; /* REV R5E: the chip's picture's colours (R5: the floor's 16;
-                                                         R5F: the title's lines 0-2) */
+        unsigned short fIdx[64], fGen[64], fSent[64]; /* REV R5E: the Genesis's colours, CRAM 0-63 (R5: the floor's 16;
+                                                         R5F: the title's lines 0-2; R5G: the special stages' all 4) */
+        short sRA, sRB, sVA, sVB, sStage; /* REV R5G: the special stage's sky - h-scroll runs (planes A, B) this picture,
+                                             v-scroll, the stage (1-8) */
         short tStrip[14], tPY, tPYSent; /* REV R5F: the title's water strips' x (lines 168-223), the planet's y */
         int tV32;                       /* REV R5E: the clouds' scroll */
     } pm;
@@ -233,6 +235,18 @@ static union {
 #define ttlPY scdShared.pm.tPY
 #define ttlPYSent scdShared.pm.tPYSent
 #define ttlV32 scdShared.pm.tV32
+#define skyRA scdShared.pm.sRA
+#define skyRB scdShared.pm.sRB
+#define skyVA scdShared.pm.sVA
+#define skyVB scdShared.pm.sVB
+#define skyStage scdShared.pm.sStage
+/* REV R5G: the special stage's sky's h-scroll runs ({lines, value} pairs), built while the picture is drawn, and the
+   frame buffer's first words kept while the record is there - in this buffer's pool area's unused end (the special
+   stages' layouts use 24 KB of it at most: stages_report.md) */
+#define SKY_RUNS_A ((volatile unsigned short *)(0x24000000 + 0x1F000))
+#define SKY_RUNS_B ((volatile unsigned short *)(0x24000000 + 0x1F400))
+#define SKY_SAVE ((volatile unsigned short *)(0x24000000 + 0x1D800))
+#define SKY_POOL_MAX (0x1D800 - PM_FB_POOL)
 static unsigned short cramSent[64];
 static unsigned short recId = 0;
 /* REV R4D: the UNDERWATER switch (scdWaterSwitch) - the records' water trailer (md/sgb.h): the water colours the 68000
@@ -1082,6 +1096,7 @@ static bool floorHW = false; /* REV R5: the special stage's floor on the Sega CD
 static bool flrTitle = false;           /* REV R5E: ... the title's clouds instead (FLOOR9.BIN) */
 static unsigned int ttlSky = 0x000060u; /* REV R5E: the title's sky (its full-screen rectangle): the Genesis backdrop */
 static bool title_hw_frame(int v32);    /* REV R5E (below) */
+static void sky_hw_record();            /* REV R5G (below) */
 /* REV R5B: the floor's first row (0 - 100 from line 124) that lies inside the floor's map from its first pixel to its
    last - from there on, the chip's floor. The rows above it (the far ones, at the horizon) reach past the map's edge,
    where the engine's floor is see-through and shows the sky behind it: those rows the SH2 still draws itself, over the
@@ -1266,6 +1281,28 @@ void scd_pm_draw3dscene(int sheetID)
         ttlV32 = (-matWorld.values[3][2]) & 2047; /* (REV R5F: sent with the picture - pm_present, title_hw_frame) */
         return;
     }
+    if (floorHW && skyStage == 1) { /* REV R5G: special stage 1's swirl - plane B, sheared a line at a time (its quads' left
+                                       edges: vertex 0 at line 0, vertex 2 at line 128), its picture from the u, v */
+        PM_FLUSH();
+        if (pmSkip)
+            return;
+        const int x0 = vertexBuffer[0].x, x2 = vertexBuffer[2].x;
+        int n = 0;
+        for (int y = 0; y < 120; ++y) {
+            const unsigned short v = (unsigned short)((x0 + (x2 - x0) * y / 128) & 0x3FF);
+            if (n && SKY_RUNS_B[2 * n - 1] == v)
+                SKY_RUNS_B[2 * n - 2]++;
+            else
+                SKY_RUNS_B[2 * n] = 1, SKY_RUNS_B[2 * n + 1] = v, ++n;
+        }
+        SKY_RUNS_B[2 * n] = (unsigned short)(SCREEN_YSIZE - 120), SKY_RUNS_B[2 * n + 1] = 0, ++n;
+        skyRB = (short)n, skyVB = 0;
+        comm_idle();
+        SC_COMM2    = 8;
+        SC_COMM8_32 = (unsigned int)(((vertexBuffer[0].u >> 7) & 3) | ((vertexBuffer[0].v >> 5) & 12));
+        sd_cmd(80);
+        return;
+    }
     pm_draw3dscene(sheetID);
 }
 /* REV R5: THE SPECIAL STAGES' FLOOR ON THE SEGA CD'S GRAPHICS CHIP - as the 1993 game: the Sub-CPU's command 80
@@ -1278,6 +1315,7 @@ static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE;
 static int sd_cmd_long(unsigned short cmd) SCD_HOT_NOINLINE;
 static int flrYSent; /* REV R5B: the height the Sub-CPU has */
 static bool name_is(const char *a, const char *b); /* (below) */
+static unsigned int pm_pool_used(); /* (below) */
 static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
 {
     floorHW  = false;
@@ -1293,18 +1331,19 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
         stage = 9; /* REV R5E: the title - its clouds */
     if (!stage)
         return;
+    if (stage != 9 && pm_pool_used() > SKY_POOL_MAX)
+        return; /* REV R5G: (not the case for any of the 8: the sky's runs would not fit) the SH2 draws it all */
     comm_idle();
-    if (stage == 9)
-        SC_COMM4 = 0; /* REV R5F: the title's records - COMM4 may still hold the start-up check's 0x1234: the 68000 would
-                         take it for a record's id the moment the Sub-CPU turns records on (as the acts' planes: R1S) */
+    SC_COMM4 = 0; /* REV R5F: the records (R5G: the special stages' too) - COMM4 may still hold the start-up check's
+                     0x1234: the 68000 would take it for a record's id the moment the Sub-CPU turns records on (R1S) */
     SC_COMM2  = (unsigned short)(stage << 8 | 0);
     SC_COMM12 = 0xFFFF;
     sd_cmd_long(80);
     if (SC_COMM12 != 1)
         return;
-    for (int k = 0; k < 48; ++k) {
+    for (int k = 0; k < 64; ++k) {
         flrIdx[k] = 0;
-        if ((k >= 1 && k < 16) || (stage == 9 && (k & 15))) { /* (R5F, the title: lines 1 and 2 too) */
+        if ((k & 15) && (stage != 9 || k < 48)) { /* (R5G: COMM2 high byte = the CRAM slot) */
             SC_COMM2  = (unsigned short)(k << 8 | 6);
             flrIdx[k] = sd_cmd(80) < 0 ? 0 : (unsigned short)(SC_COMM8_32 & 0xFF);
         }
@@ -1313,6 +1352,7 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
     }
     flrTitle = stage == 9;
     flrYSent = (int)0x80000000; /* (none sent yet) */
+    skyStage = (short)stage, skyRA = skyRB = 0, skyVA = skyVB = 0;
     if (flrTitle) {             /* REV R5F: the water at rest, the planet at its start; the 68000 gets them first time */
         for (int k = 0; k < 14; ++k) ttlStrip[k] = 0;
         ttlPY = -16, ttlPYSent = 0x7FFF, ttlV32 = 0;
@@ -1340,17 +1380,7 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
     if (!layer->xsize || !layer->ysize)
         return true;
-    comm_idle();
-    for (int k = 1; k < 16; k += 2) /* the colours that changed (pm_colours: flrGen), two a command */
-        if (flrGen[k] != flrSent[k] || (k < 15 && flrGen[k + 1] != flrSent[k + 1])) {
-            SC_COMM2    = (unsigned short)(k << 8 | 5);
-            SC_COMM8_32 = (unsigned int)flrGen[k] << 16 | (k < 15 ? flrGen[k + 1] : 0);
-            if (sd_cmd(80) == 0) {
-                flrSent[k] = flrGen[k];
-                if (k < 15)
-                    flrSent[k + 1] = flrGen[k + 1];
-            }
-        }
+    comm_idle(); /* (REV R5G: the colours go in the picture's record - sky_hw_record) */
     /* REV R5B: X and Z in one command (13.3 each: the chip's own precision), the height only when it changed */
     int fx = layer->XPos >> 13, fz = layer->ZPos >> 13;
     fx = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
@@ -1372,13 +1402,13 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
         genesisOff = false;
         return false;
     }
-    /* the floor's rows (124-223, pm_sky_part's) colour 0 in the SH2's buffer (the frame buffer itself: the overwrite
-       image skips 0) */
+    /* the whole picture colour 0 in the SH2's buffer (the frame buffer itself: the overwrite image skips 0) - REV R5G:
+       the sky is the Genesis's planes now, the floor its window; the SH2 draws what is in front */
     const int row0 = (PM_LINES / 2) + 12 + flr_first_row(layer); /* REV R5B: the rows the chip draws */
+    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
+    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; i += 4) p[i] = p[i + 1] = p[i + 2] = p[i + 3] = 0;
     if (row0 > (PM_LINES / 2) + 12)
         pm_sky_rows(layerID, row0); /* REV R5B: the rows past the map's edge, as before (after the colours: no pmSkip) */
-    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS + PM_STRIDE * row0);
-    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * (PM_LINES - row0)) / 4; ++i) p[i] = 0;
     return true;
 }
 /* REV R5E: THE TITLE'S CLOUDS ON THE CHIP - each picture the scroll (the clouds object's Draw3DScene: its world
@@ -1455,6 +1485,58 @@ static bool title_hw_frame(int v32)
     ttlPYSent = ttlPY;
     return true;
 }
+/* REV R5G: the special stage's picture's record to the 68000 (as the title's, title_hw_frame): planes A and B's v-scroll
+   and h-scroll (the runs the sky layers left - pm_layer_end; the swirl's - scd_pm_draw3dscene), the colours that
+   changed (CRAM 0-63: the sky's lines 0-2, the floor's line 3). The words it covers at the frame buffer's start are kept
+   (SKY_SAVE) and written back after. The 68000 does not take it: the SH2 draws it all again */
+static void sky_hw_record()
+{
+    volatile unsigned short *w = SC_FB;
+    const int ra = skyRA > 0 ? skyRA : 1, rb = skyRB > 0 ? skyRB : 1;
+    const int len = 6 + 2 * ra + 2 * rb + 1 + 2 * 64; /* (at most) */
+    for (int i = 0; i < len; ++i) SKY_SAVE[i] = w[i];
+    int n = 1;
+    w[n++] = 0; /* no name-table groups */
+    w[n++] = (unsigned short)skyVA;
+    w[n++] = (unsigned short)skyVB;
+    w[n++] = (unsigned short)ra;
+    if (skyRA > 0)
+        for (int i = 0; i < 2 * skyRA; ++i) w[n++] = SKY_RUNS_A[i];
+    else
+        w[n++] = SCREEN_YSIZE, w[n++] = 0;
+    w[n++] = (unsigned short)rb;
+    if (skyRB > 0)
+        for (int i = 0; i < 2 * skyRB; ++i) w[n++] = SKY_RUNS_B[i];
+    else
+        w[n++] = SCREEN_YSIZE, w[n++] = 0;
+    int at = n++, c = 0;
+    for (int k = 0; k < 64; ++k)
+        if (flrGen[k] != flrSent[k]) {
+            w[n++] = (unsigned short)k;
+            w[n++] = flrGen[k];
+            c++;
+        }
+    w[at] = (unsigned short)c;
+    w[0]  = (unsigned short)(n - 1);
+    recId = (unsigned short)(recId + 1);
+    if (!recId)
+        recId = 1;
+    sgb_give_fb();
+    SC_COMM4       = recId;
+    unsigned int t = 0;
+    for (; t < 400000u; ++t) { /* the same answer twice: a read during the 68000's write is undefined */
+        if (SC_COMM6 == recId && SC_COMM6 == recId)
+            break;
+        sgb_pause();
+    }
+    sgb_take_fb();
+    for (int i = 0; i < len; ++i) w[i] = SKY_SAVE[i];
+    if (t >= 400000u) {
+        floor_hw_end();
+        return;
+    }
+    for (int k = 0; k < 64; ++k) flrSent[k] = flrGen[k];
+}
 void scd_pm_sky(int layerID)
 {
     pmDrew = true;
@@ -1479,11 +1561,39 @@ void scd_pm_stage_new()
     aniDirtyAny = false;
 }
 static void pm_layer_end(int slot) __attribute__((noinline)); /* cart code (plat_layer_end) */
+/* REV R5G: a run list ({lines, value} pairs) of the h-scroll the Genesis needs to show a layer with these x per line */
+static int sky_runs(volatile unsigned short *r, const int *lines)
+{
+    int n = 0;
+    for (int y = 0; y < SCREEN_YSIZE;) {
+        const unsigned short v = (unsigned short)(-lines[y] & 0x3FF);
+        int k = y + 1;
+        while (k < SCREEN_YSIZE && (unsigned short)(-lines[k] & 0x3FF) == v) ++k;
+        r[2 * n] = (unsigned short)(k - y), r[2 * n + 1] = v, ++n;
+        y = k;
+    }
+    return n;
+}
 static void pm_layer_end(int slot)
 {
     if (slot >= 0 && slot < 4) {
         pmDrew = true;
         pad_service(); /* REV R4D */
+        if (floorHW && !flrTitle && !pmSkip) { /* REV R5G: the special stage's sky layers are the Genesis's planes */
+            const int L = activeTileLayers[slot];
+            if (L == 2) { /* layer 2: plane A */
+                skyRA = (short)sky_runs(SKY_RUNS_A, pmLines);
+                skyVA = (short)pmTileY[slot];
+                return;
+            }
+            if (L == 1) { /* layer 1: plane B (special stage 1: the swirl covers it - its own runs) */
+                if (skyStage != 1) {
+                    skyRB = (short)sky_runs(SKY_RUNS_B, pmLines);
+                    skyVB = (short)pmTileY[slot];
+                }
+                return;
+            }
+        }
         pm_hline(slot, pmTileY[slot], pmLines);
     }
 }
@@ -1607,7 +1717,8 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
         cram[0] = 0x0000;
         /* REV R5D: the floor's lines' palette (the title: line 0's) */
         const unsigned short *fpal = flrTitle ? pal : fullPalette[gfxLineBuffer[(SCREEN_YSIZE / 2) + 12]];
-        const int n = flrTitle ? 48 : 16;
+        const int n = flrTitle ? 48 : 64; /* (REV R5G: CRAM 0-63 - the sky's lines 0-2 from line 0's palette, the floor's
+                                             line 3 from its own lines') */
         for (int k = 0; k < n; ++k) {
             unsigned int c;
             if (!(k & 15)) { /* (the title: CRAM 0 the sky - its rectangle's colour; 16, 32 unused) */
@@ -1618,7 +1729,7 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
                 c = ((ttlSky >> 19) & 31) << 11 | ((ttlSky >> 10) & 63) << 5 | ((ttlSky >> 3) & 31);
             }
             else
-                c = fpal[flrIdx[k]];
+                c = (flrTitle || k >= 48 ? fpal : pal)[flrIdx[k]];
             int r = (int)(c >> 11), g = (int)((c >> 6) & 31), b = (int)(c & 31);
             if (a > 0) {
                 r = (ia * r >> 8) + (a * fr >> 8);
@@ -1650,6 +1761,8 @@ static void pm_present()
             pm_mirror(PM_FB_POOL, pm_pool_used());
         if (floorHW && flrTitle)
             title_hw_frame(ttlV32); /* REV R5F: the Genesis's part of the title's picture, for this vertical blank */
+        else if (floorHW)
+            sky_hw_record(); /* REV R5G: the special stage's sky's scroll and the colours, for this vertical blank */
         flip_wait(); /* the frame is shown from this vertical blank */
         pm_colours();
         if (!pmShown) {
