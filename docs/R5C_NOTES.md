@@ -110,3 +110,65 @@ two frames while the line is drawn.
 
 ares runs the SH2s faster than the console does. In ares, R4N and R5C both show about 10 pictures a second, so ares
 can show whether the picture is right but cannot measure the speed-up.
+
+## Build (from the R4L, R4M or R4N build)
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+unzip -o R5C_files.zip && md5sum -c --quiet R5C_md5.txt && echo "R5C_md5: all OK"
+rm -rf engine && sh tools/setup_engine.sh && sh tools/check_patch.sh
+make -C host clean && make -C host
+rm -rf game_data
+python3 tools/build_audio.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data
+sh tools/build_native.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk
+rm -rf cd32x/build_engine && make -C cd32x ENGINE=1 START="0 0" build_engine/engine.bin
+python3 tools/build_game_data.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data --scenes "0:*,1:*,1:*@1,3:*,3:*@1" --start 0:0 --native cd32x/build_engine
+sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data "1:*,1:*@1"
+python3 tools/build_floor.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data
+python3 tools/build_preload.py game_data cd32x/build_engine/engine.bin
+mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW game_data/FLOOR*.BIN cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
+make -C cd32x ENGINE=1 START="0 0" ROUND=R5C
+md5sum -c --quiet R5C_expected.txt && echo "R5C_expected: all 348 OK"
+grep -ac "BUILD: SONIC CD R5C GAME START" cd32x/build_engine/disc/APP.BIN
+grep -ac "SH2-VR4I" cd32x/build_engine/disc/APP.BIN
+ls cd32x/build_engine/disc/FLOOR*.BIN | wc -l
+```
+
+The last line must print 8: the floor files are on the disc. `build_floor.py` prints one line for each special stage,
+`FLOOR1.BIN: SS1 312 stamps, 15 colours, 1 merged` and so on.
+
+## sh2emu before burning
+
+```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+gcc -O2 -o /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu.c
+rm -f /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 9000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -cart 16 -cartkeep /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin -shot 2000 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c1_menu.bmp -shot 8800 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c1_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c1.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c1.txt
+grep -c "CMD 38 open" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c1.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 9000 -pad "1400:S,1410:-,2300:A,2310:-,2650:A,2660:-,3300:A,3310:-,3600:A,3610:-" -cart 16 -cartkeep /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_cart16.bin -shot 2000 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c2_menu.bmp -shot 8800 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c2_ppz1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c2.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c2.txt
+grep -c "CMD 38 open" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c2.txt
+/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/tools/sh2emu/sh2emu /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine -f 4800 -pad "1400:ABCS,1410:-,1550:D,1560:-,1600:A,1610:-,1700:D,1710:-,1760:A,1770:-,1860:A,1870:-" -cart 16 -shot 4700 /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/shot_c3_ss1.bmp > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c3.txt
+sed -n '/= SUMMARY =/,/^VERDICT/p' /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c3.txt
+grep "CMD 80 floor begin" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/sh2emu_log_c3.txt
+```
+
+All three runs must end `VERDICT no problems found`.
+- **The first two greps:** print **18**, then **2**, as for R4L to R4N.
+- **The third run:** STAGE SELECT → SPECIAL → special stage 1. Its last line reads `CMD 80 floor begin, special stage 1 ->
+  ok`, and its summary's `pictures` line reads about 10 a second in its last 10 s.
+- **`shot_c3_ss1.bmp`:** sh2emu does not draw the chip's picture, so the floor is black there. The sky, Sonic and the HUD
+  are the SH2's and show.
+
+## What to expect on the console
+
+- **Special stages:** the floor rotates and moves as before, now drawn by the Sega CD and shown on the Genesis. The SH2
+  draws the sky, Sonic, the UFOs and the HUD on top. The floor is full height, every line its own, and the game runs
+  faster there.
+- **If the floor stays black** while the rest runs, the chip's floor is not reaching the screen. Line 10 and a photo
+  tell me where.
+- **The stage list menu:** PRESENTATION, REGULAR, SPECIAL.
+- **An act's start that loads:** the loading picture shows **LOADING NEXT LEVEL INTO CART** under the bar. The bar now
+  includes the next special stage, so these loads take longer.
+- **The giant ring:** the special stage starts without the loading picture when it was preloaded.
