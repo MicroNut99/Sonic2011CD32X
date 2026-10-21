@@ -214,6 +214,7 @@ static union {
     struct {
         int lines[SCREEN_YSIZE];      /* a tile layer's x per line (DrawHLineScrollLayer's own) */
         DrawListEntry3D list[0xA0];   /* the 3D scene's faces, sorted */
+        unsigned short fIdx[32], fGen[32], fSent[32]; /* REV R5E: the chip's picture's colours (R5: the floor's 16) */
     } pm;
 } scdShared;
 #define xA scdShared.pl.xA
@@ -222,6 +223,9 @@ static union {
 #define hsB scdShared.pl.hsB
 #define pmLines scdShared.pm.lines
 #define pmList scdShared.pm.list
+#define flrIdx scdShared.pm.fIdx
+#define flrGen scdShared.pm.fGen
+#define flrSent scdShared.pm.fSent
 static unsigned short cramSent[64];
 static unsigned short recId = 0;
 /* REV R4D: the UNDERWATER switch (scdWaterSwitch) - the records' water trailer (md/sgb.h): the water colours the 68000
@@ -1068,6 +1072,9 @@ static inline int pm_div(int a, int b)
 #define PM_BE16(p) (*(const unsigned short *)(p)) /* (big-endian: one read) */
 #define PM_SKY_ROWS2 1 /* the special stages' floor: every other line sampled, shown twice (half its cost) */
 static bool floorHW = false; /* REV R5: the special stage's floor on the Sega CD's graphics chip (below) */
+static bool flrTitle = false;           /* REV R5E: ... the title's clouds instead (FLOOR9.BIN) */
+static unsigned int ttlSky = 0x000060u; /* REV R5E: the title's sky (its full-screen rectangle): the Genesis backdrop */
+static bool title_hw_frame(int v32);    /* REV R5E (below) */
 /* REV R5B: the floor's first row (0 - 100 from line 124) that lies inside the floor's map from its first pixel to its
    last - from there on, the chip's floor. The rows above it (the far ones, at the horizon) reach past the map's edge,
    where the engine's floor is see-through and shows the sky behind it: those rows the SH2 still draws itself, over the
@@ -1179,6 +1186,8 @@ void scd_pm_sprite(int XPos, int YPos, int width, int height, int sprX, int sprY
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
+    if (floorHW && flrTitle && sprX == 257 && sprY == 146 && width == 120 && height == 104)
+        return; /* REV R5E: the title's planet - on the Genesis plane behind the clouds (FLOOR9.BIN) */
     pm_sprite(XPos, YPos, width, height, sprX, sprY, direction, sheetID, alpha);
 }
 void scd_pm_sprite_scaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX,
@@ -1199,6 +1208,17 @@ void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B,
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
+    if (floorHW && flrTitle && XPos <= 0 && YPos <= 0 && XPos + width >= SCREEN_XSIZE && YPos + height >= SCREEN_YSIZE && A >= 0xFF) {
+        /* REV R5E: the title's sky - the Genesis backdrop shows it (behind the chip's clouds and the planet); the 32X
+           picture colour 0 (see-through) where the rectangle was */
+        ttlSky = (unsigned int)(R & 0xFF) << 16 | (unsigned int)(G & 0xFF) << 8 | (unsigned int)(B & 0xFF);
+        PM_FLUSH();
+        if (pmSkip)
+            return;
+        volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
+        for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; ++i) p[i] = 0;
+        return;
+    }
     pm_rect(XPos, YPos, width, height, R, G, B, A);
 }
 void scd_pm_face(void *v, unsigned int colour)
@@ -1217,6 +1237,14 @@ void scd_pm_draw3dscene(int sheetID)
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
+    if (floorHW && flrTitle) { /* REV R5E: the title's clouds - the chip's (matFinal as the engine leaves it) */
+        for (int y = 0; y < 4; ++y)
+            for (int x = 0; x < 4; ++x) matFinal.values[y][x] = matWorld.values[y][x];
+        MatrixMultiply(&matFinal, &matView);
+        PM_FLUSH();
+        if (pmSkip || title_hw_frame((-matWorld.values[3][2]) & 2047))
+            return;
+    }
     pm_draw3dscene(sheetID);
 }
 /* REV R5: THE SPECIAL STAGES' FLOOR ON THE SEGA CD'S GRAPHICS CHIP - as the 1993 game: the Sub-CPU's command 80
@@ -1227,27 +1255,39 @@ void scd_pm_draw3dscene(int sheetID)
    they change. No floor file, or no answer: the SH2 draws the floor itself, as before. */
 static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE;
 static int sd_cmd_long(unsigned short cmd) SCD_HOT_NOINLINE;
-static unsigned short flrIdx[16], flrGen[16], flrSent[16];
 static int flrYSent; /* REV R5B: the height the Sub-CPU has */
+static bool name_is(const char *a, const char *b); /* (below) */
 static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
 {
-    floorHW = false;
-    if (activeStageList != STAGELIST_SPECIAL || stageListPosition < 0 || stageListPosition >= stageListCount[STAGELIST_SPECIAL])
-        return;
-    const char *f = stageList[STAGELIST_SPECIAL][stageListPosition].folder; /* "SS1" - "SS8" */
-    if ((f[0] != 'S' && f[0] != 's') || (f[1] != 'S' && f[1] != 's') || f[2] < '1' || f[2] > '8' || f[3])
+    floorHW  = false;
+    flrTitle = false;
+    int stage = 0;
+    if (activeStageList == STAGELIST_SPECIAL && stageListPosition >= 0 && stageListPosition < stageListCount[STAGELIST_SPECIAL]) {
+        const char *f = stageList[STAGELIST_SPECIAL][stageListPosition].folder; /* "SS1" - "SS8" */
+        if ((f[0] == 'S' || f[0] == 's') && (f[1] == 'S' || f[1] == 's') && f[2] >= '1' && f[2] <= '8' && !f[3])
+            stage = f[2] - '0';
+    }
+    else if (activeStageList == STAGELIST_PRESENTATION && stageListPosition == 0 && stageListCount[STAGELIST_PRESENTATION] > 0 &&
+             name_is(stageList[STAGELIST_PRESENTATION][0].folder, "Title"))
+        stage = 9; /* REV R5E: the title - its clouds */
+    if (!stage)
         return;
     comm_idle();
-    SC_COMM2  = (unsigned short)((f[2] - '0') << 8 | 0);
+    SC_COMM2  = (unsigned short)(stage << 8 | 0);
     SC_COMM12 = 0xFFFF;
     sd_cmd_long(80);
     if (SC_COMM12 != 1)
         return;
-    for (int k = 1; k < 16; ++k) {
-        SC_COMM2 = (unsigned short)(k << 8 | 6);
-        flrIdx[k] = sd_cmd(80) < 0 ? 0 : (unsigned short)(SC_COMM8_32 & 0xFF);
+    for (int k = 0; k < 32; ++k) {
+        flrIdx[k] = 0;
+        if ((k >= 1 && k < 16) || (stage == 9 && k >= 17)) { /* (the title: the planet's colours 17-31 too) */
+            SC_COMM2  = (unsigned short)(k << 8 | 6);
+            flrIdx[k] = sd_cmd(80) < 0 ? 0 : (unsigned short)(SC_COMM8_32 & 0xFF);
+        }
+        flrGen[k]  = 0;
         flrSent[k] = 0xFFFF;
     }
+    flrTitle = stage == 9;
     flrYSent = (int)0x80000000; /* (none sent yet) */
     floorHW    = true;
     genesisOff = false; /* (the Sub-CPU switched the Genesis display on) */
@@ -1260,6 +1300,7 @@ static void floor_hw_end() /* (pm_end) */
     SC_COMM2 = 7;
     sd_cmd_long(80);
     floorHW    = false;
+    flrTitle   = false;
     genesisOff = false; /* (R5B: the Sub-CPU's set-up after it - command 68's off - leaves the display on, blank) */
 }
 static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values to the Sub-CPU, its rows see-through;
@@ -1310,6 +1351,33 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
         pm_sky_rows(layerID, row0); /* REV R5B: the rows past the map's edge, as before (after the colours: no pmSkip) */
     volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS + PM_STRIDE * row0);
     for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * (PM_LINES - row0)) / 4; ++i) p[i] = 0;
+    return true;
+}
+/* REV R5E: THE TITLE'S CLOUDS ON THE CHIP - each picture: the colours that changed (CRAM 0-31: the sky, the clouds' line
+   0, the planet's line 1), the scroll (the clouds object's Draw3DScene: its world translation's z is -scroll), then the
+   chip draws. false: the Sub-CPU ended it - the SH2 draws the clouds itself */
+static bool title_hw_frame(int v32)
+{
+    comm_idle();
+    for (int k = 0; k < 32; k += 2)
+        if (flrGen[k] != flrSent[k] || flrGen[k + 1] != flrSent[k + 1]) {
+            SC_COMM2    = (unsigned short)(k << 8 | 5);
+            SC_COMM8_32 = (unsigned int)flrGen[k] << 16 | flrGen[k + 1];
+            if (sd_cmd(80) == 0)
+                flrSent[k] = flrGen[k], flrSent[k + 1] = flrGen[k + 1];
+        }
+    SC_COMM2    = 1;
+    SC_COMM8_32 = (unsigned int)v32;
+    sd_cmd(80);
+    SC_COMM2    = 4;
+    SC_COMM8_32 = 0;
+    SC_COMM12   = 0xFFFF;
+    if (sd_cmd(80) == 0 && SC_COMM12 == 0) {
+        floorHW    = false;
+        flrTitle   = false;
+        genesisOff = false;
+        return false;
+    }
     return true;
 }
 void scd_pm_sky(int layerID)
@@ -1462,9 +1530,20 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
     }
     if (floorHW) { /* REV R5: colour 0 see-through (the Genesis floor shows); the floor's colours for the Genesis */
         cram[0] = 0x0000;
-        const unsigned short *fpal = fullPalette[gfxLineBuffer[(SCREEN_YSIZE / 2) + 12]]; /* REV R5D: the floor's lines' */
-        for (int k = 1; k < 16; ++k) {
-            unsigned int c = fpal[flrIdx[k]];
+        /* REV R5D: the floor's lines' palette (the title: line 0's) */
+        const unsigned short *fpal = flrTitle ? pal : fullPalette[gfxLineBuffer[(SCREEN_YSIZE / 2) + 12]];
+        const int n = flrTitle ? 32 : 16;
+        for (int k = 0; k < n; ++k) {
+            unsigned int c;
+            if (k == 0 || k == 16) { /* (the title: CRAM 0 the sky - its rectangle's colour; 16 unused) */
+                if (!flrTitle || k == 16) {
+                    flrGen[k] = 0;
+                    continue;
+                }
+                c = ((ttlSky >> 19) & 31) << 11 | ((ttlSky >> 10) & 63) << 5 | ((ttlSky >> 3) & 31);
+            }
+            else
+                c = fpal[flrIdx[k]];
             int r = (int)(c >> 11), g = (int)((c >> 6) & 31), b = (int)(c & 31);
             if (a > 0) {
                 r = (ia * r >> 8) + (a * fr >> 8);

@@ -131,6 +131,77 @@ def floor_file(data, folder, act_name):
     return bytes(img), len(stamps), colours, merged
 
 
+def stamp_bytes(p):
+    """16 x 16 nibbles (rows of 16) -> the chip's 128-byte stamp: the left column of cells, then the right"""
+    b = bytearray(128)
+    for cx in range(2):
+        for y in range(16):
+            for x in range(8):
+                v = p[y][cx * 8 + x]
+                b[cx * 64 + y * 4 + (x >> 1)] |= v << 4 if (x & 1) == 0 else v
+    return bytes(b)
+
+
+def title_file(data):
+    """REV R5E: FLOOR9.BIN - the title's cloud ceiling for the chip (its Draw3DScene: Title/Clouds.gif on a 16 x 10 grid
+    of squares 1024 x 512 world units, 64 x 64 texels each, x -8192 .. 8192, z 0 .. 5120, at y 720 below the camera's
+    ... the world translated by (-512, 720, -scroll), turned 8 / 512 about X; projection 136 / 160, centre 160, 112).
+    The map is 4096 x 4096: the texture (256 x 256) repeated over the grid's own extent - u 0 .. 1023, v 0 .. 639 - and
+    nothing outside it, so past the grid's far edge the chip draws nothing (the sky shows). Each of lines 0-111: the
+    texel at its first pixel (u 13.3), its step a pixel (5.11) and its v for scroll 0 (13.3 - the scroll adds itself:
+    v = (z + scroll) / 8). Then the planet (Title.gif 257, 146, 120 x 104) as Genesis cells, colours line 1."""
+    gw, gh, pal, pix = rp.gif_decode(data.read('Data/Sprites/Title/Clouds.gif'))
+    colours = sorted(set(pix) - {0})
+    assert len(colours) <= 15, colours
+    nib = {c: k + 1 for k, c in enumerate(colours)}
+    nib[0] = 0
+    stamps, stamp_of = [bytes(128)], {}
+    for sy in range(16):
+        for sx in range(16):
+            p = [[nib[pix[(sy * 16 + y) * gw + sx * 16 + x]] for x in range(16)] for y in range(16)]
+            if not any(any(r) for r in p):
+                stamp_of[(sx, sy)] = 0
+                continue
+            stamp_of[(sx, sy)] = len(stamps)
+            stamps.append(stamp_bytes(p))
+    img = bytearray(0x40000)
+    head = b'FLR1' + struct.pack('>HH', len(stamps), len(colours))
+    head += b''.join(struct.pack('>H', c) for c in colours) + b'\0\0' * (15 - len(colours))
+    head += struct.pack('>H', 0)
+    img[0:len(head)] = head
+    for k in range(1, len(stamps)):
+        img[k * 128:k * 128 + 128] = stamps[k]
+    for row in range(40):                      # v 0 .. 639
+        for col in range(64):                  # u 0 .. 1023
+            struct.pack_into('>H', img, 0x20000 + 2 * ((row << 8) + col), stamp_of[(col & 15, row & 15)])
+    # the lines (the engine's matrix values: 720 * 254 >> 8 = 714, 720 * 25 >> 8 = 70; sin, cos of 8: 25, 254)
+    ext = bytearray(0x2000)
+    tw, th, tpal, tpix = rp.gif_decode(data.read('Data/Sprites/Title/Title.gif'))
+    planet = [[tpix[(146 + y) * tw + 257 + x] for x in range(120)] for y in range(104)]
+    pcol = sorted(set(c for r in planet for c in r) - {0})
+    assert len(pcol) <= 15, pcol
+    pn = {c: k + 1 for k, c in enumerate(pcol)}
+    pn[0] = 0
+    struct.pack_into('>4sHHH', ext, 0, b'TTL1', 112, 15, 13)
+    for k, c in enumerate(pcol):
+        struct.pack_into('>H', ext, 10 + 2 * k, c)
+    for sy in range(112):
+        a = 112 - sy
+        D = 256.0 * (160 * 714 - 70 * a) / (254 * a + 160 * 25)
+        zc = 70 + 254 * D / 256
+        u0 = (512 + (0 - 160) * zc / 136 + 8192) / 16
+        du = zc / (136 * 16)
+        assert 0 <= u0 * 8 < 32768 and du * 2048 < 32768 and D < 32768, (sy, u0, du, D)
+        struct.pack_into('>hhh', ext, 0x40 + 6 * sy, int(round(u0 * 8)), int(round(du * 2048)), int(round(D)))
+    for cy in range(13):
+        for cx in range(15):
+            o = 0x400 + (cy * 15 + cx) * 32
+            for y in range(8):
+                for x in range(4):
+                    ext[o + y * 4 + x] = pn[planet[cy * 8 + y][cx * 8 + 2 * x]] << 4 | pn[planet[cy * 8 + y][cx * 8 + 2 * x + 1]]
+    return bytes(img) + bytes(ext), len(stamps), colours, pcol
+
+
 def main():
     data = sr.Data(sys.argv[1])
     out = sys.argv[2]
@@ -143,6 +214,9 @@ def main():
         name = f'FLOOR{pos + 1}.BIN'
         open(os.path.join(out, name), 'wb').write(img)
         print(f'{name}: {folder} {n - 1} stamps, {len(colours)} colours' + (f', {len(merged)} merged' if merged else ''))
+    img, n, colours, pcol = title_file(data)  # REV R5E: the title's clouds
+    open(os.path.join(out, 'FLOOR9.BIN'), 'wb').write(img)
+    print(f'FLOOR9.BIN: the title\'s clouds, {n - 1} stamps, {len(colours)} colours; the planet, {len(pcol)} colours')
 
 
 if __name__ == '__main__':

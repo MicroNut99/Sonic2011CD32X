@@ -2501,15 +2501,15 @@ static void sub_finish(void)
         if (op == 0) {
             char nm[16];
             int k = -1, ok = 0;
-            if (hi >= 1 && hi <= 8) {
+            if (hi >= 1 && hi <= 9) { /* (REV R5E: 9 the title's clouds - the file 8 KB longer) */
                 sprintf(nm, "FLOOR%d.BIN", hi);
                 k = find_file(nm);
             }
-            if (k >= 0 && files[k].len == 0x40000 && !memcmp(files[k].data, "FLR1", 4) &&
+            if (k >= 0 && files[k].len == (hi == 9 ? 0x42000u : 0x40000u) && !memcmp(files[k].data, "FLR1", 4) &&
                 rd_be16(files[k].data + 4) <= 0x10000 / 128)
                 ok = 1;
             flr_on = ok, flr_file = ok ? k : -1, flr_frames = 0, flr_colours = 0;
-            printf("[f%5d] SUB: CMD 80 floor begin, special stage %d -> %s\n", frame_no(), hi,
+            printf("[f%5d] SUB: CMD 80 floor begin, %s %d -> %s\n", frame_no(), hi == 9 ? "the title's clouds" : "special stage", hi,
                    ok ? "ok" : k < 0 ? "NO FILE" : "BAD FILE");
             SET_COMM(12, ok);
         }
@@ -2522,8 +2522,14 @@ static void sub_finish(void)
             if (flr_on)
                 ++flr_colours;
         }
-        else if (op == 6)
-            set_comm32(8, (flr_on && hi >= 1 && hi <= 15) ? rd_be16(files[flr_file].data + 8 + 2 * (hi - 1)) : 0);
+        else if (op == 6) {
+            u32 v = 0;
+            if (flr_on && hi >= 1 && hi <= 15)
+                v = rd_be16(files[flr_file].data + 8 + 2 * (hi - 1));
+            else if (flr_on && hi >= 17 && hi <= 31 && files[flr_file].len > 0x40000) /* REV R5E: the planet's */
+                v = rd_be16(files[flr_file].data + 0x40000 + 10 + 2 * (hi - 17));
+            set_comm32(8, v);
+        }
         else if (op == 7) {
             if (flr_on)
                 printf("[f%5d] SUB: CMD 80 floor end: %llu floor frames, %llu colour commands\n", frame_no(),
