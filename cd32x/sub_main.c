@@ -470,8 +470,16 @@ static void floor_step(void)              /* one piece of the work after a frame
 {
     const int words = 40 * flr_vcells * 16;
     if (flr_flip && floor_on && GET_TICKS != flr_tick) {
-        flr_switch();                     /* R5E (the title): the vertical blank came - the switch, while the chip */
-        flr_flip = 0;                     /* draws the next one (it began when the copy ended) */
+        /* R5E (the title): the vertical blank came - the switch, while the chip draws the next one (it began when the
+           copy ended). R5F: only while the beam is still in the vertical blank or the first lines (the VDP's line
+           counter, 0xC00008 high byte: 0xE0 on in the blank) - later, the next vertical blank (no torn clouds) */
+        int v = (do_md_cmd1(MD_CMD_READ_32X_16, 0xC00008) >> 8) & 0xFF;
+        if (v >= 0xE0 || v < 4) {
+            flr_switch();
+            flr_flip = 0;
+        }
+        else
+            flr_tick = GET_TICKS;
     }
     if (floor_on && !floor_busy && flr_mode == 1 && flr_v32_have) {
         ttl_next();
