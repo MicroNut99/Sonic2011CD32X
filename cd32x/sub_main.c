@@ -323,7 +323,8 @@ static void pcm_play(int id) {
  *   COMM2 low byte = op:
  *     0 begin  (COMM2 high byte = special stage 1-8): Word RAM to 2 Mbit mode, the file into it, the chip and the
  *              Genesis set up (window plane rows 15-27 = lines 120-223, colours line 3). Reply COMM12 1 ok / 0 bad.
- *     1 / 2 / 3  COMM8 = the floor layer's X / Z (the engine's XPos >> 4, ZPos >> 4) / its YPos
+ *     1        COMM8 = the floor layer's X << 16 | Z (R5B: 13.3 each - the engine's XPos >> 13, ZPos >> 13)
+ *     2 / 3    COMM8 = Z (the engine's ZPos >> 4, not sent since R5B) / the layer's YPos (R5B: only when it changes)
  *     4 frame  COMM8 = sin << 16 | cos (the engine's sinM / cosM of the layer's angle): the floor drawn from 1-4;
  *              if the last one is still on its way, the newest values wait and go next.
  *     5 colours (COMM2 high byte = colour k 1-15): COMM8 = the Genesis colours of k (high word) and k + 1
@@ -344,7 +345,8 @@ static void pcm_play(int id) {
 #define FLR_CELLS     (40 * 13)
 #define FLR_WORDS     (FLR_CELLS * 16)
 #define FLR_PIECE     1024                /* words copied into video RAM a pass */
-static const uint16_t flr_vram[2] = { 0x0000, 0x4400 };   /* the two image buffers in video RAM */
+static const uint16_t flr_vram[2] = { 0x0020, 0x4420 };   /* the two image buffers in video RAM (R5B: from tile 1 on,
+                                                             tile 0 stays blank for the name tables' zeros) */
 static const uint16_t flr_win[2]  = { 0xA000, 0xB000 };   /* their window name tables */
 static int floor_busy = 0;                /* 0 idle, 1 the chip drawing, 2 the copy, 3 the switch */
 static int floor_pend = 0;                /* new values came while busy */
@@ -449,6 +451,7 @@ static void floor_end(void)
     floor_busy = 0;
     do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8134);           /* the Genesis display off */
     write_byte(0xFF8003, 0x05);           /* Word RAM: 1 Mbit mode again (RET 1, as init_hardware leaves it) */
+    while (!(read_byte(0xFF8003) & 4)) bump_fm();   /* R5B: the mode change done before anything uses Word RAM */
     do_md_cmd0(MD_CMD_INIT_HW_);          /* the listener's VDP set-up, font, colours (as command 68's off) */
     do_md_cmd0(MD_CMD_CLEAR_B);
     do_md_cmd0(MD_CMD_CLEAR_A);
@@ -473,6 +476,7 @@ static int floor_begin(int stage)
         return 0;
     floor_on = 1;                         /* (from here: no green text - it would use Word RAM) */
     write_byte(0xFF8003, read_byte(0xFF8003) & 0x19);   /* MODE 0: 2 Mbit */
+    while (read_byte(0xFF8003) & 4) bump_fm();          /* R5B: the mode change done (manual: before Word RAM use) */
     flr_to_sub();
     {   /* the window name tables (rows 15-27: the image's cells, column after column, colours line 3) and zeros */
         volatile uint16_t *t;
@@ -514,6 +518,11 @@ static int floor_begin(int stage)
     }
     flr_to_sub();
     scd_sub_read((void *)FLR_SUB, (int)lba, 0x40000 / 2048);   /* the file: the stamps and the map */
+    /* R5B: a file that is not a floor, or with stamps past 0x10000 (the image buffer's place): no chip floor */
+    if (read_word(FLR_SUB) != 0x464C || read_word(FLR_SUB + 2) != 0x5231 || read_word(FLR_SUB + 4) > 0x10000 / 128) {
+        floor_end();
+        return 0;
+    }
     floor_buf = 0;
     floor_busy = 0;
     floor_pend = 0;
@@ -930,7 +939,10 @@ int main(void)
             }
             else if (op >= 1 && op <= 4) {
                 int32_t v = (int32_t)do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
-                if (op == 1) flr_x = v;
+                if (op == 1) {            /* R5B: X << 16 | Z, 13.3 each -> 12 bits of fraction */
+                    flr_x = (int32_t)(int16_t)(v >> 16) << 9;
+                    flr_z = (int32_t)(int16_t)v << 9;
+                }
                 else if (op == 2) flr_z = v;
                 else if (op == 3) flr_y = v;
                 else {
@@ -940,6 +952,8 @@ int main(void)
                         if (floor_busy) floor_pend = 1;
                         else floor_start();
                     }
+                    /* R5B: COMM12 1 - the floor is on; 0 - it was ended (a load ...): the SH2 draws it itself */
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, floor_on ? 1 : 0);
                 }
             }
             else if (op == 5 && floor_on && hi >= 1 && hi <= 15) {

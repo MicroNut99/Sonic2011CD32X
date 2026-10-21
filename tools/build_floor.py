@@ -22,11 +22,11 @@ FLOOR<n>.BIN (big-endian), laid out as the Sub-CPU puts it into Word RAM (2 Mbit
     0x20000  the stamp map: 256 x 256 entries of 16 bits (row by row): bits 0-10 the stamp, 13 a 90 degree turn,
              14 a 180 degree turn, 15 H flip
 The file is 0x40000 bytes: the Sub-CPU reads it straight into Word RAM (the stamps' half, then the map's)."""
-import io, os, struct, sys
+import os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rsdk_pack as rp
 import scd_report as sr
-from PIL import Image
 
 FLIP_X, FLIP_Y, FLIP_XY = 1, 2, 3
 
@@ -57,10 +57,9 @@ def act_layout(d):
 def floor_file(data, folder, act_name):
     ch = chunks(data.read(f'Data/Stages/{folder}/128x128Tiles.bin'))
     xs, ys, lay = act_layout(data.read(f'Data/Stages/{folder}/{act_name}'))
-    gif = Image.open(io.BytesIO(data.read(f'Data/Stages/{folder}/16x16Tiles.gif')))
-    px = gif.load()
-    pal = gif.getpalette() or []
-    rgb = lambda i: tuple(pal[3 * i:3 * i + 3]) if 3 * i + 3 <= len(pal) else (0, 0, 0)
+    gw, gh, pal, pix = rp.gif_decode(data.read(f'Data/Stages/{folder}/16x16Tiles.gif'))  # (the engine's own reading)
+    px = lambda x, y: pix[y * gw + x]
+    rgb = lambda i: tuple(pal[i]) if i < len(pal) else (0, 0, 0)
     # every map entry (Init3DFloorBuffer(0)): its tile and flip
     entries = {}
     for ey in range(256):
@@ -75,7 +74,7 @@ def floor_file(data, folder, act_name):
     for t in tiles:
         for y in range(16):
             for x in range(16):
-                used.add(px[x, t * 16 + y])
+                used.add(px(x, t * 16 + y))
     used.discard(0)
     colours = sorted(used)
     merged = {}
@@ -97,7 +96,7 @@ def floor_file(data, folder, act_name):
     # the stamps: one per tile with a pixel drawn (stamp 0: nothing)
     stamp_of, stamps = {}, [bytes(128)]
     for t in tiles:
-        p = [[nib[px[x, t * 16 + y]] for x in range(16)] for y in range(16)]
+        p = [[nib[px(x, t * 16 + y)] for x in range(16)] for y in range(16)]
         if not any(any(r) for r in p):
             stamp_of[t] = 0
             continue
@@ -110,7 +109,7 @@ def floor_file(data, folder, act_name):
                     b[o] |= v << 4 if (x & 1) == 0 else v
         stamp_of[t] = len(stamps)
         stamps.append(bytes(b))
-    assert len(stamps) <= 0x1FF00 // 128, (folder, len(stamps))  # (they end below the map at 0x20000)
+    assert len(stamps) <= 0x10000 // 128, (folder, len(stamps))  # (they end below the image buffer at 0x10000)
     img = bytearray(0x40000)
     head = b'FLR1' + struct.pack('>HH', len(stamps), len(colours))
     head += b''.join(struct.pack('>H', c) for c in colours) + b'\0\0' * (15 - len(colours))

@@ -1105,6 +1105,7 @@ struct PmHlineJob {
     int fullW, fullH, plane;
     unsigned int ly0;
     const int *lines;
+    int ylim; /* REV R5B: the lines drawn (the chip's floor covers the rest: PM_HLINE_LINES) */
 };
 static void pm_hline_part(const PmHlineJob *j, int part, int parts)
 {
@@ -1112,7 +1113,8 @@ static void pm_hline_part(const PmHlineJob *j, int part, int parts)
     const int fullW = j->fullW, fullH = j->fullH, plane = j->plane, mask = parts - 1;
     const int *lines = j->lines;
     unsigned int ly = j->ly0, uW = (unsigned int)fullW; /* (unsigned: no library shifts on the SH2) */
-    for (int y = 0; y < PM_LINES; ++y, ++ly) {
+    const int ylim = j->ylim;
+    for (int y = 0; y < ylim; ++y, ++ly) {
         if (ly >= (unsigned int)fullH)
             ly -= (unsigned int)fullH;
         if ((y & mask) != part)
@@ -1166,6 +1168,11 @@ static void pm_hline(int layerID, int tileYPos, const int *lines)
     j.plane = layerID >= tLayerMidPoint ? 1 : 0;
     j.ly0   = (unsigned int)tileYPos;
     j.lines = lines;
+#ifdef PM_HLINE_LINES
+    j.ylim = PM_HLINE_LINES; /* REV R5B: the special stages' chip floor - the lines above it only */
+#else
+    j.ylim = PM_LINES;
+#endif
     PM_SPLIT(pm_hline_part, &j); /* REV R4D */
 }
 /* Draw3DSkyLayer (the special stages' floor): rows (SCREEN_YSIZE / 2) + 12 on, 100 of them; the engine samples each
@@ -1270,6 +1277,7 @@ struct PmSkyJob {
     const TileLayer *floor;
     unsigned int lw, lh;
     int layerYPos, sinValue, cosValue, layerXPos, layerZPos;
+    int rowEnd; /* REV R5B: the rows drawn end here (the chip's floor from there on) */
 };
 static void pm_sky_part(const PmSkyJob *j, int part, int parts)
 {
@@ -1280,7 +1288,7 @@ static void pm_sky_part(const PmSkyJob *j, int part, int parts)
     const int layerYPos = j->layerYPos, sinValue = j->sinValue, cosValue = j->cosValue, layerXPos = j->layerXPos;
     const int layerZPos = j->layerZPos, mask = parts - 1;
     int row = (PM_LINES / 2) + 12, drawn = 0;
-    for (int i = TILE_SIZE / 2; i + 1 < PM_LINES - TILE_SIZE; i += 2, ++row) {
+    for (int i = TILE_SIZE / 2; i + 1 < PM_LINES - TILE_SIZE && row < j->rowEnd; i += 2, ++row) {
         if (PM_SKY_ROWS2 && ((row - (PM_LINES / 2) - 12) & 1))
             continue; /* (the line above drew this one too) */
         if ((drawn++ & mask) != part)
@@ -1301,7 +1309,7 @@ static void pm_sky_part(const PmSkyJob *j, int part, int parts)
     }
 }
 PM_SPLIT_FN(pm_sky_part, PmSkyJob)
-static void pm_sky(int layerID)
+static void pm_sky_rows(int layerID, int rowEnd) /* REV R5B: the floor's rows down to rowEnd (PM_LINES: all of it) */
 {
     PM_FLUSH();
     if (pmSkip)
@@ -1310,6 +1318,7 @@ static void pm_sky(int layerID)
     if (!layer->xsize || !layer->ysize)
         return;
     PmSkyJob j;
+    j.rowEnd    = rowEnd;
     j.floor     = &stageLayouts[0];
     j.lw        = (unsigned int)layer->xsize << 7;
     j.lh        = (unsigned int)layer->ysize << 7;
@@ -1320,4 +1329,5 @@ static void pm_sky(int layerID)
     j.layerZPos = layer->ZPos >> 4;
     PM_SPLIT(pm_sky_part, &j); /* REV R4D */
 }
+static void pm_sky(int layerID) { pm_sky_rows(layerID, PM_LINES); }
 #endif

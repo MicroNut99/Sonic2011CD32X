@@ -545,6 +545,46 @@ static void splash_chunk(unsigned int done, unsigned int total) /* chunk `done` 
     }
     for (; splashLit < n && splashLit < splashSegs; ++splashLit) SC_CRAM[splashFirst + splashLit] = splashFull;
 }
+/* REV R5C: a line of text under the loading picture's bar (the owner: "let the user know that the next level needs to load
+   everything for the next level to the cart") - Kobo's 3 x 5 font, each pixel 2 x 2, the picture's lightest colour on its
+   darkest. Into the shown buffer: the display blank while the buffers are swapped for it (two frames black) */
+static void splash_note(const char *t) __attribute__((noinline));
+static void splash_note(const char *t)
+{
+    const unsigned char *img = splash_image();
+    if (!splashUp || !img)
+        return;
+    const unsigned short *pal = (const unsigned short *)(img + SPLASH_PIXELS);
+    int hi = 1, lo = 1, hv = -1, lv = 1 << 30;
+    for (int i = 1; i < 256; ++i) { /* (not the bar's colours: they change) */
+        if (i >= splashFirst && i < splashFirst + splashSegs)
+            continue;
+        const unsigned int c = pal[i];
+        const int v = (int)((c & 31) + (c >> 5 & 31) + (c >> 10 & 31));
+        if (v > hv)
+            hv = v, hi = i;
+        if (v < lv)
+            lv = v, lo = i;
+    }
+    int n = 0;
+    while (t[n]) ++n;
+    const int x0 = (320 - n * 8) / 2 & ~1, y0 = 204;
+    const unsigned short d = MARS_VDP_DISPMODE;
+    MARS_VDP_DISPMODE = (unsigned short)(d & 0x8000);
+    flip_wait(); /* (the SH2 now writes the picture's buffer) */
+    volatile unsigned short *line = SC_FB + 0x100;
+    for (int y = y0 - 3; y < y0 + 13; ++y)
+        for (int x = x0 - 4; x < x0 + n * 8 + 4; x += 2) line[y * 160 + x / 2] = (unsigned short)(lo << 8 | lo);
+    for (int k = 0; k < n; ++k) {
+        const unsigned char *g = font3x5[glyph(t[k])];
+        for (int r = 0; r < 10; ++r)
+            for (int c = 0; c < 3; ++c)
+                if (g[r / 2] & (4 >> c))
+                    line[(y0 + r) * 160 + (x0 + k * 8 + 2 * c) / 2] = (unsigned short)(hi << 8 | hi);
+    }
+    flip_wait(); /* the picture shown again */
+    MARS_VDP_DISPMODE = d;
+}
 static void splash_fail() /* a file did not load: the picture off, the Genesis display on - line 10 shows the STATE */
 {
     splashUp          = false;
@@ -1022,6 +1062,43 @@ static inline int pm_div(int a, int b)
 #define PM_DIV(a, b) pm_div((a), (b))
 #define PM_BE16(p) (*(const unsigned short *)(p)) /* (big-endian: one read) */
 #define PM_SKY_ROWS2 1 /* the special stages' floor: every other line sampled, shown twice (half its cost) */
+static bool floorHW = false; /* REV R5: the special stage's floor on the Sega CD's graphics chip (below) */
+/* REV R5B: the floor's first row (0 - 100 from line 124) that lies inside the floor's map from its first pixel to its
+   last - from there on, the chip's floor. The rows above it (the far ones, at the horizon) reach past the map's edge,
+   where the engine's floor is see-through and shows the sky behind it: those rows the SH2 still draws itself, over the
+   sky, as R4N did (pm_sky_rows), and the chip's picture of them stays hidden. The chip's arithmetic, on the values it
+   gets (cd32x/sub_main.c floor_trace: sample 1 of the row below, 12 bits of fraction) */
+static int flr_first_row(const TileLayer *layer)
+{
+    const int lw = (int)layer->xsize << 19, lh = (int)layer->ysize << 19; /* (the map's size, 12 bits of fraction) */
+    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13; /* (as sent: 13.3) */
+    fx      = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
+    fz      = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
+    const int x = fx << 9, z = fz << 9, y = layer->YPos;
+    const int sn = sinMLookupTable[layer->angle & 0x1FF], cs = cosMLookupTable[layer->angle & 0x1FF];
+    for (int k = 0; k < 100; ++k) {
+        int q  = pm_div(y, (9 + 2 * k) << 8);
+        int xb = (q * -cs) >> 9, yb = (sn * q) >> 9;
+        int X = x + ((3 * sn * q) >> 2) - xb * 320 + xb, Y = z + ((3 * cs * q) >> 2) - yb * 320 + yb;
+        int X2 = X + 2 * 319 * xb, Y2 = Y + 2 * 319 * yb;
+        if (!(xb > 32767 || xb < -32768 || yb > 32767 || yb < -32768) && X >= 0 && X < lw && Y >= 0 && Y < lh && X2 >= 0 &&
+            X2 < lw && Y2 >= 0 && Y2 < lh)
+            return k; /* (the map is a rectangle: both ends inside, the whole row inside) */
+    }
+    return 100;
+}
+/* REV R5B: with the chip's floor, the line-scroll layers (the sky, the horizon) only down to the floor's first row: the
+   rows below are colour 0 in the 32X picture (floor_hw_frame), so what the layers drew there was never seen */
+static int pm_hline_lines()
+{
+    if (!floorHW)
+        return SCREEN_YSIZE;
+    for (int s = 0; s < 4; ++s)
+        if (activeTileLayers[s] < LAYER_COUNT && stageLayouts[activeTileLayers[s]].type == LAYER_3DSKY)
+            return (SCREEN_YSIZE / 2) + 12 + flr_first_row(&stageLayouts[activeTileLayers[s]]);
+    return SCREEN_YSIZE;
+}
+#define PM_HLINE_LINES pm_hline_lines()
 #define PM_VERTS ((Vertex *)(0x24000000 + PM_FB_VERTS))
 #define PM_SCAN ((int *)(0x24000000 + PM_FB_SCAN))
 #define PM_LIST pmList
@@ -1145,8 +1222,8 @@ void scd_pm_draw3dscene(int sheetID)
    they change. No floor file, or no answer: the SH2 draws the floor itself, as before. */
 static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE;
 static int sd_cmd_long(unsigned short cmd) SCD_HOT_NOINLINE;
-static bool floorHW = false;
 static unsigned short flrIdx[16], flrGen[16], flrSent[16];
+static int flrYSent; /* REV R5B: the height the Sub-CPU has */
 static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
 {
     floorHW = false;
@@ -1166,6 +1243,7 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
         flrIdx[k] = sd_cmd(80) < 0 ? 0 : (unsigned short)(SC_COMM8_32 & 0xFF);
         flrSent[k] = 0xFFFF;
     }
+    flrYSent = (int)0x80000000; /* (none sent yet) */
     floorHW    = true;
     genesisOff = false; /* (the Sub-CPU switched the Genesis display on) */
 }
@@ -1177,16 +1255,17 @@ static void floor_hw_end() /* (pm_end) */
     SC_COMM2 = 7;
     sd_cmd_long(80);
     floorHW    = false;
-    genesisOff = true; /* (the Sub-CPU switched it off) */
+    genesisOff = false; /* (R5B: the Sub-CPU's set-up after it - command 68's off - leaves the display on, blank) */
 }
-static void floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values to the Sub-CPU, its rows see-through */
+static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values to the Sub-CPU, its rows see-through;
+                                           false (R5B): the Sub-CPU ended the floor - pm_sky draws it */
 {
     PM_FLUSH();
     if (pmSkip)
-        return;
+        return true;
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
     if (!layer->xsize || !layer->ysize)
-        return;
+        return true;
     comm_idle();
     for (int k = 1; k < 16; k += 2) /* the colours that changed (pm_colours: flrGen), two a command */
         if (flrGen[k] != flrSent[k] || (k < 15 && flrGen[k + 1] != flrSent[k + 1])) {
@@ -1198,31 +1277,42 @@ static void floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
                     flrSent[k + 1] = flrGen[k + 1];
             }
         }
+    /* REV R5B: X and Z in one command (13.3 each: the chip's own precision), the height only when it changed */
+    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13;
+    fx = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
+    fz = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
     SC_COMM2    = 1;
-    SC_COMM8_32 = (unsigned int)(layer->XPos >> 4);
+    SC_COMM8_32 = (unsigned int)(fx << 16) | ((unsigned int)fz & 0xFFFF);
     sd_cmd(80);
-    SC_COMM2    = 2;
-    SC_COMM8_32 = (unsigned int)(layer->ZPos >> 4);
-    sd_cmd(80);
-    SC_COMM2    = 3;
-    SC_COMM8_32 = (unsigned int)layer->YPos;
-    sd_cmd(80);
+    if (layer->YPos != flrYSent) {
+        SC_COMM2    = 3;
+        SC_COMM8_32 = (unsigned int)layer->YPos;
+        if (sd_cmd(80) == 0)
+            flrYSent = layer->YPos;
+    }
     SC_COMM2    = 4;
     SC_COMM8_32 = (unsigned int)(sinMLookupTable[layer->angle & 0x1FF] << 16) | (cosMLookupTable[layer->angle & 0x1FF] & 0xFFFF);
-    sd_cmd(80);
+    SC_COMM12   = 0xFFFF;
+    if (sd_cmd(80) == 0 && SC_COMM12 == 0) { /* R5B: ended on the Sub-CPU's side (another command): the SH2's floor */
+        floorHW    = false;
+        genesisOff = false;
+        return false;
+    }
     /* the floor's rows (124-223, pm_sky_part's) colour 0 in the SH2's buffer (the frame buffer itself: the overwrite
        image skips 0) */
-    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS + PM_STRIDE * ((PM_LINES / 2) + 12));
-    for (unsigned int i = 0; i < PM_STRIDE * (PM_LINES - (PM_LINES / 2) - 12) / 4; ++i) p[i] = 0;
+    const int row0 = (PM_LINES / 2) + 12 + flr_first_row(layer); /* REV R5B: the rows the chip draws */
+    if (row0 > (PM_LINES / 2) + 12)
+        pm_sky_rows(layerID, row0); /* REV R5B: the rows past the map's edge, as before (after the colours: no pmSkip) */
+    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS + PM_STRIDE * row0);
+    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * (PM_LINES - row0)) / 4; ++i) p[i] = 0;
+    return true;
 }
 void scd_pm_sky(int layerID)
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
-    if (floorHW) {
-        floor_hw_frame(layerID);
+    if (floorHW && floor_hw_frame(layerID))
         return;
-    }
     pm_sky(layerID);
 }
 void scd_pm_copy_tile(int dest, int src)
@@ -2334,6 +2424,7 @@ static unsigned short bigTodo[BIG_MAX];  /* the scene to preload into it */
 static unsigned short slotMdg[BIG_MAX];  /* the act file in each slot (the slot window 1 is set for: mdgInCart) */
 static unsigned int bigHome  = 0;        /* page 0's scene while an act page is shown */
 static unsigned int bigGroup = 0;        /* the act preloaded last (scene_group) */
+static unsigned short bigSpecial = 0;    /* REV R5C: the special stage to preload into page 0 */
 static int big_page(int i) { return 2 + i; }
 static int big_slot_of(int i) { return bigN == 1 ? 1 : i < 3 ? i + 1 : 0; }
 static int big_slot_page(int s) { return s == 0 || s == 3 ? 1 : bigN == 1 ? 3 : 7; }
@@ -2644,7 +2735,18 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
                 ++pending;
             }
         }
-    bigGroup = g;
+    bigGroup   = g;
+    bigSpecial = 0;
+    if (bigN == BIG_MAX) { /* REV R5C: the next special stage into page 0 (big_preload), if page 0 does not hold it */
+        const int sp = GetGlobalVariableByName("SpecialStage.ListPos");
+        if (sp >= 0 && sp < stageListCount[STAGELIST_SPECIAL]) {
+            const unsigned int f = 0x400u | (file & 0x80u) | (unsigned int)sp; /* (Sonic's or Tails' files, as the act) */
+            if ((bigNow < 0 ? SCD_BOOT_RECORD[5] : bigHome) != f) {
+                bigSpecial = (unsigned short)f;
+                ++pending;
+            }
+        }
+    }
     if (pending)
         barImgTo = 4, barMdgFrom = 28; /* the bar: the scene 0-4, the preload 4-28, its act file 28-32 */
     splash_part(0, 0);                 /* (an engine copy loaded now: no share of the bar) */
@@ -2667,8 +2769,14 @@ static void big_preload() /* (plat_stage_loading, the scene in) the act's other 
     for (int i = 0; i < bigN; ++i)
         if (bigTodo[i])
             ++pending;
+    if (bigSpecial)
+        ++pending;
     if (!pending)
         return;
+    big_w1(1); /* REV R5C: the loading picture (page 1) - up, if the scene itself needed no loading - and the notice */
+    if (!splashUp)
+        splash_show();
+    splash_note("LOADING NEXT LEVEL INTO CART");
     const int cur = bigNow;
     for (int i = 0; i < bigN; ++i) {
         const unsigned int f = bigTodo[i];
@@ -2697,6 +2805,20 @@ static void big_preload() /* (plat_stage_loading, the scene in) the act's other 
             else
                 slotMdg[s] = got;
         }
+    }
+    if (bigSpecial) { /* REV R5C: the next special stage (SpecialStage.ListPos) into page 0 - where a special stage runs
+                         (its image is more than an act page holds: 0x080000 on into page 1, as the 4 MB game). Page 0's
+                         scene is the title or a menu then, not needed until the act is left: entering the special stage
+                         is two page switches, no disc. Anything later shown from page 0 (the title, a title demo, time
+                         attack) replaces it, and the next act's start loads it again */
+        const unsigned int f = bigSpecial;
+        bigSpecial = 0;
+        const int a = barImgTo + (barMdgFrom - barImgTo) * k / pending, b = barMdgFrom;
+        STATE(0x5CB6);
+        splash_part(a, a);
+        big_show(-1);
+        scene_load_at(f, 0x080000u, a, b, SCD_BOOT_RECORD[5] != 0); /* (as scene_load: SCD_BOOT_RECORD[5] after it) */
+        big_show(cur);
     }
     big_use_slot(big_slot_of(cur)); /* window 1: the scene's own act file slot again */
 }
@@ -2804,6 +2926,8 @@ static bool scene_resident(unsigned int file, unsigned int mdg) /* the scene and
         return true; /* (REV R4I: a scene without an act file - the title, the menus - needs only its image) */
     if (file == BIG_MENU_FILE && bigN == BIG_MAX && bigKnown && !big_attract())
         return big_scene_of(BIG_MENU) == file && bigEng[BIG_MENU]; /* REV R4I: the menu in its pages */
+    if (bigN && bigNow >= 0 && !scene_group(file) && file == bigHome && !big_attract())
+        return true; /* REV R5C: the special stage preloaded into page 0 (big_preload) */
     if (!bigN || !bigKnown || scene_group(file) != bigGroup || !bigGroup || big_attract())
         return false; /* (an act's start: the loading picture - a preload may follow) */
     for (int i = 0; i < bigN; ++i)
