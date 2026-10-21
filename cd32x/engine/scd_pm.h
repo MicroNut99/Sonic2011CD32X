@@ -903,6 +903,25 @@ static void pm_tex_span(unsigned int off, int n, const unsigned char *trow, unsi
             PM_O8(off, a);
     }
 }
+/* REV R5D: the same pixels as pm_tex_span, for a step just under one texel a pixel (dU 0xF000 - 0x10000: the special
+   stages' sky, 127 texels over 128 pixels). The texel goes up by one each pixel except once every (fraction / gap)
+   pixels, where it repeats: runs of consecutive texels, each a plain copy (pm_sprite_row: two pixels a word) */
+static void pm_tex_copy(unsigned int off, int n, const unsigned char *trow, unsigned int U, unsigned int dU) __attribute__((noinline));
+static void pm_tex_copy(unsigned int off, int n, const unsigned char *trow, unsigned int U, unsigned int dU)
+{
+    const unsigned int gap = 0x10000u - dU;
+    while (n > 0) {
+        /* pixels 0 .. len - 1 from here: texels t, t + 1, ... (the fraction stays >= 0 while gap is taken off) */
+        const unsigned int f = U & 0xFFFFu;
+        int len              = gap ? (int)((unsigned int)PM_DIV((int)f, (int)gap)) + 1 : n;
+        if (len > n)
+            len = n;
+        pm_sprite_row(off, trow + (U >> 16), len, 1);
+        off += (unsigned int)len;
+        n -= len;
+        U += (unsigned int)len * dU;
+    }
+}
 /* REV R4D: DrawTexturedFace's rows (part of parts: every parts-th row from the top) */
 struct PmTexJob {
     const unsigned char *sheet;
@@ -936,7 +955,9 @@ static void pm_tex_part(const PmTexJob *j, int part, int parts)
         int count        = posDifference + 1;
         if (bufferedVPos == 0 && VPos >= 0) { /* one texture row (the special stages' background): U only */
             const unsigned char *trow = sheet + (VPos >> 16) * rowBytes;
-            if (UPos >= 0 && bufferedUPos >= 0)
+            if (UPos >= 0 && bufferedUPos > 0xF000 && bufferedUPos <= 0x10000)
+                pm_tex_copy(off, count, trow, (unsigned int)UPos, (unsigned int)bufferedUPos); /* REV R5D */
+            else if (UPos >= 0 && bufferedUPos >= 0)
                 pm_tex_span(off, count, trow, (unsigned int)UPos, (unsigned int)bufferedUPos);
             else
                 pm_run(off, count, [&]() -> unsigned char {
@@ -1140,7 +1161,11 @@ static void pm_hline_part(const PmHlineJob *j, int part, int parts)
             if (PM_CHUNK_PLANE(entry) == plane) {
                 int dx;
                 const unsigned char *s = pm_tile_row(entry, (int)ty16, &dx);
-                pm_sprite_row(off + x, s + px * dx, n, dx);
+                /* REV R5D: a tile row with no pixel (the sky layers are mostly see-through): nothing to write - its 16
+                   bytes as four words (tile rows are 16-byte aligned in the image's tiles) */
+                const unsigned int *w4 = (const unsigned int *)(dx > 0 ? s : s - 15);
+                if (w4[0] | w4[1] | w4[2] | w4[3])
+                    pm_sprite_row(off + x, s + px * dx, n, dx);
             }
             x += n;
             cx += (unsigned int)n;

@@ -548,8 +548,8 @@ static void splash_chunk(unsigned int done, unsigned int total) /* chunk `done` 
 /* REV R5C: a line of text under the loading picture's bar (the owner: "let the user know that the next level needs to load
    everything for the next level to the cart") - Kobo's 3 x 5 font, each pixel 2 x 2, the picture's lightest colour on its
    darkest. Into the shown buffer: the display blank while the buffers are swapped for it (two frames black) */
-static void splash_note(const char *t) __attribute__((noinline));
-static void splash_note(const char *t)
+static void splash_note(const char *t, const char *above = 0) __attribute__((noinline));
+static void splash_note(const char *t, const char *above)
 {
     const unsigned char *img = splash_image();
     if (!splashUp || !img)
@@ -566,21 +566,26 @@ static void splash_note(const char *t)
         if (v < lv)
             lv = v, lo = i;
     }
-    int n = 0;
-    while (t[n]) ++n;
-    const int x0 = (320 - n * 8) / 2 & ~1, y0 = 212; /* (the bar: rows 201-208 of IMAGE.RAW) */
     const unsigned short d = MARS_VDP_DISPMODE;
     MARS_VDP_DISPMODE = (unsigned short)(d & 0x8000);
     flip_wait(); /* (the SH2 now writes the picture's buffer) */
     volatile unsigned short *line = SC_FB + 0x100;
-    for (int y = y0 - 2; y < y0 + 12; ++y)
-        for (int x = x0 - 4; x < x0 + n * 8 + 4; x += 2) line[y * 160 + x / 2] = (unsigned short)(lo << 8 | lo);
-    for (int k = 0; k < n; ++k) {
-        const unsigned char *g = font3x5[glyph(t[k])];
-        for (int r = 0; r < 10; ++r)
-            for (int c = 0; c < 3; ++c)
-                if (g[r / 2] & (4 >> c))
-                    line[(y0 + r) * 160 + (x0 + k * 8 + 2 * c) / 2] = (unsigned short)(hi << 8 | hi);
+    for (int l = 0; l < 2; ++l) { /* below the bar (rows 201-208 of IMAGE.RAW), then the line above it (REV R5D) */
+        const char *u = l ? above : t;
+        if (!u)
+            continue;
+        int n = 0;
+        while (u[n]) ++n;
+        const int x0 = (320 - n * 8) / 2 & ~1, y0 = l ? 188 : 212;
+        for (int y = y0 - 2; y < y0 + 12; ++y)
+            for (int x = x0 - 4; x < x0 + n * 8 + 4; x += 2) line[y * 160 + x / 2] = (unsigned short)(lo << 8 | lo);
+        for (int k = 0; k < n; ++k) {
+            const unsigned char *g = font3x5[glyph(u[k])];
+            for (int r = 0; r < 10; ++r)
+                for (int c = 0; c < 3; ++c)
+                    if (g[r / 2] & (4 >> c))
+                        line[(y0 + r) * 160 + (x0 + k * 8 + 2 * c) / 2] = (unsigned short)(hi << 8 | hi);
+        }
     }
     flip_wait(); /* the picture shown again */
     MARS_VDP_DISPMODE = d;
@@ -1457,8 +1462,9 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
     }
     if (floorHW) { /* REV R5: colour 0 see-through (the Genesis floor shows); the floor's colours for the Genesis */
         cram[0] = 0x0000;
+        const unsigned short *fpal = fullPalette[gfxLineBuffer[(SCREEN_YSIZE / 2) + 12]]; /* REV R5D: the floor's lines' */
         for (int k = 1; k < 16; ++k) {
-            unsigned int c = pal[flrIdx[k]];
+            unsigned int c = fpal[flrIdx[k]];
             int r = (int)(c >> 11), g = (int)((c >> 6) & 31), b = (int)(c & 31);
             if (a > 0) {
                 r = (ia * r >> 8) + (a * fr >> 8);
@@ -2424,7 +2430,6 @@ static unsigned short bigTodo[BIG_MAX];  /* the scene to preload into it */
 static unsigned short slotMdg[BIG_MAX];  /* the act file in each slot (the slot window 1 is set for: mdgInCart) */
 static unsigned int bigHome  = 0;        /* page 0's scene while an act page is shown */
 static unsigned int bigGroup = 0;        /* the act preloaded last (scene_group) */
-static unsigned short bigSpecial = 0;    /* REV R5C: the special stage to preload into page 0 */
 static int big_page(int i) { return 2 + i; }
 static int big_slot_of(int i) { return bigN == 1 ? 1 : i < 3 ? i + 1 : 0; }
 static int big_slot_page(int s) { return s == 0 || s == 3 ? 1 : bigN == 1 ? 3 : 7; }
@@ -2735,21 +2740,7 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
                 ++pending;
             }
         }
-    bigGroup   = g;
-    bigSpecial = 0;
-    /* REV R5C: the next special stage into page 0 (big_preload), if page 0 does not hold it - with a load that happens
-       anyway (the loading picture is up): an act scene already in its page (the first act after power-on, a time warp)
-       stays a page switch */
-    if (bigN == BIG_MAX && at[0] >= 0 && (pending || big_scene_of(at[0]) != file)) {
-        const int sp = GetGlobalVariableByName("SpecialStage.ListPos");
-        if (sp >= 0 && sp < stageListCount[STAGELIST_SPECIAL]) {
-            const unsigned int f = 0x400u | (file & 0x80u) | (unsigned int)sp; /* (Sonic's or Tails' files, as the act) */
-            if ((bigNow < 0 ? SCD_BOOT_RECORD[5] : bigHome) != f) {
-                bigSpecial = (unsigned short)f;
-                ++pending;
-            }
-        }
-    }
+    bigGroup = g;
     if (pending)
         barImgTo = 4, barMdgFrom = 28; /* the bar: the scene 0-4, the preload 4-28, its act file 28-32 */
     splash_part(0, 0);                 /* (an engine copy loaded now: no share of the bar) */
@@ -2757,7 +2748,6 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
         if (at[0] >= 0)
             STATE(0x5CB3); /* the act page not usable: the scene in page 0, as the 4 MB game */
         for (int i = 0; i < bigN; ++i) bigTodo[i] = 0;
-        bigSpecial = 0; /* REV R5C: (the act itself is in page 0 now) */
         barImgTo = barMdgFrom = 20;
         big_show(-1);
         return;
@@ -2773,8 +2763,6 @@ static void big_preload() /* (plat_stage_loading, the scene in) the act's other 
     for (int i = 0; i < bigN; ++i)
         if (bigTodo[i])
             ++pending;
-    if (bigSpecial)
-        ++pending;
     if (!pending)
         return;
     big_w1(1); /* REV R5C: the loading picture (page 1) - up, if the scene itself needed no loading - and the notice */
@@ -2810,20 +2798,6 @@ static void big_preload() /* (plat_stage_loading, the scene in) the act's other 
                 slotMdg[s] = got;
         }
     }
-    if (bigSpecial) { /* REV R5C: the next special stage (SpecialStage.ListPos) into page 0 - where a special stage runs
-                         (its image is more than an act page holds: 0x080000 on into page 1, as the 4 MB game). Page 0's
-                         scene is the title or a menu then, not needed until the act is left: entering the special stage
-                         is two page switches, no disc. Anything later shown from page 0 (the title, a title demo, time
-                         attack) replaces it, and the next act's start loads it again */
-        const unsigned int f = bigSpecial;
-        bigSpecial = 0;
-        const int a = barImgTo + (barMdgFrom - barImgTo) * k / pending, b = barMdgFrom;
-        STATE(0x5CB6);
-        splash_part(a, a);
-        big_show(-1);
-        scene_load_at(f, 0x080000u, a, b, SCD_BOOT_RECORD[5] != 0); /* (as scene_load: SCD_BOOT_RECORD[5] after it) */
-        big_show(cur);
-    }
     big_use_slot(big_slot_of(cur)); /* window 1: the scene's own act file slot again */
 }
 /* REV R4L: THE BOOT PRELOAD - at power-on, before the title starts (the 16 MB cart): the pages are looked up, and what a
@@ -2856,6 +2830,7 @@ static void big_boot_preload()
     STATE(0x5CB5);
     if (!splashUp)
         splash_show(); /* (window 1 on page 1: big_detect / big_identify leave it there) */
+    splash_note("THIS TAKES A FEW MINUTES", "FIRST TIME  SETTING UP THE CART"); /* REV R5D (the owner's request) */
     const int menuTo = menuIn ? 0 : actIn ? 32 : 8; /* the bar: the menu 0 - 8, the act set 8 - 32 */
     if (!menuIn) {
         splash_part(0, 0);
@@ -2930,8 +2905,6 @@ static bool scene_resident(unsigned int file, unsigned int mdg) /* the scene and
         return true; /* (REV R4I: a scene without an act file - the title, the menus - needs only its image) */
     if (file == BIG_MENU_FILE && bigN == BIG_MAX && bigKnown && !big_attract())
         return big_scene_of(BIG_MENU) == file && bigEng[BIG_MENU]; /* REV R4I: the menu in its pages */
-    if (bigN && bigNow >= 0 && !scene_group(file) && file == bigHome && !big_attract())
-        return true; /* REV R5C: the special stage preloaded into page 0 (big_preload) */
     if (!bigN || !bigKnown || scene_group(file) != bigGroup || !bigGroup || big_attract())
         return false; /* (an act's start: the loading picture - a preload may follow) */
     for (int i = 0; i < bigN; ++i)
