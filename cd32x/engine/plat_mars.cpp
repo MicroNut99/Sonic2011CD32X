@@ -1137,10 +1137,92 @@ void scd_pm_draw3dscene(int sheetID)
     pad_service(); /* REV R4D */
     pm_draw3dscene(sheetID);
 }
+/* REV R5: THE SPECIAL STAGES' FLOOR ON THE SEGA CD'S GRAPHICS CHIP - as the 1993 game: the Sub-CPU's command 80
+   (cd32x/sub_main.c) draws the floor with the stamp / rotation chip (FLOOR<n>.BIN, tools/build_floor.py) and the
+   68000 shows it on the Genesis window plane (lines 120-223). The SH2 sends the floor layer's position and angle for
+   each picture it draws, clears the floor's rows of its own picture to colour 0 (the 32X's colour 0 is see-through
+   then: the Genesis shows), and sends the floor's 15 colours (the floor file's palette indices, with the fade) when
+   they change. No floor file, or no answer: the SH2 draws the floor itself, as before. */
+static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE;
+static int sd_cmd_long(unsigned short cmd) SCD_HOT_NOINLINE;
+static bool floorHW = false;
+static unsigned short flrIdx[16], flrGen[16], flrSent[16];
+static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
+{
+    floorHW = false;
+    if (activeStageList != STAGELIST_SPECIAL || stageListPosition < 0 || stageListPosition >= stageListCount[STAGELIST_SPECIAL])
+        return;
+    const char *f = stageList[STAGELIST_SPECIAL][stageListPosition].folder; /* "SS1" - "SS8" */
+    if ((f[0] != 'S' && f[0] != 's') || (f[1] != 'S' && f[1] != 's') || f[2] < '1' || f[2] > '8' || f[3])
+        return;
+    comm_idle();
+    SC_COMM2  = (unsigned short)((f[2] - '0') << 8 | 0);
+    SC_COMM12 = 0xFFFF;
+    sd_cmd_long(80);
+    if (SC_COMM12 != 1)
+        return;
+    for (int k = 1; k < 16; ++k) {
+        SC_COMM2 = (unsigned short)(k << 8 | 6);
+        flrIdx[k] = sd_cmd(80) < 0 ? 0 : (unsigned short)(SC_COMM8_32 & 0xFF);
+        flrSent[k] = 0xFFFF;
+    }
+    floorHW    = true;
+    genesisOff = false; /* (the Sub-CPU switched the Genesis display on) */
+}
+static void floor_hw_end() /* (pm_end) */
+{
+    if (!floorHW)
+        return;
+    comm_idle();
+    SC_COMM2 = 7;
+    sd_cmd_long(80);
+    floorHW    = false;
+    genesisOff = true; /* (the Sub-CPU switched it off) */
+}
+static void floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values to the Sub-CPU, its rows see-through */
+{
+    PM_FLUSH();
+    if (pmSkip)
+        return;
+    TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
+    if (!layer->xsize || !layer->ysize)
+        return;
+    comm_idle();
+    for (int k = 1; k < 16; k += 2) /* the colours that changed (pm_colours: flrGen), two a command */
+        if (flrGen[k] != flrSent[k] || (k < 15 && flrGen[k + 1] != flrSent[k + 1])) {
+            SC_COMM2    = (unsigned short)(k << 8 | 5);
+            SC_COMM8_32 = (unsigned int)flrGen[k] << 16 | (k < 15 ? flrGen[k + 1] : 0);
+            if (sd_cmd(80) == 0) {
+                flrSent[k] = flrGen[k];
+                if (k < 15)
+                    flrSent[k + 1] = flrGen[k + 1];
+            }
+        }
+    SC_COMM2    = 1;
+    SC_COMM8_32 = (unsigned int)(layer->XPos >> 4);
+    sd_cmd(80);
+    SC_COMM2    = 2;
+    SC_COMM8_32 = (unsigned int)(layer->ZPos >> 4);
+    sd_cmd(80);
+    SC_COMM2    = 3;
+    SC_COMM8_32 = (unsigned int)layer->YPos;
+    sd_cmd(80);
+    SC_COMM2    = 4;
+    SC_COMM8_32 = (unsigned int)(sinMLookupTable[layer->angle & 0x1FF] << 16) | (cosMLookupTable[layer->angle & 0x1FF] & 0xFFFF);
+    sd_cmd(80);
+    /* the floor's rows (124-223, pm_sky_part's) colour 0 in the SH2's buffer (the frame buffer itself: the overwrite
+       image skips 0) */
+    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS + PM_STRIDE * ((PM_LINES / 2) + 12));
+    for (unsigned int i = 0; i < PM_STRIDE * (PM_LINES - (PM_LINES / 2) - 12) / 4; ++i) p[i] = 0;
+}
 void scd_pm_sky(int layerID)
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
+    if (floorHW) {
+        floor_hw_frame(layerID);
+        return;
+    }
     pm_sky(layerID);
 }
 void scd_pm_copy_tile(int dest, int src)
@@ -1242,10 +1324,12 @@ static void pm_begin() /* plat_stage_loaded: the scene is loaded - both frame bu
     layoutQn    = 0;
     layoutQLost = false;
     pmPalGen++;
+    floor_hw_begin(); /* REV R5: a special stage - its floor on the Sega CD's graphics chip */
     STATE(0x5C91);
 }
 static void pm_end(bool picture) /* the scene ends (another loads: the loading picture; the dev menu: blank) */
 {
+    floor_hw_end(); /* REV R5 */
     if (!scdPicture && !pmReady)
         return;
     bool shown = pmShown;
@@ -1280,6 +1364,19 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
         }
         unsigned short w = (unsigned short)(0x8000 | b << 10 | g << 5 | r); /* bit 15: in front of the Genesis */
         cram[i]          = w == 0x8000 ? 0x8400 : w;                         /* (as the loading picture: never 0x8000) */
+    }
+    if (floorHW) { /* REV R5: colour 0 see-through (the Genesis floor shows); the floor's colours for the Genesis */
+        cram[0] = 0x0000;
+        for (int k = 1; k < 16; ++k) {
+            unsigned int c = pal[flrIdx[k]];
+            int r = (int)(c >> 11), g = (int)((c >> 6) & 31), b = (int)(c & 31);
+            if (a > 0) {
+                r = (ia * r >> 8) + (a * fr >> 8);
+                g = (ia * (int)((c & 0x7E0) >> 6) >> 8) + (a * fg >> 8);
+                b = (ia * b >> 8) + (a * fb >> 8);
+            }
+            flrGen[k] = (unsigned short)((b >> 2) << 9 | (g >> 2) << 5 | (r >> 2) << 1);
+        }
     }
 }
 static void pm_present() __attribute__((noinline)); /* cart code: plat_present (SDRAM) calls it */

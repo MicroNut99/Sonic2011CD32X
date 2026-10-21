@@ -113,6 +113,7 @@ static int sub_quiet = 0;
 #define MD_CMD_COPY_VRAM_ 7
 #define MD_CMD_SET_PALETTE_ 12
 static int planes_on = 0;
+static int floor_on = 0;                  /* SONIC REV R5: 1 - Word RAM in 2 Mbit mode, the floor in it (command 80) */
 #define KOBO_BOOT_TEXT        1          /* K31: on - Chilly's white 32X start-up messages show
                                                    (green text stays off: KOBO_DIAG_TEXT 0) */
 
@@ -137,6 +138,7 @@ static const char *find_sh2_marker(const char *p, int len)
 void print_diag(char *temp, const char *msg, int x, int y) {
     if (quiet) return;
     if (planes_on) return;                    /* SONIC REV R1: the planes use that video RAM */
+    if (floor_on) return;                     /* SONIC REV R5: Word RAM is the floor's (2 Mbit mode) */
 #if !KOBO_DIAG_TEXT
     return;                                   /* K19: green text switched off (see top) */
 #endif
@@ -310,6 +312,214 @@ static void pcm_play(int id) {
     write_byte(PCM_ST, e->st);
     pcm_onoff &= (uint8_t)~(1 << ch);         /* key on */
     write_byte(PCM_ONOFF, pcm_onoff);
+}
+
+/* =====================================================================================
+ * SONIC REV R5 - THE SPECIAL STAGES' FLOOR ON THE SEGA CD'S GRAPHICS CHIP (SH2 command 80)
+ *   The 1993 game's way: the rotating floor is drawn by the Sega CD's stamp / rotation chip into Word RAM (2 Mbit
+ *   mode), and the 68000 puts it into the Genesis video RAM, where the window plane shows it under the 32X picture
+ *   (the 32X's own pixels of the floor's rows are colour 0: see-through). tools/build_floor.py makes FLOOR<n>.BIN
+ *   (stamps at 0x00000, the stamp map at 0x20000 - the file is the Word RAM image).
+ *   COMM2 low byte = op:
+ *     0 begin  (COMM2 high byte = special stage 1-8): Word RAM to 2 Mbit mode, the file into it, the chip and the
+ *              Genesis set up (window plane rows 15-27 = lines 120-223, colours line 3). Reply COMM12 1 ok / 0 bad.
+ *     1 / 2 / 3  COMM8 = the floor layer's X / Z (the engine's XPos >> 4, ZPos >> 4) / its YPos
+ *     4 frame  COMM8 = sin << 16 | cos (the engine's sinM / cosM of the layer's angle): the floor drawn from 1-4;
+ *              if the last one is still on its way, the newest values wait and go next.
+ *     5 colours (COMM2 high byte = colour k 1-15): COMM8 = the Genesis colours of k (high word) and k + 1
+ *     6 the floor file's palette index of colour k (COMM2 high byte): reply COMM8
+ *     7 end    the Genesis display off and its set-up back (as command 68's off), Word RAM back to 1 Mbit mode.
+ *   The work after a frame - the chip (~13 ms), the copy into video RAM (16.6 KB, in 2 KB pieces), the switch of
+ *   the window's name table before line 120 - runs between the other commands (floor_step), so the pad's
+ *   command 48 is still answered every frame. While the floor is on, nothing else uses Word RAM: no green text, and
+ *   any command that does (loads, sounds banks, backup RAM) ends the floor first. */
+#define FLOOR_CMD     80
+#define FLR_SUB       0x080000            /* Word RAM in 2 Mbit mode as the Sub-CPU sees it ... */
+#define FLR_MAIN      0x200000            /* ... and the 68000 */
+#define FLR_IMG       0x10000             /* the chip's image buffer: 40 columns of 13 cells (column after column) */
+#define FLR_TRACE     0x18000             /* the trace table: 104 lines x 4 words */
+#define FLR_TABLE     0x1C000             /* (at the start only) the two window name tables, then a zero block */
+#define FLR_ZERO      0x1E000
+#define FLR_LINES     104
+#define FLR_CELLS     (40 * 13)
+#define FLR_WORDS     (FLR_CELLS * 16)
+#define FLR_PIECE     1024                /* words copied into video RAM a pass */
+static const uint16_t flr_vram[2] = { 0x0000, 0x4400 };   /* the two image buffers in video RAM */
+static const uint16_t flr_win[2]  = { 0xA000, 0xB000 };   /* their window name tables */
+static int floor_busy = 0;                /* 0 idle, 1 the chip drawing, 2 the copy, 3 the switch */
+static int floor_pend = 0;                /* new values came while busy */
+static int floor_buf = 0;                 /* the video RAM buffer being written (the other one is shown) */
+static int floor_done = 0;                /* words copied */
+static int32_t flr_x, flr_z, flr_y, flr_sin, flr_cos;
+static uint32_t flr_tick;
+
+static void flr_to_sub(void)              /* (2 Mbit) the 68000 gives Word RAM to the Sub-CPU: DMNA */
+{
+    int w = do_md_cmd1(MD_CMD_READ_32X_16, 0xA12002);
+    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA12002, (w & 0xFF00) | 0x02);
+    while (read_byte(0xFF8003) & 1) bump_fm();      /* RET 0: the Sub-CPU's */
+}
+static void flr_to_main(void)             /* (2 Mbit) the Sub-CPU gives it to the 68000: RET */
+{
+    write_byte(0xFF8003, (read_byte(0xFF8003) & 0x18) | 0x01);
+    while (!(read_byte(0xFF8003) & 1)) bump_fm();
+}
+static uint16_t flr_s16(int32_t v) { return (uint16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
+static void floor_trace(void)             /* the engine's Draw3DSkyLayer rows (pm_sky_part), one per screen line */
+{
+    volatile uint16_t *t = (volatile uint16_t *)(FLR_SUB + FLR_TRACE);
+    int k;
+    for (k = 0; k < 4; k++, t += 4) {     /* lines 120-123: above the floor - outside the map */
+        t[0] = 0xFFF8; t[1] = 0xFFF8; t[2] = 0; t[3] = 0;
+    }
+    for (k = 0; k < FLR_LINES - 4; k++, t += 4) {   /* line 124 + k: the engine's sample row 9 + 2k, sample 1 */
+        int32_t q  = flr_y / ((9 + 2 * k) << 8);
+        int32_t xb = (q * -flr_cos) >> 9, yb = (flr_sin * q) >> 9;
+        int32_t X  = flr_x + ((3 * flr_sin * q) >> 2) - xb * 320 + xb;
+        int32_t Y  = flr_z + ((3 * flr_cos * q) >> 2) - yb * 320 + yb;
+        int32_t X2 = X + 2 * 319 * xb, Y2 = Y + 2 * 319 * yb;   /* (the line's last pixel) */
+        /* the chip's positions are 13 bits of pixels: a line that leaves -4096 .. 8191 would come round into the map
+           (the engine: outside, see-through) - such a line (far, at the top of the floor) stays see-through */
+        if (xb > 32767 || xb < -32768 || yb > 32767 || yb < -32768 ||
+            X < -(4096 << 12) || X >= (8192 << 12) || Y < -(4096 << 12) || Y >= (8192 << 12) ||
+            X2 < -(4096 << 12) || X2 >= (8192 << 12) || Y2 < -(4096 << 12) || Y2 >= (8192 << 12)) {
+            t[0] = 0xFFF8; t[1] = 0xFFF8; t[2] = 0; t[3] = 0;
+            continue;
+        }
+        t[0] = (uint16_t)(X >> 9);        /* 12 bits of fraction -> 13.3 */
+        t[1] = (uint16_t)(Y >> 9);
+        t[2] = flr_s16(xb);               /* a pixel = two samples of 1/4096: xb / 2048 (5.11) */
+        t[3] = flr_s16(yb);
+    }
+}
+static void floor_start(void)             /* the chip: this frame's floor into the image buffer */
+{
+    floor_trace();
+    write_word(0xFF8058, 0x0004);         /* stamps 16 x 16, map 4096 x 4096, no repeat */
+    write_word(0xFF805A, 0x20000 >> 2);   /* the map at 0x20000 */
+    write_word(0xFF805C, 12);             /* 13 cells high */
+    write_word(0xFF805E, FLR_IMG >> 2);
+    write_word(0xFF8060, 0);
+    write_word(0xFF8062, 320);
+    write_word(0xFF8064, FLR_LINES);
+    write_word(0xFF8066, FLR_TRACE >> 2); /* (starts it) */
+    floor_busy = 1;
+    floor_pend = 0;
+}
+static void floor_step(void)              /* one piece of the work after a frame (the main loop, every pass) */
+{
+    if (!floor_on || !floor_busy)
+        return;
+    if (floor_busy == 1) {
+        if (read_word(0xFF8058) & 0x8000)
+            return;                       /* the chip still draws */
+        flr_to_main();
+        floor_done = 0;
+        floor_busy = 2;
+        return;
+    }
+    if (floor_busy == 2) {
+        int n = FLR_WORDS - floor_done;
+        if (n > FLR_PIECE) n = FLR_PIECE;
+        do_md_cmd3(MD_CMD_COPY_VRAM_, flr_vram[floor_buf] + 2 * floor_done, FLR_MAIN + FLR_IMG + 2 * floor_done, n);
+        floor_done += n;
+        if (floor_done >= FLR_WORDS) {
+            floor_busy = 3;
+            flr_tick = GET_TICKS;
+        }
+        return;
+    }
+    /* 3: the window shows the new buffer from the next vertical blank on (any time before line 120: no tear) */
+    if (GET_TICKS == flr_tick)
+        return;
+    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8300 | (flr_win[floor_buf] >> 10));
+    floor_buf ^= 1;
+    flr_to_sub();
+    floor_busy = 0;
+    if (floor_pend)
+        floor_start();
+}
+static void floor_end(void)
+{
+    if (!floor_on)
+        return;
+    while (floor_busy == 1 && (read_word(0xFF8058) & 0x8000)) bump_fm();
+    if (floor_busy == 0 || floor_busy == 1)
+        flr_to_main();                    /* (busy 2 / 3: the 68000 has it already) */
+    floor_busy = 0;
+    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8134);           /* the Genesis display off */
+    write_byte(0xFF8003, 0x05);           /* Word RAM: 1 Mbit mode again (RET 1, as init_hardware leaves it) */
+    do_md_cmd0(MD_CMD_INIT_HW_);          /* the listener's VDP set-up, font, colours (as command 68's off) */
+    do_md_cmd0(MD_CMD_CLEAR_B);
+    do_md_cmd0(MD_CMD_CLEAR_A);
+    floor_on = 0;
+}
+static int floor_begin(int stage)
+{
+    char name[16];
+    int64_t fi;
+    uint32_t lba, len;
+    int i, r, c;
+    if (floor_on)
+        floor_end();
+    if (stage < 1 || stage > 8)
+        return 0;
+    sprintf(name, "FLOOR%d.BIN", stage);
+    fi = scd_open_file(name);
+    if (fi < 0)
+        return 0;
+    len = (uint32_t)(fi >> 32); lba = (uint32_t)(fi & 0xFFFFFFFF);
+    if (len != 0x40000)
+        return 0;
+    floor_on = 1;                         /* (from here: no green text - it would use Word RAM) */
+    write_byte(0xFF8003, read_byte(0xFF8003) & 0x19);   /* MODE 0: 2 Mbit */
+    flr_to_sub();
+    {   /* the window name tables (rows 15-27: the image's cells, column after column, colours line 3) and zeros */
+        volatile uint16_t *t;
+        int b;
+        for (b = 0; b < 2; b++) {
+            t = (volatile uint16_t *)(FLR_SUB + FLR_TABLE + b * 0x1000);
+            for (i = 0; i < 64 * 32; i++) t[i] = 0;
+            for (r = 0; r < 13; r++)
+                for (c = 0; c < 40; c++)
+                    t[(15 + r) * 64 + c] = (uint16_t)(0x6000 | ((flr_vram[b] >> 5) + c * 13 + r));
+        }
+        t = (volatile uint16_t *)(FLR_SUB + FLR_ZERO);
+        for (i = 0; i < 0x1000; i++) t[i] = 0;
+    }
+    flr_to_main();
+    {
+        static const uint16_t regs[] = {
+            0x8134,                       /* display off while it is set up */
+            0x8004, 0x8230,               /* plane A 0xC000 */
+            0x8328, 0x8407,               /* window 0xA000, plane B 0xE000 */
+            0x857C, 0x8D3F,               /* sprites 0xF800, h-scroll 0xFC00 */
+            0x8700, 0x8AFF, 0x8B00,       /* backdrop colour 0, full-screen scroll */
+            0x8C81, 0x8E00, 0x8F02,       /* H40, no shadow / highlight, auto-increment 2 */
+            0x9001, 0x9100, 0x928F        /* planes 64 x 32; the window: rows 15 to the bottom */
+        };
+        for (i = 0; i < (int)(sizeof(regs) / sizeof(regs[0])); i++)
+            do_md_cmd1(MD_CMD_SET_VDP_REG, regs[i]);
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xA000, FLR_MAIN + FLR_TABLE, 0x800);           /* window tables */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xB000, FLR_MAIN + FLR_TABLE + 0x1000, 0x800);
+        for (i = 0; i < 0x8800; i += 0x1000)                                         /* both image buffers */
+            do_md_cmd3(MD_CMD_COPY_VRAM_, i, FLR_MAIN + FLR_ZERO, 0x800);
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xC000, FLR_MAIN + FLR_ZERO, 0x800);            /* plane A, plane B */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xE000, FLR_MAIN + FLR_ZERO, 0x800);
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xF000, FLR_MAIN + FLR_ZERO, 0x800);            /* sprites, h-scroll */
+        do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0x40000010);                       /* v-scroll 0 */
+        do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00000, 0);
+        do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0xC0000000);                       /* the colours black */
+        for (i = 0; i < 32; i++) do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00000, 0);
+    }
+    flr_to_sub();
+    scd_sub_read((void *)FLR_SUB, (int)lba, 0x40000 / 2048);   /* the file: the stamps and the map */
+    floor_buf = 0;
+    floor_busy = 0;
+    floor_pend = 0;
+    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8300 | (flr_win[1] >> 10));   /* (buffer 1 shown: empty) */
+    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8174);                         /* the Genesis display on */
+    return 1;
 }
 
 /* CMD 53: KOBOSFX.BIN -> PCM wave RAM.  Returns the number of effects (0 = failed).
@@ -656,6 +866,7 @@ int main(void)
                 do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512E,
                            ((read_byte(0xFF8038) & 0x0F) << 12) | ((hb_pass >> 6) & 0x0FFF));
         }
+        floor_step();                    /* SONIC REV R5: the floor's work, a piece a pass */
         uint16_t cmd = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15120);
         if (cmd == 0) {                  /* HW6: idle - pause ~0.2 ms before the 68K reads COMM0
                                             again (fewer reads while the SH2 may be writing it) */
@@ -706,7 +917,52 @@ int main(void)
             print_diag(temp, "SH2 NEVER EVEN REACHED THIS FILE      ", 2, 18); 
         }
 
-        if (cmd == 38) { 
+        /* SONIC REV R5: a command that uses Word RAM (loads, sound banks, backup RAM ...) ends the floor first */
+        if (floor_on && cmd != 0 && cmd != FLOOR_CMD && cmd != 48 && cmd != 52 && cmd != 45 && cmd != 54 &&
+            cmd != 57 && cmd != 58)
+            floor_end();
+
+        if (cmd == FLOOR_CMD) {
+            int arg = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
+            int op = arg & 0xFF, hi = (arg >> 8) & 0xFF;
+            if (op == 0) {
+                do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, floor_begin(hi));
+            }
+            else if (op >= 1 && op <= 4) {
+                int32_t v = (int32_t)do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
+                if (op == 1) flr_x = v;
+                else if (op == 2) flr_z = v;
+                else if (op == 3) flr_y = v;
+                else {
+                    flr_sin = (int16_t)(v >> 16);
+                    flr_cos = (int16_t)v;
+                    if (floor_on) {
+                        if (floor_busy) floor_pend = 1;
+                        else floor_start();
+                    }
+                }
+            }
+            else if (op == 5 && floor_on && hi >= 1 && hi <= 15) {
+                uint32_t v = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
+                do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0xC0000000 | ((uint32_t)(0x60 + 2 * hi) << 16));
+                do_md_cmd2(MD_CMD_WRITE_32X_16, 0xC00000, (int)(v >> 16));
+                if (hi < 15)
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xC00000, (int)(v & 0xFFFF));
+            }
+            else if (op == 6) {
+                /* the file's palette index of colour hi: it sits in Word RAM (0x08 + 2 hi - 2) - only the Sub-CPU's
+                   while no frame is on its way */
+                int v = 0;
+                if (floor_on && hi >= 1 && hi <= 15 && floor_busy == 0)
+                    v = read_word(FLR_SUB + 8 + 2 * (hi - 1));
+                do_md_cmd2(MD_CMD_WRITE_32X_32, 0xA15128, v);
+            }
+            else if (op == 7) {
+                floor_end();
+            }
+            do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
+        }
+        else if (cmd == 38) { 
             int img_idx = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
             char img_name[24];
             cur_img = img_idx < 0 ? 0 : img_idx;         
