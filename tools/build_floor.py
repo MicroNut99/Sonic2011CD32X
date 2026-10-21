@@ -142,6 +142,9 @@ def stamp_bytes(p):
     return bytes(b)
 
 
+TTL_EXTRA = 0x4000  # REV R5F (R5E: 0x2000)
+
+
 def title_file(data):
     """REV R5E: FLOOR9.BIN - the title's cloud ceiling for the chip (its Draw3DScene: Title/Clouds.gif on a 16 x 10 grid
     of squares 1024 x 512 world units, 64 x 64 texels each, x -8192 .. 8192, z 0 .. 5120, at y 720 below the camera's
@@ -174,32 +177,90 @@ def title_file(data):
     for row in range(40):                      # v 0 .. 639
         for col in range(64):                  # u 0 .. 1023
             struct.pack_into('>H', img, 0x20000 + 2 * ((row << 8) + col), stamp_of[(col & 15, row & 15)])
-    # the lines (the engine's matrix values: 720 * 254 >> 8 = 714, 720 * 25 >> 8 = 70; sin, cos of 8: 25, 254)
-    ext = bytearray(0x2000)
+    # REV R5F: the rest of the title on the Genesis too ('TTL2', 16 KB after the Word RAM image) - the mountains and the
+    # water on plane B (rows 12-27, colours line 1), the planet as 8 hardware sprites (colours line 2). The lines: 104
+    # (window rows 0-12); 100-103 see-through (the mountains' first lines show there, from plane B)
+    ext = bytearray(TTL_EXTRA)
     tw, th, tpal, tpix = rp.gif_decode(data.read('Data/Sprites/Title/Title.gif'))
-    planet = [[tpix[(146 + y) * tw + 257 + x] for x in range(120)] for y in range(104)]
+    # the planet: Title.gif 257, 146, 120 x 104 at x 280 - its first 5 cell columns are on the screen (280-319)
+    planet = [[tpix[(146 + y) * tw + 257 + x] for x in range(40)] for y in range(104)]
     pcol = sorted(set(c for r in planet for c in r) - {0})
     assert len(pcol) <= 15, pcol
     pn = {c: k + 1 for k, c in enumerate(pcol)}
     pn[0] = 0
-    struct.pack_into('>4sHHH', ext, 0, b'TTL1', 112, 15, 13)
+    def cell_of(img, cy, cx, nmap):  # 8 x 8 pixels -> 32 bytes, 4 bits a pixel
+        b = bytearray(32)
+        for y in range(8):
+            for x in range(4):
+                b[y * 4 + x] = nmap[img[cy * 8 + y][cx * 8 + 2 * x]] << 4 | nmap[img[cy * 8 + y][cx * 8 + 2 * x + 1]]
+        return bytes(b)
+    pcells = []
+    for (c0, w) in ((0, 4), (4, 1)):            # the sprites: columns 0-3 and 4, rows 0-3, 4-7, 8-11, 12
+        for (r0, h) in ((0, 4), (4, 4), (8, 4), (12, 1)):
+            for c in range(c0, c0 + w):         # (a sprite's cells column after column)
+                for r in range(r0, r0 + h):
+                    pcells.append(cell_of(planet, r, c, pn))
+    assert len(pcells) == 65
+    # plane B: lines 96-167 the mountains (Title.gif 256, 4, 176 x 68 at x 0 and 256, 77, 124 x 68 at x 196, y 100; their
+    # sky colour 128 = the title's sky (0, 0, 96) see-through - the 32X's colour 0 shows it), lines 168-223 the water
+    # (Title.gif rows 447-502, 512 wide: 14 strips of 4 lines, each its own h-scroll)
+    plane = [[0] * 512 for _ in range(128)]     # lines 96-223
+    for (sx, sy, cw, ch, dx) in ((256, 4, 176, 68, 0), (256, 77, 124, 68, 196)):
+        for j in range(ch):
+            for i in range(cw):
+                v = tpix[(sy + j) * tw + sx + i]
+                if v and v != 128 and dx + i < 320:
+                    plane[4 + j][dx + i] = v
+    for j in range(56):
+        for i in range(512):
+            plane[72 + j][i] = tpix[(447 + j) * tw + i]
+    scol = sorted(set(c for r in plane for c in r) - {0})
+    assert len(scol) <= 15, scol
+    sn = {c: k + 1 for k, c in enumerate(scol)}
+    sn[0] = 0
+    scells, sidx, names = [], {}, [0] * (16 * 64)
+    for cy in range(16):
+        for cx in range(64):
+            cell = cell_of(plane, cy, cx, sn)
+            if not any(cell):
+                continue
+            rows = [cell[y * 4:y * 4 + 4] for y in range(8)]
+            hf = lambda rs: [bytes(((b & 15) << 4 | b >> 4) for b in r[::-1]) for r in rs]
+            variants = ((b''.join(rows), 0), (b''.join(hf(rows)), 0x0800), (b''.join(rows[::-1]), 0x1000),
+                        (b''.join(hf(rows[::-1])), 0x1800))
+            for v, fl in variants:
+                if v in sidx:
+                    names[cy * 64 + cx] = 0x2000 | fl | sidx[v]
+                    break
+            else:
+                scells.append(cell)
+                sidx[cell] = len(scells)          # (1-based: the Sub-CPU adds the first cell's number - 1)
+                names[cy * 64 + cx] = 0x2000 | len(scells)
+    assert 0x1340 + 32 * len(scells) <= TTL_EXTRA, len(scells)
+    struct.pack_into('>4sHHHH', ext, 0, b'TTL2', 104, len(pcells), len(scells), 0)
     for k, c in enumerate(pcol):
-        struct.pack_into('>H', ext, 10 + 2 * k, c)
-    for sy in range(112):
+        struct.pack_into('>H', ext, 12 + 2 * k, c)
+    for k, c in enumerate(scol):
+        struct.pack_into('>H', ext, 42 + 2 * k, c)
+    # the lines (the engine's matrix values: 720 * 254 >> 8 = 714, 720 * 25 >> 8 = 70; sin, cos of 8: 25, 254)
+    for sy in range(104):
+        if sy >= 100:                           # (behind the mountains: see-through, plane B shows)
+            struct.pack_into('>hhh', ext, 0x60 + 6 * sy, 0, 0, 0)
+            continue
         a = 112 - sy
         D = 256.0 * (160 * 714 - 70 * a) / (254 * a + 160 * 25)
         zc = 70 + 254 * D / 256
         u0 = (512 + (0 - 160) * zc / 136 + 8192) / 16
         du = zc / (136 * 16)
         assert 0 <= u0 * 8 < 32768 and du * 2048 < 32768 and D < 32768, (sy, u0, du, D)
-        struct.pack_into('>hhh', ext, 0x40 + 6 * sy, int(round(u0 * 8)), int(round(du * 2048)), int(round(D)))
-    for cy in range(13):
-        for cx in range(15):
-            o = 0x400 + (cy * 15 + cx) * 32
-            for y in range(8):
-                for x in range(4):
-                    ext[o + y * 4 + x] = pn[planet[cy * 8 + y][cx * 8 + 2 * x]] << 4 | pn[planet[cy * 8 + y][cx * 8 + 2 * x + 1]]
-    return bytes(img) + bytes(ext), len(stamps), colours, pcol
+        struct.pack_into('>hhh', ext, 0x60 + 6 * sy, int(round(u0 * 8)), int(round(du * 2048)), int(round(D)))
+    for k, w in enumerate(names):
+        struct.pack_into('>H', ext, 0x300 + 2 * k, w)
+    for k, c in enumerate(pcells):
+        ext[0xB00 + 32 * k:0xB20 + 32 * k] = c
+    for k, c in enumerate(scells):
+        ext[0x1340 + 32 * k:0x1360 + 32 * k] = c
+    return bytes(img) + bytes(ext), len(stamps), colours, pcol, scol, len(scells)
 
 
 def main():
@@ -214,9 +275,10 @@ def main():
         name = f'FLOOR{pos + 1}.BIN'
         open(os.path.join(out, name), 'wb').write(img)
         print(f'{name}: {folder} {n - 1} stamps, {len(colours)} colours' + (f', {len(merged)} merged' if merged else ''))
-    img, n, colours, pcol = title_file(data)  # REV R5E: the title's clouds
+    img, n, colours, pcol, scol, ns = title_file(data)  # REV R5E: the title's clouds (R5F: and the rest of its picture)
     open(os.path.join(out, 'FLOOR9.BIN'), 'wb').write(img)
-    print(f'FLOOR9.BIN: the title\'s clouds, {n - 1} stamps, {len(colours)} colours; the planet, {len(pcol)} colours')
+    print(f'FLOOR9.BIN: the title\'s clouds, {n - 1} stamps, {len(colours)} colours; the planet, {len(pcol)} colours; '
+          f'the mountains and the water, {ns} cells, {len(scol)} colours')
 
 
 if __name__ == '__main__':

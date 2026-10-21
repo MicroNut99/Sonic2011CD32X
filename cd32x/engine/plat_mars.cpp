@@ -214,7 +214,10 @@ static union {
     struct {
         int lines[SCREEN_YSIZE];      /* a tile layer's x per line (DrawHLineScrollLayer's own) */
         DrawListEntry3D list[0xA0];   /* the 3D scene's faces, sorted */
-        unsigned short fIdx[32], fGen[32], fSent[32]; /* REV R5E: the chip's picture's colours (R5: the floor's 16) */
+        unsigned short fIdx[48], fGen[48], fSent[48]; /* REV R5E: the chip's picture's colours (R5: the floor's 16;
+                                                         R5F: the title's lines 0-2) */
+        short tStrip[14], tPY, tPYSent; /* REV R5F: the title's water strips' x (lines 168-223), the planet's y */
+        int tV32;                       /* REV R5E: the clouds' scroll */
     } pm;
 } scdShared;
 #define xA scdShared.pl.xA
@@ -226,6 +229,10 @@ static union {
 #define flrIdx scdShared.pm.fIdx
 #define flrGen scdShared.pm.fGen
 #define flrSent scdShared.pm.fSent
+#define ttlStrip scdShared.pm.tStrip
+#define ttlPY scdShared.pm.tPY
+#define ttlPYSent scdShared.pm.tPYSent
+#define ttlV32 scdShared.pm.tV32
 static unsigned short cramSent[64];
 static unsigned short recId = 0;
 /* REV R4D: the UNDERWATER switch (scdWaterSwitch) - the records' water trailer (md/sgb.h): the water colours the 68000
@@ -1186,8 +1193,20 @@ void scd_pm_sprite(int XPos, int YPos, int width, int height, int sprX, int sprY
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
-    if (floorHW && flrTitle && sprX == 257 && sprY == 146 && width == 120 && height == 104)
-        return; /* REV R5E: the title's planet - on the Genesis plane behind the clouds (FLOOR9.BIN) */
+    if (floorHW && flrTitle) { /* REV R5F: the title's planet (its sprites), mountains and water (plane B) - the Genesis's */
+        if (sprX == 257 && sprY == 146 && width == 120 && height == 104) {
+            ttlPY = (short)YPos;
+            return;
+        }
+        if ((sprX == 256 && sprY == 4 && width == 176 && height == 68) || (sprX == 256 && sprY == 77 && width == 124 && height == 68))
+            return;
+        if (sprX == 0 && sprY >= 447 && sprY < 511 && width == 512 && height == 4) { /* a water strip at x, x - 512 */
+            int k = (YPos - 168) >> 2;
+            if (k >= 0 && k < 14 && YPos == 168 + 4 * k)
+                ttlStrip[k] = (short)(XPos & 511);
+            return;
+        }
+    }
     pm_sprite(XPos, YPos, width, height, sprX, sprY, direction, sheetID, alpha);
 }
 void scd_pm_sprite_scaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX,
@@ -1216,9 +1235,10 @@ void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B,
         PM_FLUSH();
         if (pmSkip)
             return;
-        int rows = YPos + height < 112 ? 112 : YPos + height > PM_LINES ? PM_LINES : YPos + height;
+        /* REV R5F: the whole picture - the 32X draws only the sprites in front now (the mountains, the water and the
+           planet are the Genesis's): what the buffer held two pictures ago goes */
         volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
-        for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * rows) / 4; ++i) p[i] = 0;
+        for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; i += 4) p[i] = p[i + 1] = p[i + 2] = p[i + 3] = 0;
         return;
     }
     pm_rect(XPos, YPos, width, height, R, G, B, A);
@@ -1243,9 +1263,8 @@ void scd_pm_draw3dscene(int sheetID)
         for (int y = 0; y < 4; ++y)
             for (int x = 0; x < 4; ++x) matFinal.values[y][x] = matWorld.values[y][x];
         MatrixMultiply(&matFinal, &matView);
-        PM_FLUSH();
-        if (pmSkip || title_hw_frame((-matWorld.values[3][2]) & 2047))
-            return;
+        ttlV32 = (-matWorld.values[3][2]) & 2047; /* (REV R5F: sent with the picture - pm_present, title_hw_frame) */
+        return;
     }
     pm_draw3dscene(sheetID);
 }
@@ -1275,14 +1294,17 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
     if (!stage)
         return;
     comm_idle();
+    if (stage == 9)
+        SC_COMM4 = 0; /* REV R5F: the title's records - COMM4 may still hold the start-up check's 0x1234: the 68000 would
+                         take it for a record's id the moment the Sub-CPU turns records on (as the acts' planes: R1S) */
     SC_COMM2  = (unsigned short)(stage << 8 | 0);
     SC_COMM12 = 0xFFFF;
     sd_cmd_long(80);
     if (SC_COMM12 != 1)
         return;
-    for (int k = 0; k < 32; ++k) {
+    for (int k = 0; k < 48; ++k) {
         flrIdx[k] = 0;
-        if ((k >= 1 && k < 16) || (stage == 9 && k >= 17)) { /* (the title: the planet's colours 17-31 too) */
+        if ((k >= 1 && k < 16) || (stage == 9 && (k & 15))) { /* (R5F, the title: lines 1 and 2 too) */
             SC_COMM2  = (unsigned short)(k << 8 | 6);
             flrIdx[k] = sd_cmd(80) < 0 ? 0 : (unsigned short)(SC_COMM8_32 & 0xFF);
         }
@@ -1291,6 +1313,10 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
     }
     flrTitle = stage == 9;
     flrYSent = (int)0x80000000; /* (none sent yet) */
+    if (flrTitle) {             /* REV R5F: the water at rest, the planet at its start; the 68000 gets them first time */
+        for (int k = 0; k < 14; ++k) ttlStrip[k] = 0;
+        ttlPY = -16, ttlPYSent = 0x7FFF, ttlV32 = 0;
+    }
     floorHW    = true;
     genesisOff = false; /* (the Sub-CPU switched the Genesis display on) */
 }
@@ -1355,19 +1381,16 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * (PM_LINES - row0)) / 4; ++i) p[i] = 0;
     return true;
 }
-/* REV R5E: THE TITLE'S CLOUDS ON THE CHIP - each picture: the colours that changed (CRAM 0-31: the sky, the clouds' line
-   0, the planet's line 1), the scroll (the clouds object's Draw3DScene: its world translation's z is -scroll), then the
-   chip draws. false: the Sub-CPU ended it - the SH2 draws the clouds itself */
+/* REV R5E: THE TITLE'S CLOUDS ON THE CHIP - each picture the scroll (the clouds object's Draw3DScene: its world
+   translation's z is -scroll), then the chip draws. REV R5F: the rest of the title's picture is the Genesis's too (the
+   mountains and the water on plane B, the planet as 8 sprites: FLOOR9.BIN); each picture a record to the 68000 (the
+   acts' planes' way: md/sgb.h, rec_handover) with plane B's h-scroll (the water's 14 strips), the planet's height (its
+   sprites' y, when it moved) and the colours that changed (CRAM 0-47). The record goes where the buffer's line table
+   is (the 68000 reads it at the frame buffer's start); the line table is written again after. false: the Sub-CPU
+   ended the floor, or the 68000 did not take the record - the SH2 draws it all itself */
 static bool title_hw_frame(int v32)
 {
     comm_idle();
-    for (int k = 0; k < 32; k += 2)
-        if (flrGen[k] != flrSent[k] || flrGen[k + 1] != flrSent[k + 1]) {
-            SC_COMM2    = (unsigned short)(k << 8 | 5);
-            SC_COMM8_32 = (unsigned int)flrGen[k] << 16 | flrGen[k + 1];
-            if (sd_cmd(80) == 0)
-                flrSent[k] = flrGen[k], flrSent[k + 1] = flrGen[k + 1];
-        }
     SC_COMM2    = 1;
     SC_COMM8_32 = (unsigned int)v32;
     sd_cmd(80);
@@ -1380,6 +1403,56 @@ static bool title_hw_frame(int v32)
         genesisOff = false;
         return false;
     }
+    volatile unsigned short *w = SC_FB;
+    int n = 2, g = 0;
+    if (ttlPY != ttlPYSent)
+        for (int i = 0; i < 8; ++i) { /* the sprites' y (cd32x/sub_main.c floor_begin: rows 0-3, 4-7, 8-11, 12) */
+            w[n++] = (unsigned short)(0xF800 + 8 * i);
+            w[n++] = 1;
+            w[n++] = (unsigned short)(128 + ttlPY + 32 * (i & 3));
+            g++;
+        }
+    w[1]   = (unsigned short)g;
+    w[n++] = 0; /* v-scroll A, B */
+    w[n++] = 0;
+    w[n++] = 1; /* h-scroll A: 224 lines 0 */
+    w[n++] = 224;
+    w[n++] = 0;
+    w[n++] = 15; /* h-scroll B: lines 0-167 0, then the strips */
+    w[n++] = 168;
+    w[n++] = 0;
+    for (int k = 0; k < 14; ++k) {
+        w[n++] = 4;
+        w[n++] = (unsigned short)ttlStrip[k];
+    }
+    int at = n++, c = 0;
+    for (int k = 0; k < 48; ++k)
+        if (flrGen[k] != flrSent[k]) {
+            w[n++] = (unsigned short)k;
+            w[n++] = flrGen[k];
+            c++;
+        }
+    w[at] = (unsigned short)c;
+    w[0]  = (unsigned short)(n - 1);
+    recId = (unsigned short)(recId + 1);
+    if (!recId)
+        recId = 1;
+    sgb_give_fb();
+    SC_COMM4       = recId;
+    unsigned int t = 0;
+    for (; t < 400000u; ++t) { /* the same answer twice: a read during the 68000's write is undefined */
+        if (SC_COMM6 == recId && SC_COMM6 == recId)
+            break;
+        sgb_pause();
+    }
+    sgb_take_fb();
+    for (int y = 0; y < n; ++y) w[y] = (unsigned short)(PM_FB_PIXELS / 2 + y * (PM_STRIDE / 2)); /* (the line table) */
+    if (t >= 400000u) {
+        floor_hw_end();
+        return false;
+    }
+    for (int k = 0; k < 48; ++k) flrSent[k] = flrGen[k];
+    ttlPYSent = ttlPY;
     return true;
 }
 void scd_pm_sky(int layerID)
@@ -1534,11 +1607,11 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
         cram[0] = 0x0000;
         /* REV R5D: the floor's lines' palette (the title: line 0's) */
         const unsigned short *fpal = flrTitle ? pal : fullPalette[gfxLineBuffer[(SCREEN_YSIZE / 2) + 12]];
-        const int n = flrTitle ? 32 : 16;
+        const int n = flrTitle ? 48 : 16;
         for (int k = 0; k < n; ++k) {
             unsigned int c;
-            if (k == 0 || k == 16) { /* (the title: CRAM 0 the sky - its rectangle's colour; 16 unused) */
-                if (!flrTitle || k == 16) {
+            if (!(k & 15)) { /* (the title: CRAM 0 the sky - its rectangle's colour; 16, 32 unused) */
+                if (!flrTitle || k) {
                     flrGen[k] = 0;
                     continue;
                 }
@@ -1575,6 +1648,8 @@ static void pm_present()
         if (layoutQLost) /* more changes in one frame than the queue holds: all the layouts into the other buffer -
                             from this one (the newest), so before the swap (the review: after it, the old ones won) */
             pm_mirror(PM_FB_POOL, pm_pool_used());
+        if (floorHW && flrTitle)
+            title_hw_frame(ttlV32); /* REV R5F: the Genesis's part of the title's picture, for this vertical blank */
         flip_wait(); /* the frame is shown from this vertical blank */
         pm_colours();
         if (!pmShown) {

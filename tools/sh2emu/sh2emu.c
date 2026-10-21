@@ -2186,6 +2186,7 @@ static void blob_update(void) /* REV R4: where the scene image (cart 0x080000) h
     }
 }
 static int flr_on, flr_file = -1;    /* SONIC REV R5: command 80's floor (sub_finish) */
+static int flr_title;                /* REV R5F: it is the title's (records on) */
 static u64 flr_frames, flr_colours;
 static void sub_finish(void)
 {
@@ -2197,6 +2198,8 @@ static void sub_finish(void)
         cmd != 58 && cmd != 59) {
         printf("[f%5d] SUB: CMD %d ends the floor first: %llu floor frames, %llu colour commands\n", frame_no(), cmd,
                (unsigned long long)flr_frames, (unsigned long long)flr_colours);
+        if (flr_title)
+            sgb_on = 0; /* REV R5F */
         flr_on = 0;
     }
     if (cmd == 38) {
@@ -2513,10 +2516,17 @@ static void sub_finish(void)
                 sprintf(nm, "FLOOR%d.BIN", hi);
                 k = find_file(nm);
             }
-            if (k >= 0 && files[k].len == (hi == 9 ? 0x42000u : 0x40000u) && !memcmp(files[k].data, "FLR1", 4) &&
-                rd_be16(files[k].data + 4) <= 0x10000 / 128)
+            if (k >= 0 && files[k].len == (hi == 9 ? 0x44000u : 0x40000u) && !memcmp(files[k].data, "FLR1", 4) &&
+                rd_be16(files[k].data + 4) <= 0x10000 / 128 &&
+                (hi != 9 || (!memcmp(files[k].data + 0x40000, "TTL2", 4) && rd_be16(files[k].data + 0x40004) == 104)))
                 ok = 1;
-            flr_on = ok, flr_file = ok ? k : -1, flr_frames = 0, flr_colours = 0;
+            if (ok && hi == 9) { /* REV R5F: the title - the SH2's records on (cd32x/sub_main.c floor_begin) */
+                sgb_on = 1;
+                sgb_ready = sgb_bad = 0;
+                sgb_last = 0;
+                SET_COMM(6, 0);
+            }
+            flr_on = ok, flr_file = ok ? k : -1, flr_frames = 0, flr_colours = 0, flr_title = ok && hi == 9;
             printf("[f%5d] SUB: CMD 80 floor begin, %s %d -> %s\n", frame_no(), hi == 9 ? "the title's clouds" : "special stage", hi,
                    ok ? "ok" : k < 0 ? "NO FILE" : "BAD FILE");
             SET_COMM(12, ok);
@@ -2534,14 +2544,17 @@ static void sub_finish(void)
             u32 v = 0;
             if (flr_on && hi >= 1 && hi <= 15)
                 v = rd_be16(files[flr_file].data + 8 + 2 * (hi - 1));
-            else if (flr_on && hi >= 17 && hi <= 31 && files[flr_file].len > 0x40000) /* REV R5E: the planet's */
-                v = rd_be16(files[flr_file].data + 0x40000 + 10 + 2 * (hi - 17));
+            else if (flr_on && hi >= 17 && hi <= 47 && hi != 32 && files[flr_file].len > 0x40000) /* REV R5F: the */
+                v = rd_be16(files[flr_file].data + 0x40000 + (hi < 32 ? 42 + 2 * (hi - 17) : 12 + 2 * (hi - 33)));
+                /* title's line 1 (the mountains, the water), line 2 (the planet) */
             set_comm32(8, v);
         }
         else if (op == 7) {
             if (flr_on)
                 printf("[f%5d] SUB: CMD 80 floor end: %llu floor frames, %llu colour commands\n", frame_no(),
                        (unsigned long long)flr_frames, (unsigned long long)flr_colours);
+            if (flr_on && flr_title)
+                sgb_on = 0; /* REV R5F */
             flr_on = 0;
         }
         SET_COMM(0, 0);
