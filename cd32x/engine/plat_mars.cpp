@@ -1096,6 +1096,7 @@ static bool floorHW = false; /* REV R5: the special stage's floor on the Sega CD
 static bool flrTitle = false;           /* REV R5E: ... the title's clouds instead (FLOOR9.BIN) */
 static unsigned int ttlSky = 0x000060u; /* REV R5E: the title's sky (its full-screen rectangle): the Genesis backdrop */
 static bool title_hw_frame(int v32);    /* REV R5E (below) */
+static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE; /* (below) */
 static void sky_hw_record();            /* REV R5G (below) */
 /* REV R5B: the floor's first row (0 - 100 from line 124) that lies inside the floor's map from its first pixel to its
    last - from there on, the chip's floor. The rows above it (the far ones, at the horizon) reach past the map's edge,
@@ -1365,11 +1366,12 @@ static void floor_hw_end() /* (pm_end) */
     if (!floorHW)
         return;
     comm_idle();
+    SC_COMM4 = 0; /* REV R5F: the records' last id - the Sub-CPU would take it for a start-up fault and print it */
     SC_COMM2 = 7;
     sd_cmd_long(80);
     floorHW    = false;
     flrTitle   = false;
-    genesisOff = false; /* (R5B: the Sub-CPU's set-up after it - command 68's off - leaves the display on, blank) */
+    genesisOff = true; /* (REV R5F: the Sub-CPU leaves the Genesis display off - its text layer stays dark) */
 }
 static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values to the Sub-CPU, its rows see-through;
                                            false (R5B): the Sub-CPU ended the floor - pm_sky draws it */
@@ -1399,7 +1401,7 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     SC_COMM12   = 0xFFFF;
     if (sd_cmd(80) == 0 && SC_COMM12 == 0) { /* R5B: ended on the Sub-CPU's side (another command): the SH2's floor */
         floorHW    = false;
-        genesisOff = false;
+        genesisOff = true; 
         return false;
     }
     /* the whole picture colour 0 in the SH2's buffer (the frame buffer itself: the overwrite image skips 0) - REV R5G:
@@ -1430,7 +1432,7 @@ static bool title_hw_frame(int v32)
     if (sd_cmd(80) == 0 && SC_COMM12 == 0) {
         floorHW    = false;
         flrTitle   = false;
-        genesisOff = false;
+        genesisOff = true; 
         return false;
     }
     volatile unsigned short *w = SC_FB;

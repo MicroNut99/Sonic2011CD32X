@@ -595,6 +595,7 @@ static void floor_end(void)
     do_md_cmd0(MD_CMD_INIT_HW_);          /* the listener's VDP set-up, font, colours (as command 68's off) */
     do_md_cmd0(MD_CMD_CLEAR_B);
     do_md_cmd0(MD_CMD_CLEAR_A);
+    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8134);   /* R5F: the display off again (no diagnostic text between scenes) */
     floor_on = 0;
     flr_flip = 0;
 }
