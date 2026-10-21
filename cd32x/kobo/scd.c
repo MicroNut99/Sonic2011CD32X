@@ -123,6 +123,7 @@ void wait_do_cmd(char cmd)
    never reach anything. open_file() (sub_stubs.c) calls the filesystem code in
    cdfs.s directly and returns (length << 32) | start_lba, or -1. */
 extern int64_t open_file(const char *name);
+extern int dirc_root_has(const char *name); /* SONIC REV R4K (sub_stubs.c) */
 
 /* Diagnostic, only used when the open fails: shows what is really in the
    root directory of the disc (rows 19+), so we can see whether IMAGE.RAW is
@@ -200,9 +201,11 @@ int64_t scd_open_file(const char *name)
     scd_last_timeout_code = 0;
 
     r = open_file(name);                    /* disc root first          */
-    if (r < 0)
+    /* SONIC REV R4K: with the root directory in RAM (sub_stubs.c) a name not there is not on the disc: no "/ROMS"
+       search (unless the root has a ROMS entry) and no root listing - both read the disc again */
+    if (r < 0 && dirc_root_has("ROMS") != 0)
         r = scd_find_in_dir("/ROMS", name); /* then the ROMS directory  */
-    if (r < 0)
+    if (r < 0 && dirc_root_has("ROMS") < 0)
         scd_list_root();
     return r;
 }

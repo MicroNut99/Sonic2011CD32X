@@ -1362,16 +1362,37 @@ chilly_memcpy:
         moveq.l #0,d0
         rts
 
+| SONIC REV R4K: chilly_rv_memcpy copies 4 bytes a step when the source, the destination and the length are all
+| multiples of 4 (every load into the cart: 16 KB pieces from Word RAM 0x200000). The byte loop cost about 42 clocks
+| a byte - 0.7 s of the 2.0 s each 128 KB of a load took (measured in ares, 20 Oct); move.l is two word writes to the
+| 16-bit cart, the same bytes in the same places. Anything else (the 2-byte cart probe) takes the byte loop, as before.
+| Interrupts stay on and RV = 1 as before.
 chilly_rv_memcpy:
         bset    #0,0xA15107
         movea.l 4(sp),a1
         movea.l 8(sp),a0
         move.l  12(sp),d0
+        move.w  a0,d1
+        or.w    d0,d1
+        move.l  d2,-(sp)
+        move.w  a1,d2
+        or.w    d2,d1
+        move.l  (sp)+,d2
+        andi.w  #3,d1
+        bne.b   0f
+        lsr.l   #2,d0
+        beq.b   2f
+1:
+        move.l  (a0)+,(a1)+
+        subq.l  #1,d0
+        bne.b   1b
+        bra.b   2f
 0:
         move.b  (a0)+,d1
         move.b  d1,(a1)+
         subi.l  #1,d0
         bgt.b   0b
+2:
         bclr    #0,0xA15107
         moveq.l #0,d0
         rts
