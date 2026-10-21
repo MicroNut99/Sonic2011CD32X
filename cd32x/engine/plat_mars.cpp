@@ -1099,6 +1099,7 @@ static unsigned int ttlSky = 0x000060u; /* REV R5E: the title's sky (its full-sc
 static bool title_hw_frame(int v32);    /* REV R5E (below) */
 static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE; /* (below) */
 static void sky_hw_record();            /* REV R5G (below) */
+static void fb_picture_clear(); /* REV R5F / R5G (below) */
 /* REV R5B: the floor's first row (0 - 100 from line 124) that lies inside the floor's map from its first pixel to its
    last - from there on, the chip's floor. The rows above it (the far ones, at the horizon) reach past the map's edge,
    where the engine's floor is see-through and shows the sky behind it: those rows the SH2 still draws itself, over the
@@ -1244,18 +1245,13 @@ void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B,
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
-    if (floorHW && flrTitle && XPos <= 0 && YPos <= 0 && XPos + width >= SCREEN_XSIZE && YPos + height >= 100 && A >= 0xFF) {
+    if (floorHW && flrTitle && XPos <= 0 && YPos <= 0 && XPos + width >= SCREEN_XSIZE && YPos + height == 100 && A >= 0xFF) {
         /* REV R5E: the title's sky - the Genesis backdrop shows it (behind the chip's clouds and the planet); the 32X
            picture colour 0 (see-through) where the rectangle was, and down to the clouds' last line (112: the engine's
            clouds covered lines 100-111 below the clouds object's rectangle, 320 x 100) */
         ttlSky = (unsigned int)(R & 0xFF) << 16 | (unsigned int)(G & 0xFF) << 8 | (unsigned int)(B & 0xFF);
-        PM_FLUSH();
-        if (pmSkip)
-            return;
-        /* REV R5F: the whole picture - the 32X draws only the sprites in front now (the mountains, the water and the
-           planet are the Genesis's): what the buffer held two pictures ago goes */
-        volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
-        for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; i += 4) p[i] = p[i + 1] = p[i + 2] = p[i + 3] = 0;
+        /* (REV R5F: the picture was cleared when it began - pm_present, fb_picture_clear; the engine's full-screen
+           rectangles of the same colour, its fades, are drawn as they are) */
         return;
     }
     pm_rect(XPos, YPos, width, height, R, G, B, A);
@@ -1379,6 +1375,7 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
     }
     floorHW    = true;
     genesisOff = false; /* (the Sub-CPU switched the Genesis display on) */
+    fb_picture_clear(); /* REV R5F / R5G: (the other buffer: after the first picture) */
 }
 static void floor_hw_end() /* (pm_end) */
 {
@@ -1427,10 +1424,7 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     /* the whole picture colour 0 in the SH2's buffer (the frame buffer itself: the overwrite image skips 0) - REV R5G:
        the sky is the Genesis's planes now, the floor its window; the SH2 draws what is in front */
     const int row0 = (PM_LINES / 2) + 12 + flr_first_row(layer); /* REV R5B: the rows the chip draws */
-    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
-    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * SKY_ROW) / 4; i += 4) p[i] = p[i + 1] = p[i + 2] = p[i + 3] = 0;
-    p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS + PM_STRIDE * row0); /* (lines 120 - row0: the layers') */
-    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * (PM_LINES - row0)) / 4; ++i) p[i] = 0;
+    /* (REV R5G: the picture was cleared when it began - pm_present, fb_picture_clear) */
     if (row0 > (PM_LINES / 2) + 12)
         pm_sky_rows(layerID, row0); /* REV R5B: the rows past the map's edge, as before (after the colours: no pmSkip) */
     return true;
@@ -1514,6 +1508,12 @@ static bool title_hw_frame(int v32)
    and h-scroll (the runs the sky layers left - pm_layer_end; the swirl's - scd_pm_draw3dscene), the colours that
    changed (CRAM 0-63: the sky's lines 0-2, the floor's line 3). The words it covers at the frame buffer's start are kept
    (SKY_SAVE) and written back after. The 68000 does not take it: the SH2 draws it all again */
+static void fb_picture_clear() /* REV R5F / R5G: the SH2's buffer all colour 0 (the title, a special stage: the 32X draws
+                                  only what is in front of the Genesis's picture) */
+{
+    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
+    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; i += 4) p[i] = p[i + 1] = p[i + 2] = p[i + 3] = 0;
+}
 static void sky_hw_record()
 {
     volatile unsigned short *w = SC_FB;
@@ -1740,10 +1740,12 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
             b = (ia * b >> 8) + (a * fb >> 8);
         }
         unsigned short w = (unsigned short)(0x8000 | b << 10 | g << 5 | r); /* bit 15: in front of the Genesis */
-        cram[i]          = w == 0x8000 ? 0x8400 : w;                         /* (as the loading picture: never 0x8000) */
+        if (i || !floorHW) /* (REV R5F: colour 0 below, once - a passing wrong value showed on the top lines) */
+            cram[i] = w == 0x8000 ? 0x8400 : w; /* (as the loading picture: never 0x8000) */
     }
     if (floorHW) { /* REV R5: colour 0 see-through (the Genesis floor shows); the floor's colours for the Genesis */
-        cram[0] = 0x0000;
+        if (!flrTitle)
+            cram[0] = 0x0000;
         /* REV R5D: the floor's lines' palette (the title: line 0's) */
         const unsigned short *fpal = flrTitle ? pal : fullPalette[gfxLineBuffer[(SCREEN_YSIZE / 2) + 12]];
         const int n = flrTitle ? 48 : 64; /* (REV R5G: CRAM 0-63 - the sky's lines 0-2 from line 0's palette, the floor's
@@ -1794,6 +1796,8 @@ static void pm_present()
             sky_hw_record(); /* REV R5G: the special stage's sky's scroll and the colours, for this vertical blank */
         flip_wait(); /* the frame is shown from this vertical blank */
         pm_colours();
+        if (floorHW)
+            fb_picture_clear(); /* REV R5F / R5G: the next picture starts empty (the Genesis's behind it) */
         if (!pmShown) {
             MARS_VDP_DISPMODE = (unsigned short)((MARS_VDP_DISPMODE & 0x8000) | MARS_VDP_MODE_256);
             pmShown           = true;
