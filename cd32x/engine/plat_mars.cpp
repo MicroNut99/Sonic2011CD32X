@@ -3325,7 +3325,8 @@ bool plat_stage_loading()
        loaded into page 0 first (so the cart test finds the title there, not an act), then the menu */
     static bool fromAct  = false;
     const bool toOptions = fromAct && activeStageList == 0 && stageListPosition == 0;
-    fromAct              = scene_group(file) != 0 && GetGlobalVariableByName("Options.AttractMode") == 0;
+    fromAct              = (scene_group(file) != 0 || (file & 0xF00u) == 0x400u) && /* REV R5C: a special stage's EXIT too */
+              GetGlobalVariableByName("Options.AttractMode") == 0;
 #endif
     big_prepare(file); /* REV R4G: the act page the scene is in or goes to; an act's start: its preload planned */
     int bad = scene_load(file);
