@@ -67,6 +67,10 @@ does the same. R4N's SH2s computed the floor for every picture themselves, and t
 special stage), the loading picture shows **LOADING NEXT LEVEL INTO CART** under its bar. The display is black for
 two frames while the line is drawn.
 
+**The special stages' pause menu:** it reads CONTINUE, RESTART, **MENU** too, and MENU opens the level select, as in
+the acts (R4M / R4N). Its words are in `Special/ScoreScreen.gif`, so R4N's change to the acts' pause sheet did not reach
+it; here EXIT's frame points at that sheet's MENU (x 59, y 209, 36 × 11).
+
 **BONUS:** the stage list menu shows PRESENTATION, REGULAR, SPECIAL (`engine/Debug.cpp`, `patches/engine.patch`).
 
 ## The boot stack
@@ -95,7 +99,7 @@ two frames while the line is drawn.
 |---|---|
 | `cd32x/sub_main.c` | command 80: the floor (Word RAM 2 Mbit mode, the chip, the window plane) |
 | `cd32x/engine/plat_mars.cpp` | the SH2's side: floor values per picture, colour 0 see-through, the fall-back; the next special stage's preload; the loading notice |
-| `patches/engine.patch` (`engine/Debug.cpp`) | no BONUS in the stage list menu (R4N's changes kept) |
+| `patches/engine.patch` (`engine/Debug.cpp`, `engine/Script.cpp`) | no BONUS in the stage list menu; MENU in the special stages' pause menu (R4N's changes kept) |
 | `cd32x/engine/scd_pm.h` | the sky layers stop at the floor's first row |
 | `tools/build_floor.py` | new: `FLOOR1.BIN` – `FLOOR8.BIN` |
 | `tools/sh2emu/sh2emu.c` | command 80 answered as the Sub-CPU does (the file's checks; the chip's picture is not drawn) |
@@ -169,6 +173,7 @@ All three runs must end `VERDICT no problems found`.
 - **If the floor stays black** while the rest runs, the chip's floor is not reaching the screen. Line 10 and a photo
   tell me where.
 - **The stage list menu:** PRESENTATION, REGULAR, SPECIAL.
+- **Pause in a special stage:** CONTINUE, RESTART, MENU. MENU opens SELECT A STAGE LIST.
 - **An act's start that loads:** the loading picture shows **LOADING NEXT LEVEL INTO CART** under the bar. The bar now
   includes the next special stage, so these loads take longer.
 - **The giant ring:** the special stage starts without the loading picture when it was preloaded.
