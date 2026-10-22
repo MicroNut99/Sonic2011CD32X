@@ -57,8 +57,8 @@
 #ifndef PM_DIRTY
 #define PM_DIRTY(x0, y0, x1, y1) ((void)0)
 #endif
-#ifndef PM_LINE_FULL
-#define PM_LINE_FULL(y) ((void)0)
+#ifndef PM_LINE_DREW
+#define PM_LINE_DREW(y, full) ((void)0) /* a layer drew line y (in behind colours); full: every pixel it covers */
 #endif
 #ifndef PM_FRESH
 #define PM_FRESH() ((void)0)
@@ -1149,6 +1149,8 @@ struct PmHlineJob {
     int ylim; /* REV R5B: the lines drawn (the chip's floor covers the rest: PM_HLINE_LINES) */
     int y0;   /* REV R5G: ... from this one (the Genesis's sky above it) */
     const unsigned char *remap; /* REV R5H: each pixel's colour through this table (the behind colours), or none */
+    const unsigned char *skip;  /* REV R5H: lines skipY0 - ylim: the pixels x0 / 2 - x1 / 2 not drawn (2 bytes a line) */
+    int skipY0;
 };
 /* REV R5H: a layer's row with its colours through rm (rm[0] = 0); *zero = 1 where a pixel stays see-through */
 static inline void pm_remap_row(unsigned int off, const unsigned char *s, int n, int dir, const unsigned char *rm, int *zero)
@@ -1222,10 +1224,26 @@ static void pm_hline_part(const PmHlineJob *j, int part, int parts)
         int x                     = 0, chunkBase = 0;
         unsigned int chunkCol     = ~0u;
         int zero                  = 0; /* REV R5H: a pixel of the line left see-through */
+        int sa = PM_STRIDE, sb = PM_STRIDE; /* REV R5H: pixels sa - sb not drawn (the chip's floor covers them) */
+        if (j->skip && y >= j->skipY0) {
+            sa = 2 * j->skip[2 * (y - j->skipY0)], sb = 2 * j->skip[2 * (y - j->skipY0) + 1];
+            if (sb <= sa)
+                sa = sb = PM_STRIDE;
+        }
         while (x < PM_STRIDE) {
+            if (x == sa) {
+                unsigned int d = (unsigned int)(sb - x);
+                x = sb, sa = PM_STRIDE;
+                cx += d;
+                while (cx >= uW)
+                    cx -= uW;
+                continue;
+            }
             int px = (int)(cx & 15), n = 16 - px;
             if (n > PM_STRIDE - x)
                 n = PM_STRIDE - x;
+            if (x < sa && x + n > sa)
+                n = sa - x;
             if ((cx >> 7) != chunkCol) { /* (the layout is in the frame buffer: one read per chunk, not per tile) */
                 chunkCol  = cx >> 7;
                 chunkBase = (row[chunkCol] << 6) + 8 * (int)tileY;
@@ -1251,24 +1269,27 @@ static void pm_hline_part(const PmHlineJob *j, int part, int parts)
             if (cx >= uW)
                 cx -= uW;
         }
-        if (j->remap && !zero)
-            PM_LINE_FULL(y);
+        if (j->remap)
+            PM_LINE_DREW(y, !zero);
     }
 }
 PM_SPLIT_FN(pm_hline_part, PmHlineJob)
 /* DrawHLineScrollLayer's pixels: lines[] holds each line's x (the engine's own scroll arithmetic), tileYPos the layer
    row at the screen's top - every line of the layer, its tiles of this half (visualPlane == aboveMidPoint) */
-static void pm_hline_range(int layerID, int tileYPos, const int *lines, int y0, int y1, const unsigned char *remap);
+static void pm_hline_range(int layerID, int tileYPos, const int *lines, int y0, int y1, const unsigned char *remap,
+                           const unsigned char *skip, int skipY0);
 static void pm_hline_from(int layerID, int tileYPos, const int *lines, int y0) /* REV R5G: from line y0 */
 {
 #ifdef PM_HLINE_LINES
-    pm_hline_range(layerID, tileYPos, lines, y0, PM_HLINE_LINES, 0);
+    pm_hline_range(layerID, tileYPos, lines, y0, PM_HLINE_LINES, 0, 0, 0);
 #else
-    pm_hline_range(layerID, tileYPos, lines, y0, PM_LINES, 0);
+    pm_hline_range(layerID, tileYPos, lines, y0, PM_LINES, 0, 0, 0);
 #endif
 }
-/* REV R5H: lines y0 - y1 (y1: at most PM_HLINE_LINES), the colours through remap (or none) */
-static void pm_hline_range(int layerID, int tileYPos, const int *lines, int y0, int y1, const unsigned char *remap)
+/* REV R5H: lines y0 - y1 (y1: at most PM_HLINE_LINES), the colours through remap (or none): those are not in the drawn
+   rectangles (PM_DIRTY) - each line says what it drew (PM_LINE_DREW); from line skipY0 on, skip's pixels left out */
+static void pm_hline_range(int layerID, int tileYPos, const int *lines, int y0, int y1, const unsigned char *remap,
+                           const unsigned char *skip, int skipY0)
 {
     PM_FLUSH();
     if (pmSkip)
@@ -1291,11 +1312,14 @@ static void pm_hline_range(int layerID, int tileYPos, const int *lines, int y0, 
 #endif
     if (y1 < j.ylim)
         j.ylim = y1;
-    j.y0    = y0;
-    j.remap = remap;
+    j.y0     = y0;
+    j.remap  = remap;
+    j.skip   = skip;
+    j.skipY0 = skipY0;
     if (j.y0 >= j.ylim)
         return;
-    PM_DIRTY(0, j.y0, PM_STRIDE, j.ylim);
+    if (!remap)
+        PM_DIRTY(0, j.y0, PM_STRIDE, j.ylim);
     PM_SPLIT(pm_hline_part, &j); /* REV R4D */
 }
 static void pm_hline(int layerID, int tileYPos, const int *lines) { pm_hline_from(layerID, tileYPos, lines, 0); }

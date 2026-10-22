@@ -1148,14 +1148,80 @@ static int flr_chip_row(const TileLayer *layer)
 }
 /* REV R5B: with the chip's floor, the line-scroll layers (the sky, the horizon) only down to the floor's first row: the
    rows below are colour 0 in the 32X picture (floor_hw_frame), so what the layers drew there was never seen */
+/* REV R5H: flr_first_row, and for each row above it (line 124 + k) the pixels that sample the map (PM_SKIP): there the
+   floor is the chip's (or, above flr_chip_row, the SH2's - drawn in front) and covers the layers behind it, so they are
+   not drawn. Pixel p samples X + 2 p xb (12 bits of fraction); inside: 0 <= it < the map's size, on both axes. Kept 2
+   pixels inside (the engine's four samples, the chip's one), in steps of 2 pixels. sgbB's memory (acts only, as sgbA) */
+#define PM_SKIP ((unsigned char *)&sgbB) /* [2 * 100]: line 124 + k's pixels from 2 a to 2 b not drawn (a >= b: none) */
+static inline int pm_floor_divf(int n, int d) /* floor(n / d), d > 0 */
+{
+    int q = pm_div(n, d);
+    if (q * d > n)
+        --q;
+    return q;
+}
+static void pm_axis(int A, int D, int hi, int *p0, int *p1) /* the p with 0 <= A + D p < hi, into [p0, p1) */
+{
+    int a, b;
+    if (D == 0) {
+        if (A < 0 || A >= hi)
+            *p1 = *p0;
+        return;
+    }
+    if (D > 0) /* p >= ceil(-A / D), p < ceil((hi - A) / D) */
+        a = -pm_floor_divf(A, D), b = -pm_floor_divf(A - hi, D);
+    else /* p >= floor((A - hi) / -D) + 1, p <= floor(A / -D) */
+        a = pm_floor_divf(A - hi, -D) + 1, b = pm_floor_divf(A, -D) + 1;
+    if (a > *p0)
+        *p0 = a;
+    if (b < *p1)
+        *p1 = b;
+}
+static int pm_floor_scan(const TileLayer *layer)
+{
+    static_assert(sizeof(sgbB) >= 200, "REV R5H: the skip table in sgbB");
+    const int lw = (int)layer->xsize << 19, lh = (int)layer->ysize << 19;
+    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13;
+    fx      = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
+    fz      = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
+    const int x = fx << 9, z = fz << 9, y = layer->YPos;
+    const int sn = sinMLookupTable[layer->angle & 0x1FF], cs = cosMLookupTable[layer->angle & 0x1FF];
+    unsigned char *sk = PM_SKIP;
+    for (int k = 0; k < 100; ++k) {
+        int q  = pm_div(y, (9 + 2 * k) << 8);
+        int xb = (q * -cs) >> 9, yb = (sn * q) >> 9;
+        int X = x + ((3 * sn * q) >> 2) - xb * 320 + xb, Y = z + ((3 * cs * q) >> 2) - yb * 320 + yb;
+        int p0 = 0, p1 = 320;
+        if (xb > 32767 || xb < -32768 || yb > 32767 || yb < -32768)
+            p1 = 0; /* (far: as flr_first_row) */
+        else {
+            pm_axis(X, 2 * xb, lw, &p0, &p1);
+            pm_axis(Y, 2 * yb, lh, &p0, &p1);
+        }
+        if (p0 <= 0 && p1 >= 320 && p1 > p0)
+            return k; /* (the whole row inside: from here on the chip's floor - the layers stop above it) */
+        p0 += 2, p1 -= 2;
+        const int a = (p0 + 1) >> 1, b = p1 >> 1;
+        sk[2 * k] = (unsigned char)(a > 0 ? (a < 164 ? a : 164) : 0), sk[2 * k + 1] = (unsigned char)(b > a && b > 0 ? (b < 164 ? b : 164) : 0);
+    }
+    return 100;
+}
+static short pmRow0 = -1; /* REV R5H: pm_hline_lines' answer for this engine frame (-1: not yet - pm_present) */
 static int pm_hline_lines()
 {
     if (!floorHW)
         return SCREEN_YSIZE;
+    if (pmRow0 >= 0)
+        return pmRow0;
+    int r = SCREEN_YSIZE;
     for (int s = 0; s < 4; ++s)
-        if (activeTileLayers[s] < LAYER_COUNT && stageLayouts[activeTileLayers[s]].type == LAYER_3DSKY)
-            return (SCREEN_YSIZE / 2) + 12 + flr_first_row(&stageLayouts[activeTileLayers[s]]);
-    return SCREEN_YSIZE;
+        if (activeTileLayers[s] < LAYER_COUNT && stageLayouts[activeTileLayers[s]].type == LAYER_3DSKY) {
+            r = (SCREEN_YSIZE / 2) + 12 + (flrTitle ? flr_first_row(&stageLayouts[activeTileLayers[s]])
+                                                    : pm_floor_scan(&stageLayouts[activeTileLayers[s]]));
+            break;
+        }
+    pmRow0 = (short)r;
+    return r;
 }
 #define PM_HLINE_LINES pm_hline_lines()
 #define PM_VERTS ((Vertex *)(0x24000000 + PM_FB_VERTS))
@@ -1232,7 +1298,8 @@ static bool slave_ready()
 #define PM_DIRTY_AT 0x1F800
 #define PM_BANDS (PM_LINES / 4)
 /* (16-bit words: a byte write of 0 into the frame buffer does not happen - the 32X's rule, ares m32x/bus-internal.cpp)
-   [0, 56) each band's x0 / 4 << 8 | x1 / 4 (0xFF00: none), [56, 280) each line's flags */
+   [0, 56) each band's x0 / 4 << 8 | x1 / 4 (0xFF00: none), [56, 280) each line's flags: bit 0 a layer wrote every pixel
+   it covers (all but the floor's in-map part, pm_floor_scan), bit 1 the clear left it to the layer, bit 2 a layer drew */
 #define PM_DB ((volatile unsigned short *)(0x24000000 + PM_DIRTY_AT))
 #define PM_DB_NONE 0xFF00
 static unsigned char pmDirtyOn, pmFresh, pmFullClears; /* the record kept; the picture not yet cleared; whole clears left */
@@ -1251,10 +1318,10 @@ static void pm_dirty_reset();
         if (pmDirtyOn)                    \
             pm_dirty(x0, y0, x1, y1);     \
     } while (0)
-#define PM_LINE_FULL(y)                   \
-    do {                                  \
-        if (pmDirtyOn)                    \
-            PM_DB[PM_BANDS + (y)] |= 1;   \
+#define PM_LINE_DREW(y, full)                                              \
+    do {                                                                   \
+        if (pmDirtyOn)                                                     \
+            PM_DB[PM_BANDS + (y)] |= (unsigned short)((full) ? 5 : 4);     \
     } while (0)
 #define PM_FRESH()                        \
     do {                                  \
@@ -1363,7 +1430,8 @@ void scd_pm_draw3dscene(int sheetID)
             const unsigned char *sheet = &PM_GFX[gfxSurface[sheetID].dataPosition];
             const int rb = pm_opaque(1 << gfxSurface[sheetID].widthShifted);
             const int ye = rows < 128 ? rows : 128;
-            PM_DIRTY(0, SKY_ROW, PM_STRIDE, ye);
+            if (!pmBehindOn)
+                PM_DIRTY(0, SKY_ROW, PM_STRIDE, ye);
             for (int y = SKY_ROW; y < ye; ++y) {
                 const int xl = x0 + (x2 - x0) * y / 128;
                 const unsigned char *t = sheet + (v0 + y) * rb + u0;
@@ -1384,8 +1452,8 @@ void scd_pm_draw3dscene(int sheetID)
                         pm_sprite_row((unsigned int)(PM_STRIDE * y + x), t + c, k, 1);
                     x += k, c = 0;
                 }
-                if (pmBehindOn && !zero)
-                    PM_LINE_FULL(y);
+                if (pmBehindOn)
+                    PM_LINE_DREW(y, !zero);
             }
         }
         comm_idle();
@@ -1645,13 +1713,13 @@ static void pm_fresh_clear() /* (PM_FRESH: the picture's first draw) */
             t[k] = PM_DB_NONE;
         for (int y = 4 * k; y < 4 * k + 4; ++y) {
             const unsigned int f = t[PM_BANDS + y];
-            unsigned int nf      = 0;
-            if (y >= SKY_ROW && y < row0 && (f & 1))
-                nf = 2; /* (the layer writes every pixel again) */
-            else if (hi > lo) {
-                volatile unsigned int *q = px + (PM_STRIDE / 4) * y;
-                for (unsigned int i = lo; i < hi; ++i) q[i] = 0;
-            }
+            const bool pred      = y >= SKY_ROW && y < row0 && (f & 1); /* (the layer writes those pixels again) */
+            volatile unsigned int *q = px + (PM_STRIDE / 4) * y;
+            if (!pred && (f & 4))
+                for (unsigned int i = 0; i < PM_STRIDE / 4; ++i) q[i] = 0; /* (a layer's pixels: the whole line) */
+            else if (hi > lo)
+                for (unsigned int i = lo; i < hi; ++i) q[i] = 0; /* (the rectangles drawn) */
+            const unsigned int nf = pred ? 2 : 0;
             if (f != nf)
                 t[PM_BANDS + y] = (unsigned short)nf;
         }
@@ -1664,7 +1732,7 @@ static void pm_dirty_check() /* (pm_present: the picture's end) a line left uncl
     volatile unsigned short *t = PM_DB;
     for (int y = SKY_ROW; y < PM_LINES; ++y)
         if ((t[PM_BANDS + y] & 3) == 2)
-            t[(unsigned int)y >> 2] = (unsigned short)(PM_STRIDE / 4); /* (x 0 to the line's end) */
+            t[PM_BANDS + y] = 4; /* (left to the layer, which did not cover it: the whole line next time) */
 }
 /* REV R5H: THE BEHIND COLOURS - a 32X colour without its through bit shows only where the Genesis shows its backdrop
    (ares m32x/vdp.cpp plot: PRI 0, the 32X pixel shown if its through bit is set or the Genesis pixel is the backdrop). The
@@ -1813,7 +1881,9 @@ static void pm_layer_range(int slot, int y0, int y1, const unsigned char *rm)
         if (y0 >= y1)
             return;
     }
-    pm_hline_range(slot, ty, pmLines, y0, y1, rm);
+    if (rm)
+        pm_hline_lines(); /* (pm_floor_scan: the skip table for this frame) */
+    pm_hline_range(slot, ty, pmLines, y0, y1, rm, rm ? PM_SKIP : 0, (PM_LINES / 2) + 12);
 }
 /* REV R5G: a run list ({lines, value} pairs) of the h-scroll the Genesis needs to show a layer with these x per line */
 static int sky_runs(volatile unsigned short *r, const int *lines)
@@ -2015,6 +2085,7 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
 static void pm_present() __attribute__((noinline)); /* cart code: plat_present (SDRAM) calls it */
 static void pm_present()
 {
+    pmRow0 = -1; /* REV R5H: (the next frame's floor: its own first row) */
     pm_frame_end();
     pmLogic++;
     bool flip = !pmSkip && (pmShown || pmDrew); /* nothing drawn yet: the display waits, the same buffer again */

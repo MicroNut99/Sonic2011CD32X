@@ -1247,12 +1247,16 @@ int main(void)
                 else {
                     flr_sin = (int16_t)(v >> 16);
                     flr_cos = (int16_t)v;
+                    /* R5B: COMM12 1 - the floor is on; 0 - it was ended (a load ...): the SH2 draws it itself.  R5H: the
+                       answer (and COMM0 = 0) first - the SH2 goes on with its picture while the trace table (100 lines
+                       of 32-bit arithmetic on this 68000) is written and the chip started */
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, floor_on ? 1 : 0);
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
                     if (floor_on) {
                         if (floor_busy) floor_pend = 1;
                         else floor_start();
                     }
-                    /* R5B: COMM12 1 - the floor is on; 0 - it was ended (a load ...): the SH2 draws it itself */
-                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, floor_on ? 1 : 0);
+                    continue;             /* (answered) */
                 }
             }
             else if (op == 8) {           /* R5G: special stage 1's swirl - COMM8 = its picture (0-15) for this picture */
