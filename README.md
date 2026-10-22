@@ -53,6 +53,7 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | R4D: the second SH2, each stage's own sound effects, the underwater colours | **In sh2emu**: three Options Menu switches, each off at power-on (off: R4C) - `2ND SH2` (the 32X's second SH2 draws half of every picture of the picture mode), `STAGE SFX` (each scene's own PCM bank), `UNDERWATER` (Tidal Tempest's water colours from the 68000's line interrupt) - next: the console. [docs/R4D_NOTES.md](docs/R4D_NOTES.md) |
 | R4E: the cart test for the 8 / 16 MB cart | **In sh2emu** (its model of MicroNut99's page mapper: 4, 8, 16 MB and a broken page): the Options Menu's `CART TEST` tries the pages and reports; the game as R4D - next: the new cart. [docs/R4E_NOTES.md](docs/R4E_NOTES.md) |
 | R4F: the 16 MB game mode (`BIG CART`) | **In sh2emu** (`-cart 4 / 8 / 16`): the Options Menu's `BIG CART` row runs the cart test and, if it passes, keeps an act's time periods in the cart's pages - a warp to a period already in is a page switch, no CD; off at power-on (off: R4E) - replaced by R4G. [docs/R4F_NOTES.md](docs/R4F_NOTES.md) |
+| R5A-R5H: the special stages and the title on the Sega CD's graphics chip and the Genesis planes | **On the console (R5G, 21 Oct 2026)**: the floor drawn by the stamp / rotation chip, the skies on the Genesis planes, the title's clouds on the chip. R5H (in sh2emu and ares, not yet burned): every special stage at about 30 pictures a second. [docs/R5H_NOTES.md](docs/R5H_NOTES.md), [docs/R5G_NOTES.md](docs/R5G_NOTES.md) |
 | R4G: the preload (the 16 MB cart) | **In sh2emu** (`-cart 4 / 8 / 16`, `-cartkeep`: the battery): the 16 MB cart is found at power-on; at an act's start its other time periods and the next act's start go into the cart's pages; warps and the next act without the CD; after a power-off the act is ready to play (the pages looked up and checked, no disc) - next: the new cart. [docs/R4G_NOTES.md](docs/R4G_NOTES.md) |
 
 ## Rounds
@@ -70,6 +71,8 @@ every act's layers are one foreground and one per-line-scrolled background – t
 | R4E | MicroNut99's 8 / 16 MB cart (two 2 MB windows, 8 pages of 2 MB): the Sub-CPU's page switch (command 46, COMM2 `0xF8xx`, through the 68000's existing `SAFE_CART_XFER`), the Options Menu's `CART TEST`, sh2emu's `-cart` / `-cartbad`. The 16 MB game mode is next: [docs/CART16_HANDOFF.md](docs/CART16_HANDOFF.md). [docs/R4E_NOTES.md](docs/R4E_NOTES.md) |
 | R4G | The preload: R4F's pairs replaced by act pages (2-6: the engine's copy and one act scene each, used in place; their act files in page 7) - an act's start loads its other periods and the next act's start; the battery keeps them, and after a power-on the pages are looked up in a table in `SCDDATA.PAK` (`tools/build_preload.py`) and checked whole; the 16 MB cart found when the title starts (two page register writes, no cart RAM written); title demos stay in page 0. The boot stack: R4D's, plus `cd32x/sub_main.c`'s two cases inside command 46 (R4E's page register write, R4F's file slot - needed: R4D cannot write the page registers); nothing more in R4G. sh2emu `-cartkeep`. [docs/R4G_NOTES.md](docs/R4G_NOTES.md) |
 | R4F | The 16 MB game mode: the cart as pairs of pages (pages 2k and 2k + 1 = a whole 4 MB cart as the game knows it: 16 MB four pairs, 8 MB two), an act's time periods each in a pair, a scene in a pair = both windows switched (window 0 too: each pair has its own verified copy of the engine); the Sub-CPU's command 46 with COMM2 `0xF0nn` (the opened file's cart slot); the Options Menu's `CART` row is `BIG CART` (the cart test, then on); sh2emu checks window 0's switches (`CART-W0`). [docs/R4F_NOTES.md](docs/R4F_NOTES.md) |
+| R5A-R5G | The special stages' floor on the Sega CD's stamp / rotation chip (Sub-CPU command 80, `FLOOR<n>.BIN` from `tools/build_floor.py`), shown on the Genesis window plane; their skies on planes A and B with a scroll value for each line; the title's clouds on the chip, its mountains and water on plane B, its planet as sprites. [docs/R5G_NOTES.md](docs/R5G_NOTES.md) |
+| R5H | Faster special stages: the chip draws the floor's far rows too; layer 1 under the floor on plane B (stages 2-8), stage 1's water in behind colours; the 32X picture cleared only where it was drawn; command 80 not waited for. [docs/R5H_NOTES.md](docs/R5H_NOTES.md) |
 | later | The 22 acts that differ in R0, time travel without loading (all four periods of an act fit the cart together – S2). |
 
 ## Command numbers
@@ -92,7 +95,48 @@ SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 6800
 ```
 
 The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
-the disc's steps are in [docs/R4G_NOTES.md](docs/R4G_NOTES.md) (R4F: [docs/R4F_NOTES.md](docs/R4F_NOTES.md), R4E: [docs/R4E_NOTES.md](docs/R4E_NOTES.md), R4D: [docs/R4D_NOTES.md](docs/R4D_NOTES.md); the bigger RAM cart: [docs/CART16_HANDOFF.md](docs/CART16_HANDOFF.md)) (R4C: [docs/R4C_NOTES.md](docs/R4C_NOTES.md), R4B: [docs/R4B_NOTES.md](docs/R4B_NOTES.md), R4A: [docs/R4_NOTES.md](docs/R4_NOTES.md), R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
+the disc's steps are under *Building the disc* below (the rounds before R5: [docs/R4G_NOTES.md](docs/R4G_NOTES.md) (R4F: [docs/R4F_NOTES.md](docs/R4F_NOTES.md), R4E: [docs/R4E_NOTES.md](docs/R4E_NOTES.md), R4D: [docs/R4D_NOTES.md](docs/R4D_NOTES.md); the bigger RAM cart: [docs/CART16_HANDOFF.md](docs/CART16_HANDOFF.md)) (R4C: [docs/R4C_NOTES.md](docs/R4C_NOTES.md), R4B: [docs/R4B_NOTES.md](docs/R4B_NOTES.md), R4A: [docs/R4_NOTES.md](docs/R4_NOTES.md), R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
+
+## Building the disc (the current round: R5H)
+
+**What you need:**
+- Linux or WSL with `python3`, `gcc`, `make`, `zip` / `unzip` and `genisoimage`.
+- The Sega toolchain at `/opt/toolchains/sega` (`sh-elf` and `m68k-elf`, with the boot blocks).
+- The RSDKv3 decompilation (GitHub zip) unpacked in this folder as `RSDKv3-Decompilation-master/`.
+- Your own `Data.rsdk` from the Steam release of Sonic CD (2011).
+
+Set the two paths, then run the lines from the repository's root:
+
+```bash
+REPO=/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X          # this repository
+DATA=/mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk
+cd $REPO
+rm -rf engine && sh tools/setup_engine.sh && sh tools/check_patch.sh          # engine/ = the decompilation + patches/engine.patch (must say OK)
+make -C host clean && make -C host                                            # the PC build (native scripts, checks)
+rm -rf game_data
+python3 tools/build_audio.py $DATA game_data                                  # music and sound effects
+sh tools/build_native.sh $DATA                                                # the scenes' scripts as SH2 code
+rm -rf cd32x/build_engine && make -C cd32x ENGINE=1 START="0 0" build_engine/engine.bin
+python3 tools/build_game_data.py $DATA game_data --scenes "0:*,1:*,1:*@1,3:*,3:*@1" --start 0:0 --native cd32x/build_engine
+sh tools/build_mdg.sh $DATA game_data "1:*,1:*@1"                             # each act's Genesis planes and sprites
+python3 tools/build_floor.py $DATA game_data                                  # FLOOR1-9.BIN: the special stages and the title
+python3 tools/build_preload.py game_data cd32x/build_engine/engine.bin        # the 16 MB cart's page table
+mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW game_data/FLOOR*.BIN cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
+make -C cd32x ENGINE=1 START="0 0" ROUND=R5H                                  # the disc
+```
+
+**The disc:** `cd32x/build_engine/SCDENG.bin` + `SCDENG.cue`.
+
+**Quick checks:**
+```bash
+grep -ac "BUILD: SONIC CD R5H GAME START" cd32x/build_engine/disc/APP.BIN    # 1
+grep -ac "SH2-VR4I" cd32x/build_engine/disc/APP.BIN                          # 1 (the SH2 boot loader)
+ls cd32x/build_engine/disc/FLOOR*.BIN | wc -l                                # 9
+```
+
+- Each round's notes (`docs/R5H_NOTES.md`) list the md5 of every file the build must reproduce (`R5H_expected.txt`),
+  and the sh2emu runs to do before burning.
+- `ROUND=` only changes the build text in `APP.BIN`; the source decides what is built.
 
 ## Checking a build before burning: tools/sh2emu
 
