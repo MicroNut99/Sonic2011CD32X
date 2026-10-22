@@ -274,8 +274,8 @@ def title_file(data):
 #     the file, u32 its bytes; at 0x100 the VRAM blocks {u16 address, u16 words, the words} up to {0, 0}
 #   (special stage 1) the swirl: 16 pictures x 240 cells (rows 0-14, columns 0-15 of the picture, row after row)
 # The video RAM (cd32x/sub_main.c floor_begin): the floor's buffers 0x0040 / 0x4160; window tables 0xA000 / 0xC000
-# (rows 15-27); plane A 0xC000 (rows 0-14: layer 2), plane B 0xE000 (rows 0-14: layer 1 or the swirl's buffer 0; rows
-# 15-27 empty), special stage 1's plane B' 0xA000 (the swirl's buffer 1); sprites 0xF800 (none), h-scroll 0xFC00; the
+# (rows 15-27); plane A 0xC000 (rows 0-14: layer 2), plane B 0xE000 (rows 0-27: layer 1 - R5H, under the window too -
+# or rows 0-14: the swirl's buffer 0, rows 15-27 empty), special stage 1's plane B' 0xA000 (the swirl's buffer 1); sprites 0xF800 (none), h-scroll 0xFC00; the
 # cells in what is left (SKY_FREE).
 SKY_EXTRA = 0x8000
 SKY_FREE = [(0x8260, 237), (0xA000, 60), (0xAE00, 16), (0xB000, 128), (0xCE00, 16), (0xD000, 128), (0xEE00, 16),
@@ -381,8 +381,8 @@ def sky_file(data, folder, pos):
             img = [swpix[(fy + y) * sw + fx:(fy + y) * sw + fx + 128] for y in range(120)]
             pics.append([cells_of(img, [r], [c])[(r, c)] for r in range(15) for c in range(16)])
         bcells = None
-    else:
-        bcells = cells_of(l1, range(15), range(64))
+    else:  # REV R5H: plane B rows 0-27 - layer 1 under the window too (the chip's floor in front of it: its see-through
+        bcells = cells_of(l1, range(28), range(64))  # pixels show layer 1, as the engine's; the 32X draws none of it)
     acells = cells_of(l2, range(15), range(64)) if l2 else {}
     sets = [frozenset(x for row in cl for x in row) - {0} for cl in list(acells.values()) + list((bcells or {}).values())]
     if swirl:
@@ -415,8 +415,8 @@ def sky_file(data, folder, pos):
             n -= k
         return got
     blocks = []
-    def plane(cells, base):  # deduplicated cells (flips) -> name table rows 0-14 at base
-        names = [0] * (15 * 64)
+    def plane(cells, base):  # deduplicated cells (flips) -> name table rows 0-14 (R5H: plane B rows 0-27) at base
+        names = [0] * (max(r for r, c in cells) + 1 if cells else 15) * 64
         store, out = {}, []
         for (r, c), cl in cells.items():
             cs = cs_of(cl)

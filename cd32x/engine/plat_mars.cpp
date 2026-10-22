@@ -1177,7 +1177,7 @@ static void pm_axis(int A, int D, int hi, int *p0, int *p1) /* the p with 0 <= A
     if (b < *p1)
         *p1 = b;
 }
-static int pm_floor_scan(const TileLayer *layer)
+static int pm_floor_scan(const TileLayer *layer, int kmax) /* (kmax: the rows wanted - stages 2-8: lines 124-127 only) */
 {
     static_assert(sizeof(sgbB) >= 200, "REV R5H: the skip table in sgbB");
     const int lw = (int)layer->xsize << 19, lh = (int)layer->ysize << 19;
@@ -1187,7 +1187,7 @@ static int pm_floor_scan(const TileLayer *layer)
     const int x = fx << 9, z = fz << 9, y = layer->YPos;
     const int sn = sinMLookupTable[layer->angle & 0x1FF], cs = cosMLookupTable[layer->angle & 0x1FF];
     unsigned char *sk = PM_SKIP;
-    for (int k = 0; k < 100; ++k) {
+    for (int k = 0; k < kmax; ++k) {
         int q  = pm_div(y, (9 + 2 * k) << 8);
         int xb = (q * -cs) >> 9, yb = (sn * q) >> 9;
         int X = x + ((3 * sn * q) >> 2) - xb * 320 + xb, Y = z + ((3 * cs * q) >> 2) - yb * 320 + yb;
@@ -1204,7 +1204,7 @@ static int pm_floor_scan(const TileLayer *layer)
         const int a = (p0 + 1) >> 1, b = p1 >> 1;
         sk[2 * k] = (unsigned char)(a > 0 ? (a < 164 ? a : 164) : 0), sk[2 * k + 1] = (unsigned char)(b > a && b > 0 ? (b < 164 ? b : 164) : 0);
     }
-    return 100;
+    return kmax;
 }
 static short pmRow0 = -1; /* REV R5H: pm_hline_lines' answer for this engine frame (-1: not yet - pm_present) */
 /* REV R5H: command 80 without waiting - op 1 (the floor's X, Z) sent at the picture's first draw (the logic is done),
@@ -1225,7 +1225,7 @@ static int pm_hline_lines()
             const TileLayer *layer = &stageLayouts[activeTileLayers[s]];
             if (!flrTitle && !(flrPost & 1))
                 flr_post_xz(layer); /* (REV R5H: the Sub-CPU has it while the SH2 draws) */
-            r = (SCREEN_YSIZE / 2) + 12 + (flrTitle ? flr_first_row(layer) : pm_floor_scan(layer));
+            r = (SCREEN_YSIZE / 2) + 12 + (flrTitle ? flr_first_row(layer) : pm_floor_scan(layer, skyStage == 1 ? 100 : 4));
             break;
         }
     pmRow0 = (short)r;
@@ -1316,6 +1316,7 @@ static unsigned char pmDirtyOn, pmFresh, pmFullClears; /* the record kept; the p
 #define PM_RM_SLOTS 61
 static unsigned char pmBehindOn, pmBehindN;
 static unsigned char pmRowLo[4], pmRowHi[4]; /* REV R5H: each slot's layer: its tile rows (16 lines) with a pixel, lo - hi */
+static unsigned char pmFloorOpaque; /* REV R5H: no see-through pixel in the floor's tiles: its in-map part hides the layers */
 static void pm_behind_add(unsigned char c);
 static void pm_behind_init();
 static void pm_dirty(int x0, int y0, int x1, int y1);
@@ -1535,8 +1536,8 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
         pm_dirty_reset();
     pmBehindOn   = 0;
     if (!flrTitle) {
-        pm_behind_init();
-        pmBehindOn = 1;
+        pm_behind_init(); /* (the layers' rows; stage 1: their behind colours, the floor's see-through) */
+        pmBehindOn = (unsigned char)(stage == 1); /* REV R5H: stages 2-8 - layer 1 below line 120 is plane B's */
     }
 }
 static void floor_hw_end() /* (pm_end) */
@@ -1812,6 +1813,34 @@ static void pm_behind_init() /* (floor_hw_begin) the colours of the stage's line
         else if (hi < 255)
             pmRowLo[s] = (unsigned char)lo, pmRowHi[s] = (unsigned char)hi;
     }
+    /* the floor (layer 0's layout, as pm_sky_fill): any see-through pixel in the tiles its chunks use? (special stage 6:
+       three quarters of it - the layers show through there, so they are drawn under all of it) */
+    pmFloorOpaque = 1;
+    {
+        unsigned int seen[TILE_COUNT / 32];
+        for (unsigned int i = 0; i < TILE_COUNT / 32; ++i) seen[i] = 0;
+        const TileLayer *f = &stageLayouts[0];
+        for (int cy = 0; cy < f->ysize && pmFloorOpaque; ++cy)
+            for (int cx = 0; cx < f->xsize && pmFloorOpaque; ++cx) {
+                const int chunk = f->tiles[cx + (cy << 8)];
+                for (int t = 0; t < 64; ++t) {
+                    const unsigned int tile = (unsigned int)PM_CHUNK_TILE((chunk << 6) + t) & (TILE_COUNT - 1);
+                    if (seen[tile >> 5] & (1u << (tile & 31)))
+                        continue;
+                    seen[tile >> 5] |= 1u << (tile & 31);
+                    const unsigned int *w = (const unsigned int *)(PM_TILES + ((unsigned int)pmTileMap[tile] << 8));
+                    for (int i = 0; i < 64; ++i) {
+                        const unsigned int v = w[i];
+                        if ((v - 0x01010101u) & ~v & 0x80808080u) { /* (a 0 byte) */
+                            pmFloorOpaque = 0;
+                            break;
+                        }
+                    }
+                    if (!pmFloorOpaque)
+                        break;
+                }
+            }
+    }
 }
 static void sky_hw_record()
 {
@@ -1901,9 +1930,11 @@ static void pm_layer_range(int slot, int y0, int y1, const unsigned char *rm)
         if (y0 >= y1)
             return;
     }
-    if (rm)
-        pm_hline_lines(); /* (pm_floor_scan: the skip table for this frame) */
-    pm_hline_range(slot, ty, pmLines, y0, y1, rm, rm ? PM_SKIP : 0, (PM_LINES / 2) + 12);
+    pm_hline_lines(); /* (pm_floor_scan: the skip table for this frame) */
+    /* (behind colours: the floor's in-map pixels left out only if it has no see-through pixel; in front - stages 2-8's
+       layer 2, lines 120-127 - always: the floor in front of it in the engine) */
+    const bool skip = y1 > (PM_LINES / 2) + 12 && (rm ? pmFloorOpaque : true);
+    pm_hline_range(slot, ty, pmLines, y0, y1, rm, skip ? PM_SKIP : 0, (PM_LINES / 2) + 12);
 }
 /* REV R5G: a run list ({lines, value} pairs) of the h-scroll the Genesis needs to show a layer with these x per line */
 static int sky_runs(volatile unsigned short *r, const int *lines)
@@ -1931,17 +1962,18 @@ static void pm_layer_end(int slot)
                124 or below: there the layers show, which plane A cannot under the window) */
             /* (REV R5H: in behind colours - the chip's floor in front of them, also past the map's edge) */
             const unsigned char *rm = pmBehindOn ? PM_RM : 0;
-            if (L == 2) { /* layer 2: plane A */
+            if (L == 2) { /* layer 2: plane A (under the window, lines 120 on: the 32X's - REV R5H: special stages 2-8 in
+                             front, plane B shows layer 1 there; its pixels the floor covers left out) */
                 skyRA = (short)sky_runs(SKY_RUNS_A, pmLines);
                 skyVA = (short)pmTileY[slot];
                 pm_layer_range(slot, SKY_ROW, PM_LINES, rm);
                 return;
             }
-            if (L == 1) { /* layer 1: plane B (special stage 1: the swirl covers it - its own runs) */
+            if (L == 1) { /* layer 1: plane B (special stage 1: the swirl covers it - its own runs). REV R5H: all of it -
+                             plane B's rows 15-27 too (tools/build_floor.py): nothing for the 32X */
                 if (skyStage != 1) {
                     skyRB = (short)sky_runs(SKY_RUNS_B, pmLines);
                     skyVB = (short)pmTileY[slot];
-                    pm_layer_range(slot, SKY_ROW, PM_LINES, rm);
                 }
                 return;
             }
