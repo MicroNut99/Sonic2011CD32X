@@ -1207,6 +1207,12 @@ static int pm_floor_scan(const TileLayer *layer)
     return 100;
 }
 static short pmRow0 = -1; /* REV R5H: pm_hline_lines' answer for this engine frame (-1: not yet - pm_present) */
+/* REV R5H: command 80 without waiting - op 1 (the floor's X, Z) sent at the picture's first draw (the logic is done),
+   op 4 (its angle: the chip starts) sent and left: its answer (COMM12) read before the next command (comm_idle) or at the
+   picture's end (pm_present). Bit 0: op 1 sent this frame, bit 1: op 4's answer not read yet */
+static unsigned char flrPost;
+static void comm_idle();
+static void flr_post_xz(const TileLayer *layer);
 static int pm_hline_lines()
 {
     if (!floorHW)
@@ -1216,8 +1222,10 @@ static int pm_hline_lines()
     int r = SCREEN_YSIZE;
     for (int s = 0; s < 4; ++s)
         if (activeTileLayers[s] < LAYER_COUNT && stageLayouts[activeTileLayers[s]].type == LAYER_3DSKY) {
-            r = (SCREEN_YSIZE / 2) + 12 + (flrTitle ? flr_first_row(&stageLayouts[activeTileLayers[s]])
-                                                    : pm_floor_scan(&stageLayouts[activeTileLayers[s]]));
+            const TileLayer *layer = &stageLayouts[activeTileLayers[s]];
+            if (!flrTitle && !(flrPost & 1))
+                flr_post_xz(layer); /* (REV R5H: the Sub-CPU has it while the SH2 draws) */
+            r = (SCREEN_YSIZE / 2) + 12 + (flrTitle ? flr_first_row(layer) : pm_floor_scan(layer));
             break;
         }
     pmRow0 = (short)r;
@@ -1544,6 +1552,28 @@ static void floor_hw_end() /* (pm_end) */
     genesisOff = true; /* (REV R5F: the Sub-CPU leaves the Genesis display off - its text layer stays dark) */
     pmDirtyOn = pmFresh = pmBehindOn = 0; /* REV R5H */
 }
+static void flr_post_xz(const TileLayer *layer) /* REV R5H: op 1, not waited for */
+{
+    comm_idle();
+    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13;
+    fx = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
+    fz = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
+    SC_COMM2    = 1;
+    SC_COMM8_32 = (unsigned int)(fx << 16) | ((unsigned int)fz & 0xFFFF);
+    SC_COMM0    = 80;
+    flrPost |= 1;
+}
+static void flr_answer() /* REV R5H: (COMM0 free) op 4's answer - 0: the floor was ended on the Sub-CPU's side (another
+                            command): from the next picture on the SH2 draws it (R5B) */
+{
+    flrPost &= (unsigned char)~2;
+    if (floorHW && SC_COMM12 == 0) {
+        floorHW    = false;
+        genesisOff = true;
+        SC_COMM4   = 0; /* REV R5F: (the records' last id: the Sub-CPU would print a start-up fault) */
+        pmDirtyOn = pmFresh = pmBehindOn = 0;
+    }
+}
 static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values to the Sub-CPU, its rows see-through;
                                            false (R5B): the Sub-CPU ended the floor - pm_sky draws it */
 {
@@ -1553,15 +1583,10 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
     if (!layer->xsize || !layer->ysize)
         return true;
-    comm_idle(); /* (REV R5G: the colours go in the picture's record - sky_hw_record) */
-    /* REV R5B: X and Z in one command (13.3 each: the chip's own precision), the height only when it changed */
-    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13;
-    fx = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
-    fz = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
-    SC_COMM2    = 1;
-    SC_COMM8_32 = (unsigned int)(fx << 16) | ((unsigned int)fz & 0xFFFF);
-    sd_cmd(80);
-    if (layer->YPos != flrYSent) {
+    if (!(flrPost & 1))
+        flr_post_xz(layer); /* REV R5B: X and Z in one command (13.3 each: the chip's own precision) */
+    comm_idle();            /* (REV R5G: the colours go in the picture's record - sky_hw_record; R5H: op 1 done) */
+    if (layer->YPos != flrYSent) { /* (the height only when it changed) */
         SC_COMM2    = 3;
         SC_COMM8_32 = (unsigned int)layer->YPos;
         if (sd_cmd(80) == 0)
@@ -1570,13 +1595,8 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     SC_COMM2    = 4;
     SC_COMM8_32 = (unsigned int)(sinMLookupTable[layer->angle & 0x1FF] << 16) | (cosMLookupTable[layer->angle & 0x1FF] & 0xFFFF);
     SC_COMM12   = 0xFFFF;
-    if (sd_cmd(80) == 0 && SC_COMM12 == 0) { /* R5B: ended on the Sub-CPU's side (another command): the SH2's floor */
-        floorHW    = false;
-        genesisOff = true;
-        SC_COMM4   = 0; /* REV R5F: (the records' last id: the Sub-CPU would print a start-up fault) */
-        pmDirtyOn = pmFresh = pmBehindOn = 0; /* REV R5H: the SH2 draws it all again */
-        return false;
-    }
+    SC_COMM0    = 80; /* REV R5H: not waited for - the answer read later (flr_answer) */
+    flrPost |= 2;
     /* the whole picture colour 0 in the SH2's buffer (the frame buffer itself: the overwrite image skips 0) - REV R5G:
        the sky is the Genesis's planes now, the floor its window; the SH2 draws what is in front */
     /* REV R5H: the SH2 draws only the rows the chip cannot (flr_chip_row) - before, every row reaching past the map's
@@ -2086,6 +2106,9 @@ static void pm_present() __attribute__((noinline)); /* cart code: plat_present (
 static void pm_present()
 {
     pmRow0 = -1; /* REV R5H: (the next frame's floor: its own first row) */
+    if (flrPost & 2)
+        comm_idle(); /* (op 4's answer) */
+    flrPost = 0;
     pm_frame_end();
     pmLogic++;
     bool flip = !pmSkip && (pmShown || pmDrew); /* nothing drawn yet: the display waits, the same buffer again */
@@ -2334,6 +2357,8 @@ static bool musicInFlight = false; /* REV R4: a music command (45 / 54) sent, no
 static void comm_idle()                                             /* COMM0 free for another command */
 {
     for (unsigned int n = 0; n < 2000000u && !comm0_free(); ++n) sgb_pause();
+    if (flrPost & 2)
+        flr_answer(); /* REV R5H */
     if (padPending)
         pad_take();
     musicInFlight = false;
