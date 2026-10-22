@@ -139,6 +139,6 @@ grep "CMD 80 floor begin" /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32
 - **The special stages run at about 30 pictures a second;** stage 7 runs faster.
 - **Through the floor's see-through parts you now see each stage's own ground** (blue sea in 2, pink water in 6, the
   pink grid in 7), where R5G showed black.
-- **The title is unchanged,** except that it is cleared faster.
+- **The title is unchanged** (sh2emu: 18.2 pictures a second, R5G 18.1).
 - **If a special stage shows ghost copies of Sonic or the UFOs, or black blocks:** the clear's record did not work on
   the console. Send a photo.
