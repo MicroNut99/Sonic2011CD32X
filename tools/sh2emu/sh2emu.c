@@ -1030,6 +1030,14 @@ static void fbq_commit_one(void)
         u32 o = (fbq[0].off + i) & (FB_SIZE - 1);
         if (fbq[0].ov && !fbq[0].b[i])
             continue; /* the overwrite image ignores 0 bytes */
+        if (fbq[0].n == 1 && !fbq[0].b[i]) { /* REV R5H: so does the frame buffer itself for a byte write (8 bits of 0:
+                                                 nothing written - ares m32x/bus-internal.cpp, the 32X's rule) */
+            static int told = 0;
+            if (told++ < 4)
+                printf("[f%5d] FB-BYTE0   a byte write of 0 into the frame buffer (+%05X): not written (32X rule)\n", frame_no(),
+                       (unsigned)o);
+            continue;
+        }
         fb[fbq[0].bank][o]     = fbq[0].b[i];
         fb_def[fbq[0].bank][o] = 1;
     }
@@ -1213,6 +1221,8 @@ static void bus_write(u32 p, u32 v, int size)
                 break;
             case RG_FB:
                 o &= FB_SIZE - 1;
+                if (size == 1 && !b)
+                    break; /* REV R5H: a byte write of 0: nothing written (the 32X's rule) */
                 fb[fs_bit][o]     = b;
                 fb_def[fs_bit][o] = 1;
                 break;
