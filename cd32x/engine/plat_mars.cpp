@@ -1923,6 +1923,8 @@ static void pm_layer_end(int slot)
     if (slot >= 0 && slot < 4) {
         pmDrew = true;
         pad_service(); /* REV R4D */
+        if (pmSkip)
+            return; /* REV R5H: (nothing is drawn - no lines either, plat_layer_lines) */
         if (floorHW && !flrTitle && !pmSkip) { /* REV R5G: the special stage's sky layers are the Genesis's planes */
             const int L = activeTileLayers[slot];
             /* (lines 120 to the floor's first row: the 32X's, as before - the window's rows start at 120, the floor at
@@ -2735,7 +2737,8 @@ int *plat_layer_lines(int slot) SCD_HOT; /* R1W: SDRAM */
 int *plat_layer_lines(int slot) /* R1T: as plat_layer_line - layer 0 into xA, the frame's background layer into xB */
 {
     if (scdPicture)
-        return pmLines; /* REV R4C: the 32X picture mode's (plat_layer_end) */
+        return pmSkip ? 0 : pmLines; /* REV R4C: the 32X picture mode's (plat_layer_end); R5H: none in a frame not drawn
+                                        (the engine then skips the lines' arithmetic) */
     if (slot < 0 || slot >= 4)
         return 0;
     if (slotLayer[slot] == 0)
