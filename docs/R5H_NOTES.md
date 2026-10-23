@@ -97,13 +97,21 @@ md5sum -c --quiet R5H_expected.txt && echo "R5H_expected: all 349 OK"
 grep -ac "BUILD: SONIC CD R5H GAME START" cd32x/build_engine/disc/APP.BIN
 grep -ac "SH2-VR4I" cd32x/build_engine/disc/APP.BIN
 ls cd32x/build_engine/disc/FLOOR*.BIN | wc -l
+mkdir -p /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs
+cp /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine/SCDENG.bin /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R5H_NOMUSIC.bin
+printf 'FILE "SONICCD_R5H_NOMUSIC.bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n' > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R5H_NOMUSIC.cue
+python3 tools/build_audio_disc.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R5H_NOMUSIC.bin /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/game_data/music --out /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R5H
 ```
 
 **What each check prints:**
 - `R5H_md5: all OK`
 - `R5H_expected: all 349 OK`
 - **1** for each of the two `grep -ac` lines
-- **9** for the last line
+- **9** for the `ls` line
+- `build_audio_disc.py` says how full the disc is (it needs an 80-minute CD-R)
+
+**Burn `discs/SONICCD_R5H.cue`** - the game with its music (CD audio tracks 2 on). `cd32x/build_engine/SCDENG.cue`
+is the data track alone: no music.
 
 `build_floor.py` prints a line for each file. For stage 2 it reads
 `FLOOR2.BIN: SS2 289 stamps, 13 colours; sky: 2 colour lines, 16 colours, plane A 35 cells, plane B 270 cells`.

@@ -122,10 +122,14 @@ sh tools/build_mdg.sh $DATA game_data "1:*,1:*@1"                             # 
 python3 tools/build_floor.py $DATA game_data                                  # FLOOR1-9.BIN: the special stages and the title
 python3 tools/build_preload.py game_data cd32x/build_engine/engine.bin        # the 16 MB cart's page table
 mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW game_data/FLOOR*.BIN cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
-make -C cd32x ENGINE=1 START="0 0" ROUND=R5H                                  # the disc
+make -C cd32x ENGINE=1 START="0 0" ROUND=R5H                                  # the data track
+mkdir -p discs && cp cd32x/build_engine/SCDENG.bin discs/SONICCD_R5H_NOMUSIC.bin
+printf 'FILE "SONICCD_R5H_NOMUSIC.bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n' > discs/SONICCD_R5H_NOMUSIC.cue
+python3 tools/build_audio_disc.py discs/SONICCD_R5H_NOMUSIC.bin game_data/music --out discs/SONICCD_R5H   # + the music (CD audio)
 ```
 
-**The disc:** `cd32x/build_engine/SCDENG.bin` + `SCDENG.cue`.
+**The disc:** burn `discs/SONICCD_R5H.cue` (the data track and the music as CD audio tracks; it needs an 80-minute
+CD-R). `cd32x/build_engine/SCDENG.cue` is the data track alone, with no music.
 
 **Quick checks:**
 ```bash
