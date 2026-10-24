@@ -97,50 +97,109 @@ SCD32X_SGBTEST=1 sh tools/run_md_check.sh Data.rsdk 0 1800   # R1: record + 6800
 The console build (`cd32x/`) needs the sh-elf / m68k-elf toolchain at `/opt/toolchains/sega`;
 the disc's steps are under *Building the disc* below (the rounds before R5: [docs/R4G_NOTES.md](docs/R4G_NOTES.md) (R4F: [docs/R4F_NOTES.md](docs/R4F_NOTES.md), R4E: [docs/R4E_NOTES.md](docs/R4E_NOTES.md), R4D: [docs/R4D_NOTES.md](docs/R4D_NOTES.md); the bigger RAM cart: [docs/CART16_HANDOFF.md](docs/CART16_HANDOFF.md)) (R4C: [docs/R4C_NOTES.md](docs/R4C_NOTES.md), R4B: [docs/R4B_NOTES.md](docs/R4B_NOTES.md), R4A: [docs/R4_NOTES.md](docs/R4_NOTES.md), R3: [docs/R3_NOTES.md](docs/R3_NOTES.md), R1: [docs/R1_NOTES.md](docs/R1_NOTES.md)). `SONICCD_HANDOFF.md` is the full log of rounds S1–S7.
 
-## Building the disc (the current round: R5H)
+## Building the game (the current round: R5H)
 
 **What you need:**
-- Linux or WSL with `python3`, `gcc`, `make`, `zip` / `unzip` and `genisoimage`.
-- The Sega toolchain at `/opt/toolchains/sega` (`sh-elf` and `m68k-elf`, with the boot blocks).
+- Linux or WSL with `python3`, `gcc`, `make`, `zip` / `unzip`, `genisoimage` and `ffmpeg` (for the music).
+- The Sega toolchain at `/opt/toolchains/sega` (`sh-elf` and `m68k-elf`, with the boot blocks), or set `GENDEV=` to
+  where yours is.
 - The RSDKv3 decompilation (GitHub zip) unpacked in this folder as `RSDKv3-Decompilation-master/`.
-- Your own `Data.rsdk` from the Steam release of Sonic CD (2011).
+- Your own `Data.rsdk` from the Steam release of Sonic CD (2011). Everything made from it stays on your computer.
+- An 80-minute CD-R for the disc.
 
-Set the two paths, then run the lines from the repository's root:
+### The build, step by step
+
+Run the lines in order. The paths below are the project's own; change them to yours.
 
 ```bash
-REPO=/mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X          # this repository
-DATA=/mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk
-cd $REPO
-rm -rf engine && sh tools/setup_engine.sh && sh tools/check_patch.sh          # engine/ = the decompilation + patches/engine.patch (must say OK)
-make -C host clean && make -C host                                            # the PC build (native scripts, checks)
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
+# 1. engine/ = the RSDKv3 decompilation + patches/engine.patch (check_patch.sh must say OK)
+rm -rf engine && sh tools/setup_engine.sh && sh tools/check_patch.sh
+# 2. the PC build of the engine (used by the later steps to make the act files and check the scripts)
+make -C host clean && make -C host
+# 3. the music as CD audio tracks (game_data/music) and the sound effects for the Sega CD's PCM chip
 rm -rf game_data
-python3 tools/build_audio.py $DATA game_data                                  # music and sound effects
-sh tools/build_native.sh $DATA                                                # the scenes' scripts as SH2 code
+python3 tools/build_audio.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data
+# 4. the game's global scripts as native SH2 code
+sh tools/build_native.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk
+# 5. the engine (SONICCD.PAK) - the scene files in step 6 are linked against it
 rm -rf cd32x/build_engine && make -C cd32x ENGINE=1 START="0 0" build_engine/engine.bin
-python3 tools/build_game_data.py $DATA game_data --scenes "0:*,1:*,1:*@1,3:*,3:*@1" --start 0:0 --native cd32x/build_engine
-sh tools/build_mdg.sh $DATA game_data "1:*,1:*@1"                             # each act's Genesis planes and sprites
-python3 tools/build_floor.py $DATA game_data                                  # FLOOR1-9.BIN: the special stages and the title
-python3 tools/build_preload.py game_data cd32x/build_engine/engine.bin        # the 16 MB cart's page table
+# 6. every scene's cart image (the title and menus, the regular acts as Sonic and as Tails, the special stages)
+python3 tools/build_game_data.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data --scenes "0:*,1:*,1:*@1,3:*,3:*@1" --start 0:0 --native cd32x/build_engine
+# 7. each act's Genesis planes and sprites
+sh tools/build_mdg.sh /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data "1:*,1:*@1"
+# 8. FLOOR1-9.BIN: the special stages' floors and skies, and the title (FLOOR9)
+python3 tools/build_floor.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD32X/Sonic_CD/Data.rsdk game_data
+# 9. the 16 MB cart's page table (in SCDDATA.PAK)
+python3 tools/build_preload.py game_data cd32x/build_engine/engine.bin
+# 10. the files the Makefile does not copy, and the Options Menu's cart test file
 mkdir -p cd32x/build_engine/disc && cp game_data/KOBOSFX.BIN game_data/SFX*.BIN game_data/IMAGE.RAW game_data/FLOOR*.BIN cd32x/build_engine/disc/ && python3 tools/make_cart_test.py cd32x/build_engine/disc/KOBOGFX.BIN
-make -C cd32x ENGINE=1 START="0 0" ROUND=R5H                                  # the data track
-mkdir -p discs && cp cd32x/build_engine/SCDENG.bin discs/SONICCD_R5H_NOMUSIC.bin
-printf 'FILE "SONICCD_R5H_NOMUSIC.bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n' > discs/SONICCD_R5H_NOMUSIC.cue
-python3 tools/build_audio_disc.py discs/SONICCD_R5H_NOMUSIC.bin game_data/music --out discs/SONICCD_R5H   # + the music (CD audio)
+# 11. the data track: cd32x/build_engine/SCDENG.bin + .cue (no music)
+make -C cd32x ENGINE=1 START="0 0" ROUND=R5H
+# 12. the disc with its music: discs/SONICCD_R5H.bin + .cue
+mkdir -p /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs
+cp /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/cd32x/build_engine/SCDENG.bin /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R5H_NOMUSIC.bin
+printf 'FILE "SONICCD_R5H_NOMUSIC.bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n' > /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R5H_NOMUSIC.cue
+python3 tools/build_audio_disc.py /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R5H_NOMUSIC.bin /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/game_data/music --out /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X/discs/SONICCD_R5H
 ```
 
-**The disc:** burn `discs/SONICCD_R5H.cue` (the data track and the music as CD audio tracks; it needs an 80-minute
-CD-R). `cd32x/build_engine/SCDENG.cue` is the data track alone, with no music.
+**The disc:** burn `discs/SONICCD_R5H.cue` - the data track, then the music as CD audio tracks 2 on.
+`build_audio_disc.py` prints how full the disc is. `cd32x/build_engine/SCDENG.cue` is the data track alone (no
+music); it is what sh2emu checks.
 
-**Quick checks:**
+**Quick checks** (after step 11):
 ```bash
+cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/Sonic2011CD32X
 grep -ac "BUILD: SONIC CD R5H GAME START" cd32x/build_engine/disc/APP.BIN    # 1
 grep -ac "SH2-VR4I" cd32x/build_engine/disc/APP.BIN                          # 1 (the SH2 boot loader)
 ls cd32x/build_engine/disc/FLOOR*.BIN | wc -l                                # 9
 ```
+Each round's notes (`docs/R5H_NOTES.md`) list the md5 of every file the build must reproduce (`R5H_expected.txt`) and
+the sh2emu runs to do before burning.
 
-- Each round's notes (`docs/R5H_NOTES.md`) list the md5 of every file the build must reproduce (`R5H_expected.txt`),
-  and the sh2emu runs to do before burning.
-- `ROUND=` only changes the build text in `APP.BIN`; the source decides what is built.
+### Switches
+
+**`make -C cd32x` (the disc).** The R5H disc uses `ENGINE=1 START="0 0" ROUND=R5H`; the others keep their defaults.
+
+| Switch | Default | What it does |
+|---|---|---|
+| `ENGINE=1` | off | The game disc (`build_engine/SCDENG.cue`). Without it the Makefile builds the old plane demo disc (`build/SCDPLANE.cue`). |
+| `START="list scene"` | `"1 0"` | The scene the engine starts in. `"0 0"` = the title (the game's own start); `"1 0"` = Palmtree Panic 1 straight away. Use the same value in step 5 and step 11, and give `build_game_data.py` the same `--start`. |
+| `ROUND=` | `R1U` | Only the build text on the disc's first green line (`BUILD: SONIC CD <ROUND> GAME START`). It does not change what is built. |
+| `PLANES=` | `1` | `1`: the Genesis draws the levels' planes and sprites (the game). `0`: the old S7e build where the 32X draws everything (needs `build_game_data.py --with-pixels`). |
+| `DEMO_PAD=` | `1` | `1`: the dev menu's DEMO PAD switch is there (a recorded pad plays an act until a button is pressed; it only plays while that switch is on). `0`: leaves it out. |
+| `GAME_DATA=` | `../game_data` | Where the disc's game files come from (relative to `cd32x/`). |
+| `GENDEV=` | `/opt/toolchains/sega` | Where the Sega toolchain is. |
+| `CART_TEST=1` | off | The old cart test disc (`build_carttest/SCDCART.cue`), with `IMAGE=` (default `../cart_images/R11A_1.bin`). |
+| `DATA=`, `STATUS=`, `SPLASH_IMAGE=` | | The plane demo disc only (no `ENGINE=1`): its data file, its status row (1 on), a new splash picture (needs Pillow). |
+| target `build_engine/engine.bin` | | Only the engine (step 5); `make -C cd32x ENGINE=1 clean` removes the build folder. |
+
+**`make -C host` (the PC build).** The steps use the plain `make -C host`.
+
+| Switch | What it does |
+|---|---|
+| `ASAN=1` | AddressSanitizer build (`soniccd_host_asan`), for finding memory errors. |
+| `ALIGN=1` | Reports every misaligned 16 / 32-bit access (the SH2 faults on them; the PC does not). |
+| `SH2CFG=1` | The SH2's configuration on the PC (no drawing, small arrays). |
+| `DRAW=1`, `SCREEN198=1` | The S7e drawing configuration, and the normal engine at 198 lines as its reference. |
+
+Each switch builds into its own `obj_*` folder and program name, so they do not overwrite the plain build.
+
+**The tools.**
+
+| Tool | Arguments and switches |
+|---|---|
+| `tools/setup_engine.sh [RSDKv3 folder]` | Default `RSDKv3-Decompilation-master/RSDKv3`. |
+| `tools/check_patch.sh [RSDKv3 folder]` | The same default. Must print OK. |
+| `tools/build_audio.py <Data.rsdk> <out>` | `--no-music`: sound effects only (no tracks). `--max-minutes M`: leave out the tracks no stage plays (menus, special stages) until the music fits in M minutes. |
+| `tools/build_native.sh <Data.rsdk> [list:pos]` | Compiles the game's global scripts only (each scene's own come from `build_game_data.py --native`); `list:pos` is the scene it reads them with (default `1:0`). `GENDEV=`: the toolchain. `SCD_HOT_SCRIPTS=`: the scripts that run every frame and go into SDRAM on the console (the default list is in the script). |
+| `tools/build_game_data.py <Data.rsdk> [out]` | `--scenes`: the scenes on the disc, comma-separated - `list:pos` or `list:*`; `@1` = played as Tails; `-list:pos` leaves one out again (`-list:pos@1` as Tails only). Lists: 0 = title and menus, 1 = the regular acts, 3 = the special stages. Default `1:0`. `--start list:pos`: the scene the cart holds at power-on (default `1:0`; must be one of the scenes, as Sonic). `--native DIR`: each scene's scripts as SH2 code, linked against the engine in DIR. `--with-pixels`: for `PLANES=0` only. `-j N`: N cores. |
+| `tools/build_mdg.sh <Data.rsdk> <out> <scenes>` | The scenes as for `--scenes` (`1:*,1:*@1` = every act, as Sonic and as Tails). |
+| `tools/build_floor.py <Data.rsdk> <out>` | No switches. |
+| `tools/build_preload.py <game data> [engine.bin]` | With `engine.bin` the table also lists the engine, so a power-on skips loading it when the cart already holds it. |
+| `tools/make_cart_test.py <OUT>` | No switches; the file is not made from the game's data. |
+| `tools/build_audio_disc.py <data track .bin> <music dir>` | `--out NAME`: writes `NAME.bin` + `NAME.cue` (default `SCDENG_AUDIO` next to the data track). |
+| `tools/sh2emu/sh2emu <build folder>` | Every switch is listed in [tools/sh2emu/README.md](tools/sh2emu/README.md) and by `-h`. The ones the round notes use: `-f N` frames, `-pad "FRAME:BUTTONS,..."` the controller, `-cart 16` the 16 MB cart, `-cartkeep FILE` keep the cart's contents between runs, `-shot FRAME FILE.bmp` a picture. |
 
 ## Checking a build before burning: tools/sh2emu
 
