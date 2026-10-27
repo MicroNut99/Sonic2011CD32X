@@ -1598,11 +1598,22 @@ int main(void)
                     do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, 0x400000 + coff + p, 0x200000 + p,
                                bytes - p < 0x4000 ? bytes - p : 0x4000);
 #if CART_VERIFY_READBACK
+#ifdef SCD_MODE1
+                /* EDCD: the read-back through the listener's cart path (command 33 -> m1_xfer: the cart read with
+                   RV = 1, then into Word RAM with RV = 0).  Command 32's raw copy from the 32X window to 0x208000
+                   does not work in the cartridge boot: 0x208000 is the cart there, not Word RAM, so nothing reached
+                   0x0C8000 and the check compared the disc with whatever that memory held (your ares, 27 Oct 2026:
+                   5CE2, SCDDATA.PAK's last chunk "MISMATCH C4 +00001"). */
+                for (p = 0; p < bytes; p += 0x4000)
+                    do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, 0x208000 + p, 0x400000 + coff + p,
+                               bytes - p < 0x4000 ? bytes - p : 0x4000);
+#else
                 do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15104, (int)(coff >> 20) & 3);   
                 for (p = 0; p < bytes; p += 0x4000)
                     do_md_cmd3(MD_CMD_CHILLY_MEMCPY, 0x208000 + p,
                                0x900000 + ((coff + p) & 0xFFFFF),
                                bytes - p < 0x4000 ? bytes - p : 0x4000);
+#endif
 #endif
                 switch_banks();                                   
 #if CART_VERIFY_READBACK
