@@ -98,12 +98,17 @@ make -C cd32x ENGINE=1 START="0 0" ROUND=R6 CART_ED=1                         # 
 MODE1 pass of the Sub-CPU program and Sonic's own SH2 loader (the CD32X BootCamp supplies `build_edcd.sh`):
 
 ```
-make -C cd32x ENGINE=1 START="0 0" ROUND=R6 CART_ED=1 SCD_MODE1=1 build_engine/disc/APP.BIN   # APP_mode1.bin
+make -B -C cd32x ENGINE=1 START="0 0" ROUND=R6 CART_ED=1 SCD_MODE1=1 build_engine/disc/APP.BIN   # APP_mode1.bin
 cp cd32x/build_engine/disc/APP.BIN APP_mode1.bin
-bash <CD32X-BootCamp>/edboot/build_edcd.sh APP_mode1.bin cd32x/build_engine/SCDSH2.BIN EDCD_SONICCD.32X
+EDCD_SAVE=1 bash <CD32X-BootCamp>/edboot/build_edcd.sh APP_mode1.bin cd32x/build_engine/SCDSH2.BIN EDCD_SONICCD.32X
+make -B -C cd32x ENGINE=1 START="0 0" ROUND=R6 CART_ED=1 build_engine/disc/APP.BIN               # the disc's own again
 ```
 
-(rebuild the disc's own `APP.BIN` without `SCD_MODE1` afterwards - the disc keeps the normal listener). Copy
+**`-B` is needed** (27 Oct 2026): the Sub-CPU objects depend on their sources, not on `SCD_MODE1`, so after
+step 11 a plain `make ... SCD_MODE1=1 build_engine/disc/APP.BIN` answers "is up to date" and `APP_mode1.bin`
+is the disc's own program - a launcher with the normal listener, which cannot boot from the EverDrive. Check:
+`md5sum APP_mode1.bin cd32x/build_engine/disc/APP.BIN` must show two different values before the last line
+(the disc keeps the normal listener). Copy
 `EDCD_SONICCD.32X` to the EverDrive's SD card, put the burned CART_ED disc in the Sega CD, and start the
 launcher from the EverDrive menu. `EDCD_SAVE=1` in front of `build_edcd.sh` declares bank 31 so saves persist.
 
@@ -157,3 +162,20 @@ ares v148 with the CD32X BootCamp's EverDrive PRO board (the launcher path: a `S
   Select -> Palmtree Panic 1, played; the save in bank 31; banks 0-30 wiped (as the EverDrive menu does), relaunch:
   Save Select shows slot 1 PALMTREE PANIC 1, and it continues into the act.
 - The normal disc is byte for byte R5H's (`APP.BIN` 46cf93bc..., `engine.bin` = R5H's `SONICCD.PAK`).
+
+## 27 Oct 2026: the owner's EverDrive disc would not boot - a stale folder, not the code
+
+The owner's build of 27 Oct 10:47 (`discs/SONICCD_R6ED`, `EDCD_SONICCD.32X`) did not boot on the console. In ares
+(f189dc8, `--ramcart-type everdrive --ramcart-boot EDCD_SONICCD.32X`) it hangs on the loading picture with the bar
+empty, at t = 18 s. The cause is the folder it was built from: 17 of its tracked files were not this repository's
+(R5C-era `sub_main.c`, `plat_mars.cpp`, `scd_pm.h`; the R4I `sh2_engboot.c`; `hw_md.s` from 1ad3128; the Makefile
+from before e354456; no `m1_boot.s` / `engine_cart_ed.ld`). So the engine image had SH2 code at cart `0x200`
+instead of the 68000 jump table, the engine's copy overwrote the launcher's table, and the 68000's first
+interrupt during the load killed it. None of the 17 held work the repository lacks (every line checked).
+
+The same steps built from a58f920 in a container (`GENDEV=` a toolchain with sh-elf's `libstdc++.a`; the
+launcher's `APP.BIN` with `make -B`, above) boot in ares to the end: LOADING GAME, the title, the main menu, Save
+Select, the player select, Palmtree Panic 1 playing. With the CD32X BootCamp's RV probe (`ares/rv-garbage-probe.patch`,
+`ARES_RV_GARBAGE=1 --interpreter`: an SH2 cart read while the 68000 holds RV = 1 is logged) no SH2 touched the cart
+during a copy from power-on through the title into the menu. Not yet on the console. The full build list is in
+the owner's folder as `buildcmd_edcd.txt`.
