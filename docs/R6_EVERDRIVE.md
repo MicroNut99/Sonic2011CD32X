@@ -143,12 +143,17 @@ ares v148 with the CD32X BootCamp's EverDrive PRO board (the launcher path: a `S
   cart. The Options Menu's BIG CART stays off.
 - **LOADING GAME** under the loading picture's bar - the boot loader's picture at power-on (`sh2_engboot.c`) and the
   engine's between scenes (`plat_mars.cpp`). `CART_ED` only.
-- **Saves in the EverDrive's bank 31.** In the cartridge boot the Sega CD BIOS's backup-RAM calls fail (ares: no
-  `SONICCD32X_` file ever written). Under `SCD_MODE1` (the launcher's Sub-CPU program only) commands 56 / 59 keep the
-  save in bank 31 (window 7 = bank 31 for the copy, then bank 7 again): file f at bank 31 + f * 512. The Sub-CPU keeps
-  the save in its own RAM: read from bank 31 before the first floor begins, written back when no floor runs - the
-  copies use Word RAM, which belongs to the graphics chip while the title's clouds or a special stage run (a copy then
-  hung the title). Build the launcher with `EDCD_SAVE=1`, so the EverDrive OS keeps bank 31 on the SD card.
-- **Tested in ares:** boot (LOADING GAME, no setup screen) -> title -> main menu -> Save Select -> Player Select ->
-  Palmtree Panic 1, played; the save written to bank 31; after a relaunch Save Select shows slot 1 PALMTREE PANIC 1.
+- **Saves in the EverDrive's bank 31, OpenLara's way** (EDSAVE-1, MODE1-7, EDSAVE-4). In the cartridge boot the Sega
+  CD BIOS's backup-RAM calls fail, so under `SCD_MODE1` (the launcher's Sub-CPU program) commands 56 / 59 keep the
+  save in bank 31: the listener reaches it as cart `0x800000`-`0x83FFFF` (`m1_cart`: window 1 = bank 31 inside one
+  RV = 1 block), file f at `0x800000 + f * 512`. Bank 31 is touched only while no SH2 can be on the cart: read once
+  at start-up (both SH2s in the boot loader's SDRAM), written inside command 59 - the master waits in SDRAM with its
+  interrupts masked (`ed_cmd_safe`, as OpenLara's `cdCmdSafe`) - or inside 46. Both SH2s' interrupt handlers and the
+  slave's idle loop are the boot loader's, in SDRAM. A save made while a floor holds Word RAM goes at the next 59 / 46.
+  The launcher is built with `EDCD_SAVE=1` (its header declares save RAM, so the EverDrive OS keeps bank 31 on the SD
+  card).
+- **Tested in the owner's ares (f189dc8, unmodified)**, as it runs an EverDrive launcher (`--ramcart-type everdrive
+  --ramcart-boot EDCD_SONICCD.32X`, the `EDCD_SAVE=1` launcher, the music disc): LOADING GAME -> title -> Save
+  Select -> Palmtree Panic 1, played; the save in bank 31; banks 0-30 wiped (as the EverDrive menu does), relaunch:
+  Save Select shows slot 1 PALMTREE PANIC 1, and it continues into the act.
 - The normal disc is byte for byte R5H's (`APP.BIN` 46cf93bc..., `engine.bin` = R5H's `SONICCD.PAK`).

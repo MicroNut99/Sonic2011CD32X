@@ -2437,8 +2437,39 @@ struct ScdSfx {
 #else
 #define SCD_HAVE_SFX 0
 #endif
+#if defined(CART_ED)
+/* EDCD (OpenLara EDSAVE-4, console 26 Oct 2026): on the Mega EverDrive PRO an SH2's cart access while the 68000 holds
+   RV = 1 is answered at once with garbage - a code fetch then kills the SH2.  For a command whose 68000 side holds
+   RV = 1 the master waits here: SDRAM code (.sdtext), interrupts masked, no calls, no cart data - as OpenLara's
+   cdCmdSafe / csSpin.  (The slave idles in the boot loader's SDRAM loop; both SH2s' interrupt handlers are the
+   loader's, in SDRAM.)  Command 59: the save into the EverDrive's bank 31 (cd32x/sub_main.c, SCD_MODE1). */
+static void ed_cmd_safe(unsigned short cmd) SCD_HOT_NOINLINE;
+static void ed_cmd_safe(unsigned short cmd)
+{
+    unsigned int sr, masked;
+    __asm__ __volatile__("stc sr,%0" : "=r"(sr));
+    masked = sr | 0xF0u;
+    __asm__ __volatile__("ldc %0,sr" : : "r"(masked));
+    SC_COMM0 = cmd;
+    for (unsigned int n = 0; n < 4000000u; ++n) {
+        if (SC_COMM0 == 0 && SC_COMM0 == 0) /* twice: a read during the 68000's write is undefined */
+            break;
+        for (volatile int k = 0; k < 64; ++k) {
+        } /* Kobo HW6: never hammer a COMM register */
+    }
+    __asm__ __volatile__("ldc %0,sr" : : "r"(sr));
+}
+#endif
 static void sub_cmd(unsigned short cmd, unsigned short arg) /* a Sub-CPU command, waited for (45 play, 54 stop, 53 ...) */
 {
+#if defined(CART_ED)
+    if (cmd == 59) { /* EDCD: the save goes into bank 31 with RV = 1 - the master waits in SDRAM (above) */
+        comm_idle();
+        SC_COMM2 = arg;
+        ed_cmd_safe(cmd);
+        return;
+    }
+#endif
     comm_idle();
     SC_COMM2 = arg;
     SC_COMM0 = cmd;

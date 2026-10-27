@@ -1219,6 +1219,8 @@ m1_xfer:
         sub.l   d2,d0
         cmpa.l  #0x600000,a0
         blo.b   4f
+        cmpa.l  #0x800000,a0            /* R6ED: 0x800000- is the save bank (m1_cart), not the Sega CD */
+        bhs.b   4f
         movea.l a1,a2                   /* the source is the Sega CD: to the buffer with RV = 0 */
         movea.l a4,a1
         bsr     m1_cpy
@@ -1232,6 +1234,8 @@ m1_xfer:
 4:
         cmpa.l  #0x600000,a1
         blo.b   6f
+        cmpa.l  #0x800000,a1            /* R6ED: the save bank is the cart side */
+        bhs.b   6f
         movea.l a1,a2                   /* the destination is the Sega CD: the cart to the buffer */
         movea.l a4,a1                   /* with RV = 1 ... */
         moveq   #1,d4
@@ -1277,7 +1281,32 @@ m1_c1:
         move.l  a1,d1                   /* a write: is the destination in window 0? */
         bra.b   2f
 1:      move.l  a0,d1                   /* a read: is the source in window 0? */
-2:      cmpi.l  #0x080000,d1
+2:      cmpi.l  #0x800000,d1            /* R6ED (OpenLara MODE1-7): cart 0x800000-0x83FFFF = the EverDrive's */
+        blo.b   7f                      /* battery bank 31 (its first 256 KB), through window 1 */
+        cmpi.l  #0x840000,d1
+        bhs     m1_skip                 /* above it: never sent - nothing copied */
+        move.w  sr,-(sp)
+        move.w  #0x2700,sr
+        bset    #0,0xA15107
+        move.w  #31,0xA130F2            /* window 1 = bank 31, in this one RV = 1 block */
+        tst.w   d4
+        bne.b   3f
+        suba.l  #0x800000-0x080000,a1
+        bsr     m1_cpy_w                /* a write into bank 31: W on inside */
+        adda.l  #0x800000-0x080000,a1
+        bra.b   4f
+3:      suba.l  #0x800000-0x080000,a0
+        bsr     m1_cpy                  /* a read: W stays off */
+        adda.l  #0x800000-0x080000,a0
+4:      move.w  m1_w0bank(pc),d1        /* window 1 = its own bank again */
+        addq.w  #1,d1
+        move.w  d1,0xA130F2
+        bclr    #0,0xA15107
+        move.w  (sp)+,sr
+        rts
+m1_skip:
+        rts
+7:      cmpi.l  #0x080000,d1
         bhs.b   m1_rvcpy
         move.w  sr,-(sp)                /* MODE1-3: window 0 through window 1 */
         move.w  #0x2700,sr

@@ -595,9 +595,6 @@ static void floor_step(void)              /* one piece of the work after a frame
     if (floor_pend)
         floor_start();
 }
-#ifdef SCD_MODE1
-static void ed_sync(void); /* (EDCD saves, below) */
-#endif
 static void floor_end(void)
 {
     if (!floor_on)
@@ -616,9 +613,6 @@ static void floor_end(void)
     do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8134);   /* R5F: the display off again (no diagnostic text between scenes) */
     floor_on = 0;
     flr_flip = 0;
-#ifdef SCD_MODE1
-    ed_sync(); /* EDCD: a save made while the floor ran goes to bank 31 now */
-#endif
 }
 /* R5E: FLOOR9.BIN's part after the Word RAM image (tools/build_floor.py): 'TTL1', u16 lines, u16 the planet's cells
    wide, high, its 15 palette indices, at 0x40 the lines (u, du, v: 3 x 16 bits each), at 0x400 the planet's cells */
@@ -677,9 +671,6 @@ static int floor_begin(int stage)
     int i, r, c;
     if (floor_on)
         floor_end();
-#ifdef SCD_MODE1
-    ed_sync(); /* EDCD: the save read from bank 31 before Word RAM becomes the floor's */
-#endif
     if (stage < 1 || stage > 9)
         return 0;
     sprintf(name, "FLOOR%d.BIN", stage);
@@ -929,75 +920,58 @@ static int bram_call(int fn, const void *pa0, void *pa1) {
     return (d1 & 0xFF) ? -1 : d0;
 }
 #ifdef SCD_MODE1
-/* EDCD (the launcher's Sub-CPU program only - SCD_MODE1): the save in the EverDrive's battery bank 31, not the Sega
-   CD's backup RAM.  In the cartridge boot the BIOS's backup-RAM calls fail (ares, 27 Oct 2026: no SONICCD32X_ file
-   ever written; the console did the same for OpenJazz and SuperTux), so commands 56 / 59 take Hurrican's route (the
-   R6 doc): bank 31 is shown in window 7 (CTRL7, cart 0x380000) for the copy and window 7 gets bank 7 back.  The
-   EverDrive OS keeps bank 31 on the SD card (MEGA/gamedata/<launcher>/bram.srm) when the launcher's header declares
-   save RAM - build it with EDCD_SAVE=1.  File f at bank 31 + f * 512 (SCD_SAVE_MIN: 0 the progress, 1 the records).
-   The engine checks the words itself (magic, version, checksum): a fresh bank reads as "no save". */
-#define ED_SAVE_BANK  31
-#define ED_SAVE_WIN   7                      /* CTRL7: 0xA130FE, cart 0x380000-0x3FFFFF */
-#define ED_SAVE_CART  (0x400000 + 0x380000)  /* (the Sub-CPU's CD-boot view; the listener moves it to the cart) */
+/* EDCD (the launcher's Sub-CPU program only - SCD_MODE1), OpenLara's way (EDSAVE-1 / MODE1-7 / EDSAVE-4): the save in
+   the EverDrive's battery bank 31, which the EverDrive OS keeps on the SD card (MEGA/gamedata/<launcher>/bram.srm) when
+   the launcher's header declares save RAM (build_edcd.sh with EDCD_SAVE=1).  The Sega CD BIOS's backup-RAM calls fail
+   in the cartridge boot.  The listener reaches the bank as cart 0x800000-0x83FFFF (m1_cart: window 1 = bank 31 inside
+   one RV = 1 block); file f at 0x800000 + f * 512 (SCD_SAVE_MIN: 0 the progress, 1 the records).
+   Bank 31 is touched only while no SH2 can be on the cart (EDSAVE-4: on the EverDrive an SH2's cart access during
+   RV = 1 is answered with garbage): read once at start-up, while both SH2s are still in the boot loader's SDRAM, and
+   written inside command 59 or 46, while the master waits in SDRAM with its interrupts masked (plat_mars.cpp) and the
+   slave idles in the loader's SDRAM loop.  The copies use Word RAM, which is the graphics chip's while a floor runs
+   (the title's clouds, the special stages): a save then waits in ed_cache and goes at the next 59 or 46. */
 static uint8_t ed_cache[2][BRAM_BYTES];
-static int ed_loaded = 0, ed_dirty = 0;
-static void ed_win7(int bank)               /* CTRL7 = bank: one word through command 27 (RV = 1, m1_regcpy) */
-{
-    PB(0) = 0;
-    PB(1) = (uint8_t)bank;
-    switch_banks();
-    do_md_cmd3(MD_CMD_SAFE_CART_XFER_W, XM(0), 0xA130F0 + 2 * ED_SAVE_WIN, 2);
-    switch_banks();
-}
-static int ed_copy(int file, int save)     /* the cache's file <-> bank 31 (Word RAM in 1 Mbit mode: no floor) */
+static int ed_dirty = 0;
+static void ed_copy(int file, int save)      /* the cache's file <-> bank 31 */
 {
     int i;
-    const int at = ED_SAVE_CART + file * BRAM_BYTES;
+    const int at = 0x800000 + file * BRAM_BYTES;
     if (save)
         for (i = 0; i < BRAM_BYTES; i++) PB(0x10 + i) = ed_cache[file][i];
-    ed_win7(ED_SAVE_BANK);
     switch_banks();
     if (save)
-        do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, at, XM(0x10), BRAM_BYTES);   /* Word RAM -> bank 31 (W on inside) */
+        do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, at, XM(0x10), BRAM_BYTES);
     else
-        do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, XM(0x10), at, BRAM_BYTES);   /* bank 31 -> Word RAM */
+        do_md_cmd3(MD_CMD_CHILLY_RV_MEMCPY, XM(0x10), at, BRAM_BYTES);
     switch_banks();
-    ed_win7(ED_SAVE_WIN);                    /* window 7 = bank 7 again (the launcher's linear map) */
     if (!save)
         for (i = 0; i < BRAM_BYTES; i++) ed_cache[file][i] = PB(0x10 + i);
-    return 1;
 }
-/* The copies go through Word RAM, and while the graphics chip's floor runs (the title's clouds, the special stages)
-   Word RAM is the floor's - and the title reads the save right then (commands 56 / 59 do not end the floor, R5G).
-   So the save lives in the Sub-CPU's own RAM (ed_cache): read from bank 31 before the first floor begins
-   (floor_begin), answered from here, and written to bank 31 when no floor runs (now, or when the floor ends). */
-static void ed_sync(void)
+static void ed_load_all(void)                 /* (start-up) */
+{
+    ed_copy(0, 0);
+    ed_copy(1, 0);
+}
+static void ed_flush(void)                    /* (inside 59 or 46 only) */
 {
     int f;
     if (floor_on)
         return;
-    if (!ed_loaded) {
-        for (f = 0; f < 2; f++) ed_copy(f, 0);
-        ed_loaded = 1;
-    }
     for (f = 0; f < 2; f++)
         if (ed_dirty & (1 << f)) {
             ed_copy(f, 1);
             ed_dirty &= ~(1 << f);
         }
 }
-static int ed_bram(int file, int save)      /* 1 = done */
+static int ed_bram(int file, int save)       /* 1 = done */
 {
     int i;
     if (save) {
         for (i = 0; i < BRAM_BYTES; i++) ed_cache[file][i] = bram_buf[i];
         ed_dirty |= 1 << file;
-        ed_sync();
+        ed_flush();
         return 1;
     }
-    ed_sync();
-    if (!ed_loaded)
-        return 0;
     for (i = 0; i < BRAM_BYTES; i++) bram_buf[i] = ed_cache[file][i];
     return 1;
 }
@@ -1266,6 +1240,9 @@ int main(void)
     }
 #endif
 
+#ifdef SCD_MODE1
+    ed_load_all(); /* EDCD: the save from bank 31, while both SH2s are in the boot loader's SDRAM */
+#endif
     while (1) {
         build_counter++;
 
@@ -1358,6 +1335,10 @@ int main(void)
         if (floor_on && cmd != 0 && cmd != FLOOR_CMD && cmd != 48 && cmd != 52 && cmd != 45 && cmd != 54 &&
             cmd != 56 && cmd != 57 && cmd != 58 && cmd != 59)
             floor_end();
+#ifdef SCD_MODE1
+        if (cmd == CMD_CHUNK_TO_CART && ed_dirty)
+            ed_flush(); /* EDCD: a save made while a floor ran - now, while the master waits in SDRAM (46) */
+#endif
 
         if (cmd == FLOOR_CMD) {
             int arg = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
