@@ -732,6 +732,32 @@ static int bram_save(void) {
     return bram_call(4, bram_param, bram_buf) >= 0 ? 1 : 0;
 }
 
+#ifdef SCD_SAVE_MIN
+/* SONIC REV R6 (the owner, 26 Oct 2026: "find a way to make the min save possible using the SegaCD's.  If you have
+   to split them into more than one game save"): the one 8-block file becomes the two smallest files that hold it -
+   file 0 SONICCD32X_ (2 blocks: the four save files and the options) and file 1 SONICCD32XT (5 blocks: the time
+   attack table), 7 blocks of the console's 128 instead of 8, and the progress still fits a backup RAM too full for
+   the records.  COMM2 of command 56 / 59 carries the file number; the words (57 / 58) are this one buffer, which
+   stays 512 bytes - only the name and the number of blocks written change.  The layout: engine/scd_save.h. */
+static const char bram_name_t[12] = "SONICCD32XT";
+static int bram_blocks(int file) { return file ? 5 : 2; }          /* 320 and 128 bytes */
+static int bram_load_f(int file) {
+    int i;
+    for (i = 0; i < BRAM_BYTES; i++) bram_buf[i] = 0;
+    if (!bram_init()) return 0;
+    return bram_call(3, file ? bram_name_t : bram_name, bram_buf) >= 0 ? 1 : 0;
+}
+static int bram_save_f(int file) {
+    int i;
+    const char *nm = file ? bram_name_t : bram_name;
+    if (!bram_init()) return 0;
+    for (i = 0; i < 11; i++) bram_param[i] = (uint8_t)nm[i];
+    bram_param[11] = 0;                         /* normal (not protected) mode */
+    bram_param[12] = 0; bram_param[13] = (uint8_t)bram_blocks(file);
+    return bram_call(4, bram_param, bram_buf) >= 0 ? 1 : 0;
+}
+#endif
+
 static int cdda_start(int track, int *st_out)
 {
     int st = 0;
@@ -1388,8 +1414,15 @@ int main(void)
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
         }
         else if (cmd == 56 || cmd == 59) {
+#ifdef SCD_SAVE_MIN
+            /* SONIC REV R6 - CMD 56 load / CMD 59 save, COMM2 = the file (0 the progress, 1 the records).  A
+               version-1 disc sent COMM2 = 0, which is file 0: the old file's name.  Reply COMM12: 1 ok, 0 not. */
+            int file = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122) & 1;
+            int ok = cmd == 56 ? bram_load_f(file) : bram_save_f(file);
+#else
             /* K36 - CMD 56 load / CMD 59 save the backup-RAM file.  Reply COMM12: 1 ok, 0 not. */
             int ok = cmd == 56 ? bram_load() : bram_save();
+#endif
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, ok);
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
         }

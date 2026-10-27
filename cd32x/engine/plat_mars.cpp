@@ -1965,6 +1965,114 @@ void plat_sfx_play(int sfx, int)
 // buffer back as the file (cd32x/sub_main.c, Kobo's K36 commands; no new command). The words: cd32x/engine/scd_save.h.
 // A save the same as the last one written is not written again (the scripts save at every act's end).
 #include "scd_save.h"
+#if SCD_SAVE_FILES == 2
+/* SONIC REV R6: the two files (engine/scd_save.h, cd32x/sub_main.c).  File 0 is the progress and is written whenever
+   it changes; file 1 is the time attack table and is written only when the records change, so a backup RAM that
+   cannot take the records still keeps the progress.  A version-1 file (one 8-block file, every slot) is read once and
+   written back as the two - nobody loses a save to the new layout. */
+static unsigned int saveLastSum[SCD_SAVE_FILES] = {0, 0}; /* FNV-1a of each file's words as last read or written */
+static unsigned int save_fnv_n(const uint16_t *w, int n)
+{
+    unsigned int h = 0x811C9DC5u;
+    for (int i = 0; i < n; ++i) h = (h ^ w[i]) * 0x01000193u;
+    return h | 1u;
+}
+static unsigned int save_settle() /* COMM0 free and the pad's answer taken: COMM8 carries the save's words now */
+{
+    /* REV R4C: the loader's sampler off while the words go through COMM8 / COMM12 - the scenes' start-up scripts read
+       the save during the stage load (the menu's: ProcessStartupObjects), while it samples (plat_stage_loading turns it
+       on): a sample between the Sub-CPU's answer and its reading here garbled a word or COMM12 (the review). Two
+       vertical blanks: a sample posted just now is written before the first command. The caller turns it back on. */
+    unsigned int was = scd_sampling_now();
+    if (was) {
+        scd_sampling(0);
+        for (int k = 0; k < 2; ++k) {
+            unsigned int f = VBLANK_COUNT;
+            while (VBLANK_COUNT == f) {
+            }
+        }
+    }
+    comm_idle();
+    if (padPending)
+        pad_take();
+    musicInFlight = false;
+    return was;
+}
+static int save_read_f(int file, uint16_t *w, int first, int last) /* words first..last-1 of file `file` */
+{
+    if (first == 0) {
+        SC_COMM12 = 0;
+        sub_cmd(56, (unsigned short)file); /* the file into the Sub-CPU's buffer: COMM12 1 = there */
+        if (SC_COMM12 != 1)
+            return 0;
+    }
+    for (int i = first; i < last; ++i) {
+        sub_cmd(57, (unsigned short)i);
+        w[i] = (uint16_t)(SC_COMM8_32 >> 16);
+    }
+    return 1;
+}
+static int save_write_f(int file, const uint16_t *w, int n)
+{
+    for (int i = 0; i < n; ++i) {
+        SC_COMM8_32 = (unsigned int)w[i] << 16;
+        sub_cmd(58, (unsigned short)i);
+    }
+    SC_COMM12 = 0;
+    sub_cmd(59, (unsigned short)file); /* the buffer -> the file: COMM12 1 = written */
+    return SC_COMM12 == 1;
+}
+int plat_save_read()
+{
+    uint16_t w[SCD_SAVE_V1_WORDS];                       /* big enough for a version-1 file too */
+    unsigned int sampling = save_settle();
+    int got = 0, migrate = 0;
+    if (save_read_f(0, w, 0, SCD_SAVE_WORDS)) {
+        if (w[0] == SCD_SAVE_MAGIC && w[1] == 1) {       /* a version-1 file: the rest of it, then every slot */
+            if (save_read_f(0, w, SCD_SAVE_WORDS, SCD_SAVE_V1_WORDS) && scd_save_unpack_v1(w, saveRAM))
+                got = migrate = 1;
+        } else if (scd_save_unpack_f(0, w, saveRAM)) {
+            got                = 1;
+            saveLastSum[0]     = save_fnv_n(w, SCD_SAVE_WORDS);
+            uint16_t t[SCD_SAVE_WORDS_T];
+            if (save_read_f(1, t, 0, SCD_SAVE_WORDS_T) && scd_save_unpack_f(1, t, saveRAM))
+                saveLastSum[1] = save_fnv_n(t, SCD_SAVE_WORDS_T); /* no records yet: the slots keep their defaults */
+        }
+    }
+    if (sampling)
+        scd_sampling(1);
+    if (migrate) {
+        STATE(0x5C56);                                   /* a version-1 save carried over to the two files */
+        plat_save_write();                               /* both files, from the slots just read */
+    }
+    return got;
+}
+int plat_save_write()
+{
+    uint16_t w[SCD_SAVE_WORDS_T];
+    int ok = 1;
+    unsigned int sampling = 0;
+    for (int file = 0; file < SCD_SAVE_FILES; ++file) {
+        const int n = scd_save_words_of(file);
+        scd_save_pack_f(file, saveRAM, w);
+        const unsigned int h = save_fnv_n(w, n);
+        if (h == saveLastSum[file])
+            continue;                                    /* the same as the file: nothing to write */
+        if (!sampling)
+            sampling = save_settle() ? 2 : 1;
+        if (save_write_f(file, w, n)) {
+            saveLastSum[file] = h;
+        } else {
+            STATE((unsigned short)(0x5C50 + file));      /* 5C50 the progress, 5C51 the records: NOT written */
+            if (file == 0)
+                ok = 0;                                  /* the records failing leaves the progress as it was */
+        }
+    }
+    if (sampling == 2)
+        scd_sampling(1);
+    return ok;
+}
+#else
 static unsigned int saveLastSum = 0; /* FNV-1a of the words last read or written (0: none yet) */
 static unsigned int save_fnv(const uint16_t *w)
 {
@@ -2039,6 +2147,7 @@ int plat_save_write()
     saveLastSum = h;
     return 1;
 }
+#endif
 #if SCD_DEMO_PAD
 // REV R1 test disc: the PC check's pad (tools/run_md_check.sh) - after 4 s, every 4 s: spin dash
 // (hold down, press C, release), run right 3 s with one jump - so Sonic moves and the camera scrolls.

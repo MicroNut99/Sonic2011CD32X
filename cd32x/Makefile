@@ -182,6 +182,15 @@ ifdef CART_ED
 HWFLAGS += -DCART_ED
 ENGCFG  += -DCART_ED
 endif
+# SONIC REV R6: SCD_SAVE_MIN=1 - the smallest save the Sega CD's backup RAM can hold (the owner, 26 Oct 2026).  The
+# one 8-block file SONICCD32X_ becomes two: SONICCD32X_ 2 blocks (the four save files + the options) and SONICCD32XT
+# 5 blocks (the time attack table), 7 of the console's 128 blocks instead of 8 - and the progress still fits a backup
+# RAM too full for the records, because it is written as its own 128-byte file.  A version-1 file is carried over at
+# the first boot.  Without it both files build exactly as before (checked: APP.BIN byte for byte).
+ifdef SCD_SAVE_MIN
+HWFLAGS += -DSCD_SAVE_MIN=1
+ENGCFG  += -DSCD_SAVE_MIN=1
+endif
 ENGFLAGS = -std=c++17 -DSONICCD32X $(ENGCFG) -m2 -mb -O2 -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables \
            -fno-unwind-tables -ffunction-sections -fdata-sections -w -Ikobo/sh2
 ENGSRC   = $(wildcard ../engine/*.cpp)
