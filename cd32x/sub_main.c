@@ -74,6 +74,19 @@ extern int do_md_cmd3(int cmd, int arg1, int arg2, int arg3);
 #define MD_CMD_WRITE_32X_32   22
 #define MD_CMD_COPY_FROM_CART 24
 #define MD_CMD_COPY_WORDS     25
+/* SONIC EDCD (26 Oct 2026): CART_ED builds the Sub-CPU program for the Mega EverDrive PRO as the RAM cart.  Its
+   extended SSF mapper has no 2 MB pages: the 4 MB of cartridge space is eight 512 KB windows, each with a bank
+   register (CTRL0 0xA130F0: the mapper's P / X / W / L / C bits in the high byte and window 0's bank in bits 0-4;
+   CTRL1-7 at 0xA130F2-FE: bits 0-4).  A 2 MB page = four of its banks (page p -> banks 4p..4p+3), so one page switch
+   is FOUR register writes - and each has to be a WORD: measured on the console (26 Oct 2026, cd32x-bootcamp/edpage),
+   a single even-byte write to 0xA130F2 is IGNORED (the mapper needs the lower byte strobe).  That is what made every
+   paged game load completely and then find nothing: the page never moved.  ED_CTRL0 = the flags EDCD.32X leaves in
+   CTRL0 (P on; W OFF - with W on, the 68000's other writes corrupt the cart: console, 25 Oct 2026, edw0). */
+#ifdef CART_ED
+#ifndef ED_CTRL0
+#define ED_CTRL0 0x8000
+#endif
+#endif
 #define MD_CMD_SAFE_CART_XFER 26   
 #define MD_CMD_SAFE_CART_XFER_W 27     
 #define MD_CMD_CHILLY_MEMCPY  32         
@@ -1120,11 +1133,30 @@ int main(void)
                0xA130F2 (window 1) in D8-D10: a byte write to the even address - the 68000's SAFE_CART_XFER (command 26:
                interrupts off, RV = 1, as the cart needs; nothing new in hw_md.s). The SH2 purges its cache after it. A
                cart without the mapper ignores the write (the 4 MB game never sends this). COMM12 = 0. */
+#ifdef CART_ED
+            /* EDCD ED-PAGE: four WORD writes through command 27 (MD_CMD_SAFE_CART_XFER_W - interrupts off, RV = 1,
+               one move.w per register; already in hw_md.s, nothing new there).  Window 0 = CTRL0-3, window 1 =
+               CTRL4-7; CTRL0 carries the mapper's flags in its high byte, so ED_CTRL0 goes with window 0's bank. */
+            int arg = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
+            int page = arg & 7;
+            int reg = (arg & 0x100) ? 0xA130F8 : 0xA130F0;
+            int k;
+            if (page > 6) page = 6; /* EDCD: page 7 is the EverDrive's own (banks 28-30 its software, 31 the
+                                       battery): never mapped, never written.  plat_mars.cpp keeps off it. */
+            for (k = 0; k < 4; k++) {
+                PB(0) = (uint8_t)(reg == 0xA130F0 && k == 0 ? (ED_CTRL0 >> 8) : 0);
+                PB(1) = (uint8_t)(page * 4 + k);
+                switch_banks();
+                do_md_cmd3(MD_CMD_SAFE_CART_XFER_W, XM(0), reg + 2 * k, 2);
+                switch_banks();
+            }
+#else
             int arg = do_md_cmd1(MD_CMD_READ_32X_16, 0xA15122);
             PB(0) = (uint8_t)(arg & 7);
             switch_banks();
             cx(XM(0), (arg & 0x100) ? 0xA130F2 : 0xA130F0, 1);
             switch_banks();
+#endif
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, 0);
             do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
         }

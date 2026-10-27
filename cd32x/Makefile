@@ -174,6 +174,14 @@ ENGCFG   = -DSCD32X_SH2 -DSCD_PLANES=1 -DSCD_DEMO_PAD=$(DEMO_PAD) $(if $(START),
 else
 ENGCFG   = -DSCD32X_DRAW
 endif
+# SONIC EDCD: CART_ED=1 builds for the Mega EverDrive PRO used as the RAM cart - sub_main.c's page switch becomes
+# four WORD writes to the EverDrive's bank registers (its mapper ignores the single even-byte write), and
+# plat_mars.cpp keeps off page 7 (the EverDrive's own banks 28-30 and the battery's 31): the act file slots move to
+# page 6 and the menu's own pages are off.  Without it both files build exactly as before (byte for byte).
+ifdef CART_ED
+HWFLAGS += -DCART_ED
+ENGCFG  += -DCART_ED
+endif
 ENGFLAGS = -std=c++17 -DSONICCD32X $(ENGCFG) -m2 -mb -O2 -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables \
            -fno-unwind-tables -ffunction-sections -fdata-sections -w -Ikobo/sh2
 ENGSRC   = $(wildcard ../engine/*.cpp)

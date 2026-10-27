@@ -2495,6 +2495,18 @@ static int sd_slot(unsigned int slot) /* the opened file's cart slot (128 KB eac
      over it: its act file is then loaded again), 0 in page 1 at 0x380000 (shared with the Options Menu's font, the
      credits' and the demos' act files).
    After a power-on the menu's pages are looked up as the act pages are (its header, then the checksum over both). */
+/* SONIC EDCD (26 Oct 2026): CART_ED builds the game for the Mega EverDrive PRO as the RAM cart.  Its 32 banks of
+   512 KB are not all the game's: banks 28-30 hold the EverDrive's own software (its menu's space, its data buffer)
+   and bank 31 IS the battery-backed memory the saves live in (MegaEverDrivePro_16MB_RAM/docs/01, /docs/04).  Page p
+   of this cart = banks 4p..4p+3, so **page 7 is out**: the act file slots 1 and 2 move from page 7 to page 6 (cart
+   0x300000, 0x380000 = banks 26, 27), the cart test stops at page 6, and the menu's own pages (REV R4I: its 2.2 MB
+   image in page 6 with its tail in page 7) are off - the save screen loads in page 0 as it does on the 4 MB cart.
+   Pages 0-6 = 14 MB: the four act pages and all four slots are unchanged. */
+#if defined(CART_ED)
+#define BIG_ED 1
+#else
+#define BIG_ED 0
+#endif
 #define BIG_MAX 4
 #define BIG_MENU BIG_MAX /* (the menu's index in bigEng / bigScene: page 6) */
 #define BIG_MENU_FILE 0x101u /* (L0S001.IMG; not the Options Menu's MENU_FILE above) */
@@ -2511,7 +2523,11 @@ static unsigned int bigHome  = 0;        /* page 0's scene while an act page is 
 static unsigned int bigGroup = 0;        /* the act preloaded last (scene_group) */
 static int big_page(int i) { return 2 + i; }
 static int big_slot_of(int i) { return bigN == 1 ? 1 : i < 3 ? i + 1 : 0; }
+#if BIG_ED /* EDCD: page 6, not page 7 (the EverDrive's banks 28-31) */
+static int big_slot_page(int s) { return s == 0 || s == 3 ? 1 : bigN == 1 ? 3 : 6; }
+#else
 static int big_slot_page(int s) { return s == 0 || s == 3 ? 1 : bigN == 1 ? 3 : 7; }
+#endif
 static unsigned int big_slot_off(int s)
 {
     return s == 0 ? 0x380000u : bigN == 1 ? CART_W1 : s == 1 ? 0x300000u : s == 2 ? 0x380000u : 0x260000u;
@@ -2546,8 +2562,14 @@ static void big_show(int i) /* window 0 to act page i (-1: page 0; BIG_MENU: the
                                (the menu: page 7, its image's tail) */
 {
     comm_idle();
+#if BIG_ED
+    if (i == BIG_MENU)
+        return; /* EDCD: there are no menu pages, so nothing calls this with BIG_MENU - and page 7, which window 1
+                   would have shown here, is the EverDrive's (banks 28-30 its software, 31 the battery) */
+#else
     if (i == BIG_MENU)
         big_w1(7); /* (the act file slots' bookkeeping unchanged: the menu has no act file) */
+#endif
     else
         big_use_slot(i < 0 ? 0 : big_slot_of(i));
     if (i != bigNow) {
@@ -2692,6 +2714,7 @@ static void big_identify() /* what each act page and slot holds, whole - after a
             slotMdg[s] = got;
     }
     bigScene[BIG_MENU] = 0; /* REV R4I: the menu - its header in page 6, its checksum over pages 6 and 7 */
+#if !BIG_ED /* EDCD: no menu pages (page 6 is the slots', page 7 the EverDrive's) - bigScene[BIG_MENU] stays 0 */
     if (bigN == BIG_MAX && cartSum) {
         big_w1(6);
         const unsigned int f6 = big_head_fp(CART_W1 + 0x080000u, 1);
@@ -2713,6 +2736,7 @@ static void big_identify() /* what each act page and slot holds, whole - after a
                 bigScene[BIG_MENU] = (unsigned short)BIG_MENU_FILE;
         }
     }
+#endif
     big_use_slot(bigSlot); /* window 1 as it was */
     bigKnown = true;
 }
@@ -2763,6 +2787,7 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
     const unsigned int g = scene_group(file);
     barImgTo = barMdgFrom = 20;
     const bool attract = big_attract();
+#if !BIG_ED /* EDCD: the save screen loads in page 0, as on the 4 MB cart */
     if (file == BIG_MENU_FILE && bigN == BIG_MAX && !attract) { /* REV R4I: the menu in its own pages (6 and 7) */
         if (!bigKnown)
             big_identify();
@@ -2773,6 +2798,7 @@ static void big_prepare(unsigned int file) /* before a scene loads: window 0 to 
         }
         STATE(0x5CB3);
     }
+#endif
     if (g && attract && bigKnown) /* REV R4I: a title demo of a scene an act page holds: shown from there */
         for (int i = 0; i < bigN; ++i)
             if (big_scene_of(i) == file && bigEng[i]) {
@@ -2893,13 +2919,19 @@ static void big_boot_preload()
         return;
     if (!bigKnown)
         big_identify();
+#if BIG_ED
+    const bool menuIn = true; /* EDCD: no menu pages - nothing of the menu is in the cart to load or to check */
+#else
     const bool menuIn = big_scene_of(BIG_MENU) == BIG_MENU_FILE;
+#endif
     bool actIn        = false;
     for (int i = 0; i < bigN; ++i)
         if (scene_group(big_scene_of(i)))
             actIn = true;
     if (menuIn && actIn) { /* all in: only the engine copies checked (a page whose copy differs gets the engine now) */
+#if !BIG_ED
         big_engine(BIG_MENU);
+#endif
         for (int i = 0; i < bigN; ++i)
             if (big_scene_of(i))
                 big_engine(i);
@@ -2911,6 +2943,7 @@ static void big_boot_preload()
         splash_show(); /* (window 1 on page 1: big_detect / big_identify leave it there) */
     splash_note("THIS TAKES A FEW MINUTES", "FIRST TIME  SETTING UP THE CART"); /* REV R5D (the owner's request) */
     const int menuTo = menuIn ? 0 : actIn ? 32 : 8; /* the bar: the menu 0 - 8, the act set 8 - 32 */
+#if !BIG_ED
     if (!menuIn) {
         splash_part(0, 0);
         if (big_engine(BIG_MENU)) {
@@ -2920,6 +2953,7 @@ static void big_boot_preload()
             big_show(-1); /* page 0 again: the title (bigScene[BIG_MENU] = what was loaded) */
         }
     }
+#endif
     if (!actIn) {
         unsigned short t[BIG_MAX];
         const int n = big_targets(0x200u, t); /* L1S000: Palmtree Panic 1, the present (Sonic's files) */
@@ -3275,7 +3309,11 @@ static int cart_test()
         return 0;
     }
     sd_page(1, 4);
+#if BIG_ED
+    const int last = w1_is_page0() ? 3 : 6; /* EDCD: page 7 is the EverDrive's - never written (page 4 = page 0: 8 MB) */
+#else
     const int last = w1_is_page0() ? 3 : 7; /* page 4 = page 0: 8 MB (REV R4G: the engine and the scene image both) */
+#endif
     unsigned int pages = 0, skip = 0, bad68 = 0, badSh2 = 0, alias = 0;
     for (int p = 2; p <= last; ++p) {
         sd_page(1, p);
