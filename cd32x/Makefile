@@ -191,6 +191,14 @@ ifdef SCD_SAVE_MIN
 HWFLAGS += -DSCD_SAVE_MIN=1
 ENGCFG  += -DSCD_SAVE_MIN=1
 endif
+# SONIC REV R6: SCD_MODE1=1 - the listener for a CARTRIDGE boot ("mode 1"), which is how the disc starts with a Mega
+# EverDrive PRO in the slot (EDCD_SONICCD.32X hands over with the console still in cartridge mode).  Only hw_md.s
+# changes, and only inside .if SCD_MODE1: without it the Sub-CPU program is byte for byte the same (checked).  The
+# launcher's own build takes this program; the disc keeps the normal one.
+ifdef SCD_MODE1
+ASFLAGS += --defsym SCD_MODE1=1
+HWFLAGS += -DSCD_MODE1=1
+endif
 ENGFLAGS = -std=c++17 -DSONICCD32X $(ENGCFG) -m2 -mb -O2 -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables \
            -fno-unwind-tables -ffunction-sections -fdata-sections -w -Ikobo/sh2
 ENGSRC   = $(wildcard ../engine/*.cpp)
