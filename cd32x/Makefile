@@ -181,6 +181,7 @@ endif
 ifdef CART_ED
 HWFLAGS += -DCART_ED
 ENGCFG  += -DCART_ED
+ENGLD    = engine/engine_cart_ed.ld
 endif
 # SONIC REV R6: SCD_SAVE_MIN=1 - the smallest save the Sega CD's backup RAM can hold (the owner, 26 Oct 2026).  The
 # one 8-block file SONICCD32X_ becomes two: SONICCD32X_ 2 blocks (the four save files + the options) and SONICCD32XT
@@ -202,7 +203,7 @@ endif
 ENGFLAGS = -std=c++17 -DSONICCD32X $(ENGCFG) -m2 -mb -O2 -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables \
            -fno-unwind-tables -ffunction-sections -fdata-sections -w -Ikobo/sh2
 ENGSRC   = $(wildcard ../engine/*.cpp)
-ENGOBJS  = $(patsubst ../engine/%.cpp,$(B)/eng/%.o,$(ENGSRC)) $(B)/eng/plat_mars.o $(B)/eng/engine_start.o $(B)/eng/cart_verify.o \
+ENGOBJS  = $(if $(CART_ED),$(B)/eng/m1_boot.o,) $(patsubst ../engine/%.cpp,$(B)/eng/%.o,$(ENGSRC)) $(B)/eng/plat_mars.o $(B)/eng/engine_start.o $(B)/eng/cart_verify.o \
            $(if $(filter 1,$(PLANES)),$(B)/eng/md_planes.o $(B)/eng/sgb.o,)
 $(B)/eng/md_planes.o: ../md/md_planes.c ../md/md_planes.h | $(B)/eng
 	$(SH)gcc -std=c99 -m2 -mb -O2 -ffunction-sections -fdata-sections -c $< -o $@
@@ -219,9 +220,12 @@ $(B)/eng/plat_mars.o: engine/plat_mars.cpp ../md/sgb.h ../md/md_planes.h | $(B)/
 $(B)/eng/engine_start.o: engine/engine_start.cpp | $(B)/eng
 	$(SH)g++ $(ENGFLAGS) -c $< -o $@
 # our system calls / allocation entry points (plat_mars.cpp) come before libc and win
-$(B)/engine.elf: $(ENGOBJS) engine/engine_cart.ld
+ENGLD   ?= engine/engine_cart.ld
+$(B)/eng/m1_boot.o: engine/m1_boot.s | $(B)/eng
+	$(SH)gcc $(SH2FLAGS) $< -o $@
+$(B)/engine.elf: $(ENGOBJS) $(ENGLD)
 	@echo "engine objects: data + zeroed arrays (before --gc-sections):"; $(SH)size -t $(ENGOBJS) | tail -1
-	$(SH)g++ -m2 -mb -nostartfiles -T engine/engine_cart.ld -Wl,--gc-sections -Wl,--allow-multiple-definition \
+	$(SH)g++ -m2 -mb -nostartfiles -T $(ENGLD) -Wl,--gc-sections -Wl,--allow-multiple-definition \
 	    -Wl,--print-memory-usage -Wl,-Map=$(B)/engine.map $(ENGOBJS) -lstdc++ -lc -lgcc -o $@
 	$(SH)size -A $@ | grep -E "^\.(text|rodata|init_array|data|bss) "
 	$(SH)nm -n -C $@ > $(B)/engine_symbols.txt   # address -> function (sorted)

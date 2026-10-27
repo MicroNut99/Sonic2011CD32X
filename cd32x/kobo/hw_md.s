@@ -959,6 +959,12 @@ init_32x:
         bsr     put_str
         lea     16(sp),sp
 
+        .if SCD_MODE1
+| MODE1 (R6, as the CD32X BootCamp's listener): the cartridge boot already started the 32X - its boot
+| ROMs loaded the loader from the cart and wrote M_OK / S_OK.  No SH2 reset here: after one the boot
+| ROMs would look for the cartridge's start-up again.
+        move.w  #0x2700,sr
+        .else
         lea     0xA15000,a0
         move.l  #500000,d1
 1:
@@ -974,6 +980,7 @@ init_32x:
         move.w  #19170,d1
 1:
         dbra    d1,1b
+        .endif
 
         pea     21.l
         pea     12.l
@@ -984,9 +991,11 @@ init_32x:
         lea     0xA15000,a0
 
         moveq   #0,d0
+        .if SCD_MODE1 == 0                  /* MODE1: M_OK / S_OK stay; the 32X is on already */
         move.l  d0,0x0120(a0)
         move.l  d0,0x0124(a0)
         move.b  #3,0x0101(a0)
+        .endif
 2:
         bclr    #7,0x0100(a0)
         bne.b   2b
@@ -1035,6 +1044,7 @@ init_32x:
         lea     16(sp),sp
         lea     0xA15000,a0
 
+        .if SCD_MODE1 == 0                  /* MODE1: no CD boot table, no "_CD_" */
         move.l  0x0120(a0),d0
         cmpi.l  #0x53444552,d0
         bne.b   8f
@@ -1066,11 +1076,14 @@ init_32x:
         lea     16(sp),sp
 
         lea     0xA15000,a0
+        .endif
 10:
         bset    #7,0x0100(a0)
         beq.b   10b
 
+        .if SCD_MODE1 == 0
         move.l  #0x5F43445F,0x0120(a0)
+        .endif
 
         pea     25.l
         pea     12.l
@@ -1312,9 +1325,17 @@ m1_cpy_w:
         ori.w   #SCD_M1CTRL0,d1
         move.w  d1,0xA130F0             /* W off again, the same bank */
         rts
-| a write to the mapper's own registers: RV = 1 (already on), no W - W guards the memory, not these
+| a write to the mapper's own registers: RV = 1 and no interrupt, no W - W guards the memory, not
+| these.  RV must be set HERE: the buffered path arrives with RV = 0, and a mapper write with RV = 0
+| never reaches the EverDrive (console, 25 Oct 2026, docs/12 of the CD32X BootCamp) - the page would
+| silently never switch.
 m1_regcpy:
+        move.w  sr,-(sp)
+        move.w  #0x2700,sr
+        bset    #0,0xA15107
         bsr.b   m1_cpy
+        bclr    #0,0xA15107
+        move.w  (sp)+,sr
         rts
 
 | d2 bytes (a0)+ -> (a1)+, in bytes (d3 = 0) or words (d3 = 1, d2 rounded up to a word)
