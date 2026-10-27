@@ -1167,8 +1167,13 @@ int main(void)
             int page = arg & 7;
             int reg = (arg & 0x100) ? 0xA130F8 : 0xA130F0;
             int k;
-            if (page > 6) page = 6; /* EDCD: page 7 is the EverDrive's own (banks 28-30 its software, 31 the
-                                       battery): never mapped, never written.  plat_mars.cpp keeps off it. */
+            if (page > 6) {         /* EDCD: page 7 is the EverDrive's own (banks 28-30 its software, 31 the
+                                       battery).  Refused, not remapped: remapping it to another page would
+                                       quietly write over that page.  plat_mars.cpp keeps off it. */
+                do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, 1);   /* COMM12 1 = refused (0 = done) */
+                do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
+                continue;
+            }
             for (k = 0; k < 4; k++) {
                 PB(0) = (uint8_t)(reg == 0xA130F0 && k == 0 ? (ED_CTRL0 >> 8) : 0);
                 PB(1) = (uint8_t)(page * 4 + k);

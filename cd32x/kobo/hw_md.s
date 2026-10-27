@@ -26,6 +26,31 @@
         .equ    MD_CMD_SAFE_CART_XFER, 26
         .equ    MD_CMD_END, 35              /* KOBO K19: + set_vdp_reg (34) */
 
+| SONIC REV R6 - MODE1: the listener for a CARTRIDGE boot (the Sega CD's "mode 1"), which is how a disc
+| is started with a Mega EverDrive PRO in the slot: the EverDrive cannot let go of the cartridge line
+| (CD32X-BootCamp docs/12, console 25 Oct 2026), so EDCD_SONICCD.32X does the BIOS's and the boot block's
+| work and hands over here with the console still in cartridge mode.  Three things change, all of them
+| inside this file and all of them only when SCD_MODE1 is 1 (without it every byte below assembles
+| exactly as before - checked):
+|   MODE1-1  every address argument moves to the cartridge-boot map: Word RAM 0x200000-0x3FFFFF ->
+|            0x600000-0x7FFFFF, the cart 0x400000-0x7FFFFF -> 0x000000-0x3FFFFF.  Commands 19-22 (32X
+|            register reads and writes) are left alone: their arguments are values, not addresses.
+|            The hand-over jumps to Word RAM at 0x600000.
+|   MODE1-3  a copy to or from the cart goes through a 1 KB buffer in work RAM: the Sega CD side with
+|            RV = 0 (a Word RAM read made with RV = 1 comes out garbled in cartridge mode - console),
+|            the cart side with RV = 1 and interrupts off.  The EverDrive's window 0 (cart 0x000000-
+|            0x07FFFF) cannot be written by the 68000 at all with the 32X on, so a copy there is made
+|            through window 1 with window 0's bank in it.
+|   MODE1-6  the EverDrive's write-enable bit (CTRL0 bit 13) is ON only inside a copy INTO the cart:
+|            with it left on, the 68000's other writes corrupt the cart (console, 25 Oct 2026, edw0).
+        .ifndef SCD_MODE1
+        .equ    SCD_MODE1, 0
+        .endif
+        .ifndef SCD_M1CTRL0
+        .equ    SCD_M1CTRL0, 0x8000        /* CTRL0 as EDCD leaves it: P on, W off */
+        .endif
+        .equ    SCD_M1CTRL0_W, SCD_M1CTRL0 + 0x2000   /* + not |: | starts a comment here */
+
 | SONIC 2011 REV R1 - the Genesis planes (md/sgb.h): work RAM above the listener. The Sub-CPU
 | sets them up with the listener's own commands (write_32x_16 / copy_vram / set_palette /
 | set_vdp_reg: SH2 command 68, cd32x/sub_main.c); sgb_poll (command loop) and sgb_vblank
@@ -256,17 +281,36 @@ md_check_cmd:
         move.b  d0,0xA1200E
 
         /* push args on stack */
+        .if SCD_MODE1
+        move.l  0xA1202C,d1             /* MODE1-1: each argument moved to the cartridge-boot map */
+        bsr     m1_arg
+        move.l  d1,-(sp)
+        move.l  0xA12028,d1
+        bsr     m1_arg
+        move.l  d1,-(sp)
+        move.l  0xA12024,d1
+        bsr     m1_arg
+        move.l  d1,-(sp)
+        move.l  0xA12020,d1
+        bsr     m1_arg
+        move.l  d1,-(sp)
+        .else
         move.l  0xA1202C,-(sp)
         move.l  0xA12028,-(sp)
         move.l  0xA12024,-(sp)
         move.l  0xA12020,-(sp)
+        .endif
 
         cmpi.b  #'M,d0
         bne.b   2f
 1:
         btst    #0,0xA12003
         beq.b   1b
+        .if SCD_MODE1
+        jmp     0x600000                /* MODE1-1: Word RAM in a cartridge boot */
+        .else
         jmp     0x200000
+        .endif
 2:
         move.l  #-1,0xA12010
         cmpi.b  #MD_CMD_END,d0
@@ -1116,7 +1160,200 @@ copy_to_cart:
         moveq   #0,d0
         rts
 
+        .if SCD_MODE1
+| ============================================================================================
+| SONIC REV R6 - MODE1: the cartridge-boot routines (CD32X-BootCamp stack/subcpu/hw_md.s, where
+| they are console-proven; the EverDrive facts are MegaEverDrivePro_16MB_RAM/docs/01).
+| ============================================================================================
+| MODE1-1: d1 = an argument of command d0, as the Sub-CPU gives it (CD-boot addresses) -> d1 for a
+| cartridge boot.  Word RAM 0x200000-0x3FFFFF -> 0x600000-0x7FFFFF; the cart 0x400000-0x7FFFFF ->
+| 0x000000-0x3FFFFF.  Commands 19-22 (32X register reads and writes) are left alone: their arguments
+| are values - pads, lengths, chunk numbers - not addresses.
+m1_arg:
+        cmpi.b  #19,d0
+        blo.b   1f
+        cmpi.b  #22,d0
+        bls.b   9f
+1:
+        cmpi.l  #0x200000,d1
+        blo.b   9f
+        cmpi.l  #0x800000,d1
+        bhs.b   9f
+        cmpi.l  #0x400000,d1
+        bhs.b   2f
+        addi.l  #0x400000,d1            /* Word RAM */
+        rts
+2:
+        subi.l  #0x400000,d1            /* the cart */
+9:
+        rts
+
+| MODE1-3: d0 bytes (a0) -> (a1), d3 = 0 bytes / 1 words.  One side may be the Sega CD (Word RAM at
+| 0x600000-0x7FFFFF in this map): that side is read or written with RV = 0 through a 1 KB buffer in
+| work RAM, because on the console a Word RAM read made with RV = 1 comes out garbled in cartridge
+| mode.  The cart side is done with RV = 1 and interrupts off.
+m1_xfer:
+        movem.l d1-d4/a0-a4,-(sp)
+        lea     m1_buf(pc),a4
+1:
+        tst.l   d0
+        ble.b   9f
+        move.l  d0,d2                   /* d2 = this block's length */
+        cmpi.l  #1024,d2
+        bls.b   2f
+        move.l  #1024,d2
+2:
+        sub.l   d2,d0
+        cmpa.l  #0x600000,a0
+        blo.b   4f
+        movea.l a1,a2                   /* the source is the Sega CD: to the buffer with RV = 0 */
+        movea.l a4,a1
+        bsr     m1_cpy
+        movea.l a2,a1
+        movea.l a0,a2
+        movea.l a4,a0                   /* then the buffer to the cart side with RV = 1 */
+        moveq   #0,d4
+        bsr     m1_cart
+        movea.l a2,a0
+        bra.b   1b
+4:
+        cmpa.l  #0x600000,a1
+        blo.b   6f
+        movea.l a1,a2                   /* the destination is the Sega CD: the cart to the buffer */
+        movea.l a4,a1                   /* with RV = 1 ... */
+        moveq   #1,d4
+        bsr     m1_cart
+        movea.l a2,a1
+        movea.l a0,a2
+        movea.l a4,a0                   /* ... then the buffer there with RV = 0 */
+        bsr     m1_cpy
+        movea.l a2,a0
+        bra.b   1b
+6:
+        moveq   #0,d4
+        bsr     m1_cart                 /* neither side is the Sega CD: straight, RV = 1 */
+        bra.b   1b
+9:
+        movem.l (sp)+,d1-d4/a0-a4
+        moveq   #0,d0
+        rts
+
+| the cart side of one block: d2 bytes, d4 = 0 the cart is a1 (a write), 1 the cart is a0 (a read).
+| Three cases: the mapper's own registers (0xA130xx: the write itself needs RV = 1, and a write to
+| CTRL0 tells us which bank window 0 shows); the EverDrive's window 0, cart 0x000000-0x07FFFF, which
+| the 68000 cannot write at all with the 32X on (console, docs/01 rule 1) and so goes through window 1
+| with window 0's bank in it; and everything else, straight.
+m1_cart:
+        move.l  a1,d1
+        andi.l  #0xFFFFFF00,d1
+        cmpi.l  #0xA13000,d1
+        bne.b   m1_c1
+        tst.w   d4                      /* a write to a mapper register */
+        bne.b   m1_c1
+        move.l  a1,d1
+        cmpi.l  #0xA130F0,d1            /* CTRL0: its low 5 bits are window 0's bank - remember it */
+        bne     m1_regcpy
+        move.w  (a0),d1
+        andi.w  #31,d1
+        lea     m1_w0bank(pc),a3        /* the listener runs at 0xFF1000: PC-relative, not absolute */
+        move.w  d1,(a3)
+        bra     m1_regcpy               /* a mapper register, not memory: RV = 1, and W stays off */
+m1_c1:
+        tst.w   d4
+        bne.b   1f
+        move.l  a1,d1                   /* a write: is the destination in window 0? */
+        bra.b   2f
+1:      move.l  a0,d1                   /* a read: is the source in window 0? */
+2:      cmpi.l  #0x080000,d1
+        bhs.b   m1_rvcpy
+        move.w  sr,-(sp)                /* MODE1-3: window 0 through window 1 */
+        move.w  #0x2700,sr
+        bset    #0,0xA15107
+        move.w  m1_w0bank(pc),d1        /* window 1 = the bank window 0 shows */
+        move.w  d1,0xA130F2
+        tst.w   d4
+        bne.b   3f
+        adda.l  #0x080000,a1
+        bsr.b   m1_cpy_w                /* a write into the cart: W on inside */
+        suba.l  #0x080000,a1
+        bra.b   4f
+3:      adda.l  #0x080000,a0
+        bsr.b   m1_cpy                  /* a read of the cart: W stays off */
+        suba.l  #0x080000,a0
+4:      move.w  m1_w0bank(pc),d1        /* window 1 = its own bank again (window 0's page, second half) */
+        addq.w  #1,d1
+        move.w  d1,0xA130F2
+        bclr    #0,0xA15107
+        move.w  (sp)+,sr
+        rts
+
+| d2 bytes with RV = 1 and no interrupt; d4 = 0 (a write into the cart) turns W on for the copy.
+m1_rvcpy:
+        move.w  sr,-(sp)
+        move.w  #0x2700,sr
+        bset    #0,0xA15107
+        tst.w   d4
+        bne.b   1f
+        bsr.b   m1_cpy_w
+        bra.b   2f
+1:      bsr.b   m1_cpy
+2:      bclr    #0,0xA15107
+        move.w  (sp)+,sr
+        rts
+
+| MODE1-6: the copy with the EverDrive's W on, and nothing else written by the 68000 in between
+| (the call's push is before it, the return is a read).  RV is already 1.
+m1_cpy_w:
+        move.w  m1_w0bank(pc),d1
+        ori.w   #SCD_M1CTRL0_W,d1
+        move.w  d1,0xA130F0             /* W on, window 0 left where the game put it */
+        bsr.b   m1_cpy
+        move.w  m1_w0bank(pc),d1
+        ori.w   #SCD_M1CTRL0,d1
+        move.w  d1,0xA130F0             /* W off again, the same bank */
+        rts
+| a write to the mapper's own registers: RV = 1 (already on), no W - W guards the memory, not these
+m1_regcpy:
+        bsr.b   m1_cpy
+        rts
+
+| d2 bytes (a0)+ -> (a1)+, in bytes (d3 = 0) or words (d3 = 1, d2 rounded up to a word)
+m1_cpy:
+        move.l  d2,d1
+        tst.w   d3
+        bne.b   2f
+        subq.l  #1,d1
+        bmi.b   9f
+1:
+        move.b  (a0)+,(a1)+
+        dbra    d1,1b
+        rts
+2:
+        addq.l  #1,d1
+        lsr.l   #1,d1
+        subq.l  #1,d1
+        bmi.b   9f
+3:
+        move.w  (a0)+,(a1)+
+        dbra    d1,3b
+9:
+        rts
+
+        .align  2
+m1_w0bank:
+        .word   0                       /* the bank window 0 shows (EDCD hands over with banks 0-7 linear) */
+m1_buf:
+        .space  1024
+        .endif
+
 safe_cart_xfer:
+        .if SCD_MODE1
+        movea.l 4(sp),a0                /* MODE1-3: src, dst, length - through m1_xfer (bytes) */
+        movea.l 8(sp),a1
+        move.l  12(sp),d0
+        moveq   #0,d3
+        bra     m1_xfer
+        .endif
         movem.l d2-d3/a2,-(sp)
         movea.l 16(sp),a2
         move.l  20(sp),d2
@@ -1145,6 +1382,13 @@ safe_cart_xfer:
         rts
 
 safe_cart_xfer_w:
+        .if SCD_MODE1
+        movea.l 4(sp),a0                /* MODE1-3: src, dst, length - through m1_xfer (words) */
+        movea.l 8(sp),a1
+        move.l  12(sp),d0
+        moveq   #1,d3
+        bra     m1_xfer
+        .endif
         movem.l d2-d3/a2,-(sp)
         movea.l 16(sp),a2
         move.l  20(sp),d2
@@ -1368,6 +1612,13 @@ chilly_memcpy:
 | 16-bit cart, the same bytes in the same places. Anything else (the 2-byte cart probe) takes the byte loop, as before.
 | Interrupts stay on and RV = 1 as before.
 chilly_rv_memcpy:
+        .if SCD_MODE1
+        movea.l 4(sp),a1                /* MODE1-3: dst, src, length - through m1_xfer (bytes) */
+        movea.l 8(sp),a0
+        move.l  12(sp),d0
+        moveq   #0,d3
+        bra     m1_xfer
+        .endif
         bset    #0,0xA15107
         movea.l 4(sp),a1
         movea.l 8(sp),a0
