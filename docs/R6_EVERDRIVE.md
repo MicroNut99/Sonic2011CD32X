@@ -65,28 +65,47 @@ The EverDrive cannot let go of the cartridge line (console, 25 Oct 2026, `EDPROB
    `0x000000`-`0x07FFFF` - where the engine lives): a copy there has to be routed through another window.
 
 So Sonic CD needs a `MODE1`-style build of **its own** listener - the one file the owner's standing rule
-keeps shut ("once you have a working boot stack then do not touch it"). In the shared stack that switch
-left `hw_md.s` assembling to the same bytes with `MODE1` off, so the same promise can be made here, but it
-is a real piece of work and the owner's go-ahead, not a switch:
+keeps shut ("once you have a working boot stack then do not touch it"). The owner gave the go-ahead on 26
+Oct 2026, and it is **done** (`SCD_MODE1=1`, in `cd32x/kobo/hw_md.s` and the Makefile):
 
-- `hw_md.s`: address translation + the work-RAM buffer + W on/off around the cart side of every copy
-  (commands 26, 27, 33 and the chunk copies), all under `MODE1`;
-- a second build of the Sub-CPU program with `MODE1=1`, and `SCDSH2.BIN` as the launcher's SH2 loader, fed
-  to `cd32x-bootcamp/edboot/build_edcd.sh <app_mode1.bin> <loader.32x> EDCD_SONICCD.32X`;
-- the disc's own 68000 jump table pointed at the RAM table (`tools/prep_rom.py --mode1` in the other games)
-  so the same disc still boots both ways.
+- `hw_md.s`: address translation (`m1_arg`) + the work-RAM buffer (`m1_xfer`, `m1_buf`) + W on/off around the
+  cart side of every copy (`m1_cpy_w`), the window-0-through-window-1 route (`m1_cart`), the page switch
+  (`m1_page`, `m1_w0bank`) and RV on the mapper-register writes (`m1_regcpy`), all under `SCD_MODE1`; and
+  `init_32x`'s MODE1 branch (no SH2 reset, no CD boot table). The fixes from the 26 Oct review are in
+  (`SCD_M1CTRL0_W` was a gas comment, the bank shadow was an absolute store, CTRL0 was clobbered, and the
+  mapper-register write ran with RV = 0 so no page ever switched).
+- the engine carries the 68000 jump table itself (`cd32x/engine/m1_boot.s`, `engine_cart_ed.ld`, `CART_ED=1`):
+  the engine overwrites the launcher's image in the EverDrive, so the table must come back with the engine at
+  cart `0x200`. No separate `prep_rom.py` step - it is in the engine image.
+- the launcher: a second build of the Sub-CPU program with `CART_ED=1 SCD_MODE1=1`, and `SCDSH2.BIN` as its SH2
+  loader, fed to `cd32x-bootcamp/edboot/build_edcd.sh <app_mode1.bin> <SCDSH2.BIN> EDCD_SONICCD.32X`.
 
-Until that exists, a `CART_ED=1` disc is correct but unbootable from an EverDrive; it is the 16 MB RAM
-cart's disc with the EverDrive's bank rules obeyed.
+A `CART_ED=1` disc is the 16 MB RAM cart's disc with the EverDrive's bank rules obeyed; `EDCD_SONICCD.32X`
+(above) boots it from the EverDrive, and the same disc still boots the normal way with a RAM cart.
 
 ## Build
 
+The CART_ED disc builds exactly like the normal disc (README "Building the game"), with `CART_ED=1` added to
+the `make -C cd32x` line of steps 5 and 11:
+
 ```
-cd /mnt/s/KoboPort/sega-toolchain-12.1/sega/SonicCD
-make -C cd32x ENGINE=1 CART_ED=1 PLANES=1 GAME_DATA=../game_data
+make -C cd32x ENGINE=1 START="0 0" build_engine/engine.bin CART_ED=1          # step 5
+make -C cd32x ENGINE=1 START="0 0" ROUND=R6 CART_ED=1                         # step 11 (the data track)
 ```
 
-(`CART_ED=1` adds `-DCART_ED` to `sub_main.c` and the engine; leave it off for the normal disc.)
+`CART_ED=1` adds `-DCART_ED` to `sub_main.c` and the engine, uses `engine/engine_cart_ed.ld` and adds
+`m1_boot.o` (the jump table). Leave it off for the normal disc. Then the **launcher**, built from a second,
+MODE1 pass of the Sub-CPU program and Sonic's own SH2 loader (the CD32X BootCamp supplies `build_edcd.sh`):
+
+```
+make -C cd32x ENGINE=1 START="0 0" ROUND=R6 CART_ED=1 SCD_MODE1=1 build_engine/disc/APP.BIN   # APP_mode1.bin
+cp cd32x/build_engine/disc/APP.BIN APP_mode1.bin
+bash <CD32X-BootCamp>/edboot/build_edcd.sh APP_mode1.bin cd32x/build_engine/SCDSH2.BIN EDCD_SONICCD.32X
+```
+
+(rebuild the disc's own `APP.BIN` without `SCD_MODE1` afterwards - the disc keeps the normal listener). Copy
+`EDCD_SONICCD.32X` to the EverDrive's SD card, put the burned CART_ED disc in the Sega CD, and start the
+launcher from the EverDrive menu. `EDCD_SAVE=1` in front of `build_edcd.sh` declares bank 31 so saves persist.
 
 ## Checked here (no console, no toolchain in the sandbox)
 
@@ -97,8 +116,18 @@ make -C cd32x ENGINE=1 CART_ED=1 PLANES=1 GAME_DATA=../game_data
   `big_scene_of(BIG_MENU)` is 0 and `bigEng[BIG_MENU]` never set, so the save screen is never "resident".
 - The register arithmetic: page p, window 0 -> `0xA130F0/F2/F4/F6` = banks 4p..4p+3, window 1 ->
   `0xA130F8/FA/FC/FE` = the same four. Page 6 -> banks 24-27, page 7 -> 28-31 (refused).
-- The new Sub-CPU block compiled on its own against stubs (gnu89, `-Wall -Wextra`: no warnings) - the m68k and
-  SH2 toolchains are not in the sandbox, so **neither program has been built**; `sh2emu` models the PCB's mapper,
-  not the EverDrive's windows, so it cannot prove this either. The ED path's first real test is the console.
-- `git diff` is **additions only** in both files and the Makefile: with `CART_ED` undefined the normal disc is
-  byte for byte what it was.
+- `git diff` is **additions only** in both files and the Makefile: with `CART_ED`/`SCD_MODE1` undefined the
+  normal disc is byte for byte what it was (checked: all 349 R5H md5 + `APP.BIN` md5 after every change).
+
+## Tested in ares (26 Oct 2026)
+
+ares v148 with the CD32X BootCamp's EverDrive PRO board (the launcher path: a `SEGA SSF` ROM in the cart slot
++ the disc), the same setup that boots the BootCamp and OpenLara EDCD discs:
+
+- `EDCD_SONICCD.32X` + the CART_ED disc boots: the 32X handshake completes (`M_OK`/`S_OK` at ~frame 120), the
+  loader copies the engine into the EverDrive, the **title renders** (clouds on the floor chip), and the R4G
+  first-time preload runs ("SETTING UP THE CART") - i.e. the `m1_page`/`m1_regcpy` page switches work, which
+  is the fix the console flagged as the reason paged games "loaded everything and then found nothing".
+- ares does not model the EverDrive's write-enable bit, so it cannot prove the `m1_cpy_w` W-toggle or the
+  RV-garbage rule; those, and the whole boot, still need the console. But the boot no longer stops at the
+  splash, and the page switch - the specific thing that was broken - is exercised.
