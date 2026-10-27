@@ -122,6 +122,7 @@ static int sub_quiet = 0;
 #define SGB_FLAG_ADDR    0xFF8000        /* 68000 work RAM - the listener's SGB_ equates */
 #define SGB_LAST_ADDR    0xFF8002
 #define SGB_READY_ADDR   0xFF8004
+#define SGB_BAD_ADDR     0xFF8006        /* SONIC REV R5F */
 #define MD_CMD_INIT_HW_  1               /* hw_md.s command numbers (md_init_hw, copy_vram, set_palette) */
 #define MD_CMD_COPY_VRAM_ 7
 #define MD_CMD_SET_PALETTE_ 12
@@ -355,7 +356,7 @@ static void pcm_play(int id) {
 #define FLR_PLANE     0x1A000             /* (R5E, the title, at the start only) plane B's name table: the planet */
 #define FLR_TABLE     0x1C000             /* (at the start only) the two window name tables, then a zero block */
 #define FLR_ZERO      0x1E000
-#define FLR_PIECE     1024                /* words copied into video RAM a pass */
+#define FLR_PIECE     1024                /* words into video RAM a DMA (R5F: the SH2's record waits for a piece) */
 /* SONIC REV R5E: two kinds - 0 a special stage's floor (FLOOR1-8.BIN), 1 the title's clouds (FLOOR9.BIN): the cloud
    ceiling of the title (its Draw3DScene: a 16 x 10 grid of textured squares, tilted 8 / 512 of a turn, scrolling
    towards the viewer) drawn by the chip with the right perspective on every line - lines 0-111, the window plane over
@@ -366,13 +367,34 @@ static uint16_t flr_vram[2] = { 0x0020, 0x4420 };   /* the two image buffers in 
                                                        tile 0 stays blank for the name tables' zeros) */
 static uint16_t flr_win[2]  = { 0xA000, 0xB000 };   /* their window name tables */
 static int16_t ttl_u[112], ttl_du[112], ttl_v[112]; /* R5E: the title's lines (FLOOR9.BIN): u, its step, v - for v32 0 */
-static uint16_t ttl_pidx[16];             /* R5E: the planet's palette indices (colours line 1, 1-15) */
+static int ttl_cells;                     /* R5F: the mountains' and the water's cells */
+static uint16_t ttl_pidx[32];             /* R5F: the title's palette indices: colours line 1 (1-15: the mountains, the
+                                             water), line 2 (17-31: the planet) */
+/* R5G: the special stages' sky (tools/build_floor.py sky_file): 'SKY2' after the floor's Word RAM image, read into Word
+   RAM at FLR_IMG first (its blocks go into video RAM before the floor's file is read); special stage 1's swirl - 16
+   pictures of 240 cells - into the Sub-CPU's own RAM (sky_pics), each picture through Word RAM (SKY_STAGE) into the
+   hidden one of its two buffers by DMA, plane B switched over with the floor's buffer */
+#define SKY_EXTRA     0x8000
+#define SKY_STAGE     0x14200             /* (Word RAM) the swirl's next picture on its way: 7680 bytes */
+#define SKY_PIC       (240 * 32)
+static uint8_t sky_pics[16 * SKY_PIC];
+static uint16_t sky_pidx[48];             /* CRAM 1-47's palette indices (lines 0-2) */
+static uint16_t sky_piece[2][4][3];       /* each buffer's pieces: VRAM address, first slot, slots */
+static int sky_pieces[2];
+static int sky_swirl;                     /* special stage 1: the swirl */
+static uint16_t sky_blk[64][3];           /* the sky's blocks: VRAM address, words, their offset in SKY2 */
+static int sky_nblk;
+static int sky_want = -1, sky_staged = -1, sky_cur = -1, sky_buf = 0, sky_ready = 0;
 static int floor_busy = 0;                /* 0 idle, 1 the chip drawing, 2 the copy, 3 the switch */
 static int floor_pend = 0;                /* new values came while busy */
 static int floor_buf = 0;                 /* the video RAM buffer being written (the other one is shown) */
 static int floor_done = 0;                /* words copied */
-static int32_t flr_x, flr_z, flr_y, flr_sin, flr_cos, flr_v32;
+static int flr_show = 0;                  /* R5E: the Genesis display still off (on at the first picture's switch) */
+static int32_t flr_x, flr_z, flr_y, flr_sin, flr_cos, flr_v32, flr_v32_base;
+static uint32_t flr_v32_tick;             /* R5E: when the SH2 sent flr_v32_base */
+static int flr_v32_have = 0;              /* R5E: ... and whether it has */
 static uint32_t flr_tick;
+static int flr_flip = 0;                  /* R5E: (the title) a finished buffer waits for the vertical blank's switch */
 
 static void flr_to_sub(void)              /* (2 Mbit) the 68000 gives Word RAM to the Sub-CPU: DMNA */
 {
@@ -440,38 +462,134 @@ static void floor_start(void)             /* the chip: this frame's floor into t
     floor_busy = 1;
     floor_pend = 0;
 }
+/* R5E: Word RAM -> video RAM by the VDP's DMA (the 68000 copied it a word at a time: about twice as long).  The
+   listener's own command 22 (one long write) to the VDP's control port: two registers at a time, then the address
+   with the DMA bit (the 68000 waits while it runs).  A DMA from Word RAM writes the word it read before first: R5F -
+   each piece one word longer, from one word before it, so that word lands on the word before the piece; the pieces
+   go from the buffer's end to its start, so that word is written again by the next piece, and the first piece's
+   lands in the spare cell before the buffer.  No VDP address and data written by the 68000 at all: the vertical
+   blank's handler (the title's records) may come between any two commands, and it sets an address of its own; it
+   leaves auto-increment 2 and the DMA registers as they were. */
+static void flr_vdp2(uint16_t a, uint16_t b) { do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, ((uint32_t)a << 16) | b); }
+static void flr_dma(uint32_t dst, uint32_t src, int n, int first)   /* src: the 68000's address of dst + 2's word */
+{
+    const uint32_t s = src >> 1;
+    if (first)
+        flr_vdp2(0x8F02, 0x9700 | ((s >> 16) & 0x7F));         /* auto-increment 2; the source (bits 6-7 0: the */
+    flr_vdp2(0x9500 | (s & 0xFF), 0x9600 | ((s >> 8) & 0xFF));  /* 68000's side) */
+    flr_vdp2(0x9300 | (n & 0xFF), 0x9400 | ((n >> 8) & 0xFF));  /* the length in words */
+    do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0x40000080u | ((dst & 0x3FFF) << 16) | (dst >> 14));
+}
+static uint32_t sky_tick;
+static void sky_stage(void)               /* R5G: the wanted picture of the swirl into Word RAM (SKY_STAGE) */
+{
+    if (!sky_swirl || sky_want < 0 || sky_want == sky_cur || sky_want == sky_staged || sky_ready)
+        return;
+    {
+        const uint32_t *src = (const uint32_t *)(sky_pics + SKY_PIC * sky_want);
+        volatile uint32_t *dst = (volatile uint32_t *)(FLR_SUB + SKY_STAGE);
+        int i;
+        for (i = 0; i < SKY_PIC / 4; i++) dst[i] = src[i];
+    }
+    sky_staged = sky_want;
+}
+static void ttl_next(void)                /* R5E: the title's clouds go on by themselves between the SH2's pictures - */
+{                                         /* the engine scrolls them 8 a frame (the clouds object: += 8, & 2047); */
+    flr_v32 = (flr_v32_base + 8 * (int32_t)(GET_TICKS - flr_v32_tick)) & 0x7FF;   /* each picture the SH2 sends */
+    floor_start();                        /* the engine's own value again */
+}
+static void flr_switch(void)              /* the window shows the buffer just written */
+{
+    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8300 | (flr_win[floor_buf] >> 10));
+    if (flr_show) {                       /* R5E: the Genesis display on with the first picture (nothing before it) */
+        do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8174);
+        flr_show = 0;
+    }
+    floor_buf ^= 1;
+}
 static void floor_step(void)              /* one piece of the work after a frame (the main loop, every pass) */
 {
     const int words = 40 * flr_vcells * 16;
+    if (flr_flip && floor_on && GET_TICKS != flr_tick) {
+        /* R5E (the title): the vertical blank came - the switch, while the chip draws the next one (it began when the
+           copy ended). R5F: only while the beam is still in the vertical blank or the first lines (the VDP's line
+           counter, 0xC00008 high byte: 0xE0 on in the blank) - later, the next vertical blank (no torn clouds) */
+        int v = (do_md_cmd1(MD_CMD_READ_32X_16, 0xC00008) >> 8) & 0xFF;
+        if (v >= 0xE0 || v < 4) {
+            flr_switch();
+            flr_flip = 0;
+        }
+        else
+            flr_tick = GET_TICKS;
+    }
+    if (sky_ready && floor_on && GET_TICKS != sky_tick) {
+        /* R5G: the swirl's new picture is in the hidden buffer - plane B shows it from this vertical blank (only there:
+           the swirl is lines 0-119) */
+        int v = (do_md_cmd1(MD_CMD_READ_32X_16, 0xC00008) >> 8) & 0xFF;
+        if (v >= 0xE0 || v < 4) {
+            sky_buf ^= 1;
+            do_md_cmd1(MD_CMD_SET_VDP_REG, sky_buf ? 0x8405 : 0x8407);   /* plane B 0xA000 / 0xE000 */
+            sky_cur = sky_staged;
+            sky_ready = 0;
+        }
+        else
+            sky_tick = GET_TICKS;
+    }
+    if (floor_on && !floor_busy && flr_mode == 1 && flr_v32_have) {
+        ttl_next();
+        return;
+    }
+    if (floor_on && floor_busy <= 1)
+        sky_stage();                      /* R5G: (Word RAM is the Sub-CPU's) the swirl's next picture on its way */
     if (!floor_on || !floor_busy)
         return;
     if (floor_busy == 1) {
         if (read_word(0xFF8058) & 0x8000)
             return;                       /* the chip still draws */
+        if (flr_flip)
+            return;                       /* R5E: the other buffer still shown until the switch */
         flr_to_main();
         floor_done = 0;
-        floor_busy = 2;
-        return;
+        floor_busy = 2;                   /* (R5E: the first piece at once) */
     }
     if (floor_busy == 2) {
-        int n = words - floor_done;
-        if (n > FLR_PIECE) n = FLR_PIECE;
-        do_md_cmd3(MD_CMD_COPY_VRAM_, flr_vram[floor_buf] + 2 * floor_done, FLR_MAIN + FLR_IMG + 2 * floor_done, n);
-        floor_done += n;
-        if (floor_done >= words) {
-            floor_busy = 3;
-            flr_tick = GET_TICKS;
+        for (;;) {                        /* (R5F: from the end; floor_done = words from the end done) */
+            const int e = words - floor_done, b = e > FLR_PIECE ? e - FLR_PIECE : 0;
+            flr_dma(flr_vram[floor_buf] + 2 * b - 2, FLR_MAIN + FLR_IMG + 2 * b, e - b + 1, floor_done == 0);
+            floor_done += e - b;
+            if (floor_done >= words)
+                break;
+            /* R5E: the next piece at once unless the SH2 has a command waiting (the main loop's pause between COMM0's
+               reads is kept: a piece takes longer) */
+            if (do_md_cmd1(MD_CMD_READ_32X_16, 0xA15120) != 0)
+                return;
         }
+        if (sky_staged >= 0 && sky_staged != sky_cur && !sky_ready) {
+            /* R5G: the swirl's picture into the hidden buffer, piece by piece (each after a spare cell: flr_dma) */
+            const int h = sky_buf ^ 1;
+            int k;
+            for (k = 0; k < sky_pieces[h]; k++)
+                flr_dma(sky_piece[h][k][0] - 2, FLR_MAIN + SKY_STAGE + 32 * sky_piece[h][k][1], 16 * sky_piece[h][k][2] + 1, 1);
+            sky_ready = 1;
+            sky_tick = GET_TICKS;
+        }
+        flr_tick = GET_TICKS;
+        if (flr_mode == 1) {              /* R5E: the title - Word RAM back now and the next picture begun at once; */
+            flr_flip = 1;                 /* the switch at the next vertical blank (above) */
+            flr_to_sub();
+            floor_busy = 0;
+            if (flr_v32_have)
+                ttl_next();
+            return;
+        }
+        floor_busy = 3;
         return;
     }
     /* 3: the window shows the new buffer from the next vertical blank on (the floor: any time before line 120 - no
-       tear; R5E, the title's clouds from line 0: the switch the moment the vertical blank begins) */
-    if (flr_mode == 1)
-        while (GET_TICKS == flr_tick) bump_fm();
-    else if (GET_TICKS == flr_tick)
+       tear) */
+    if (GET_TICKS == flr_tick)
         return;
-    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8300 | (flr_win[floor_buf] >> 10));
-    floor_buf ^= 1;
+    flr_switch();
     flr_to_sub();
     floor_busy = 0;
     if (floor_pend)
@@ -481,6 +599,7 @@ static void floor_end(void)
 {
     if (!floor_on)
         return;
+    do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_FLAG_ADDR, 0);   /* R5F / R5G: the SH2's records off first */
     while (floor_busy == 1 && (read_word(0xFF8058) & 0x8000)) bump_fm();
     if (floor_busy == 0 || floor_busy == 1)
         flr_to_main();                    /* (busy 2 / 3: the 68000 has it already) */
@@ -491,23 +610,57 @@ static void floor_end(void)
     do_md_cmd0(MD_CMD_INIT_HW_);          /* the listener's VDP set-up, font, colours (as command 68's off) */
     do_md_cmd0(MD_CMD_CLEAR_B);
     do_md_cmd0(MD_CMD_CLEAR_A);
+    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8134);   /* R5F: the display off again (no diagnostic text between scenes) */
     floor_on = 0;
+    flr_flip = 0;
 }
 /* R5E: FLOOR9.BIN's part after the Word RAM image (tools/build_floor.py): 'TTL1', u16 lines, u16 the planet's cells
    wide, high, its 15 palette indices, at 0x40 the lines (u, du, v: 3 x 16 bits each), at 0x400 the planet's cells */
-#define TTL_EXTRA     0x2000
+#define TTL_EXTRA     0x4000              /* R5F (R5E: 0x2000) */
+#define TTL_PLANET    0x8260              /* R5F: the title's video RAM - the planet's 65 cells (its 8 sprites), */
+#define TTL_SKY       0x8A80              /* the mountains' and the water's (up to 140: to 0x9C00) */
 static int title_extra(void)              /* (the Sub-CPU's Word RAM, at FLR_IMG) the lines and the indices kept */
 {
     const volatile uint16_t *e = (const volatile uint16_t *)(FLR_SUB + FLR_IMG);
     int k;
-    if (e[0] != 0x5454 || e[1] != 0x4C31 || e[2] != 112 || e[3] != 15 || e[4] != 13)   /* 'TTL1' */
+    /* R5F: 'TTL2', 104 lines, 65 planet cells, the sky's cells (<= 140), 0; the planet's colours (15), the sky's (15) */
+    if (e[0] != 0x5454 || e[1] != 0x4C32 || e[2] != 104 || e[3] != 65 || e[4] == 0 || e[4] > 140)
         return 0;
-    for (k = 0; k < 15; k++) ttl_pidx[k + 1] = e[5 + k];
-    for (k = 0; k < 112; k++) {
-        ttl_u[k]  = (int16_t)e[0x20 + 3 * k];
-        ttl_du[k] = (int16_t)e[0x21 + 3 * k];
-        ttl_v[k]  = (int16_t)e[0x22 + 3 * k];
+    ttl_cells = e[4];
+    for (k = 0; k < 15; k++) ttl_pidx[k + 17] = e[6 + k], ttl_pidx[k + 1] = e[21 + k];
+    for (k = 0; k < 104; k++) {
+        ttl_u[k]  = (int16_t)e[0x30 + 3 * k];
+        ttl_du[k] = (int16_t)e[0x31 + 3 * k];
+        ttl_v[k]  = (int16_t)e[0x32 + 3 * k];
     }
+    return 1;
+}
+static int sky_extra(uint32_t lba, uint32_t len)   /* R5G: (the Sub-CPU's Word RAM, at FLR_IMG) the header kept */
+{
+    const volatile uint16_t *e = (const volatile uint16_t *)(FLR_SUB + FLR_IMG);
+    int k, b;
+    if (e[0] != 0x534B || e[1] != 0x5932)    /* 'SKY2' */
+        return 0;
+    sky_swirl = e[2] & 1;
+    for (k = 0; k < 48; k++) sky_pidx[k] = (k & 15) ? e[32 + k] : 0;
+    for (b = 0; b < 2; b++) {
+        sky_pieces[b] = sky_swirl ? e[6 + b] : 0;
+        if (sky_pieces[b] > 4)
+            return 0;
+        for (k = 0; k < sky_pieces[b]; k++) {
+            sky_piece[b][k][0] = e[8 + 12 * b + 3 * k];
+            sky_piece[b][k][1] = e[9 + 12 * b + 3 * k];
+            sky_piece[b][k][2] = e[10 + 12 * b + 3 * k];
+        }
+    }
+    if (sky_swirl) {                      /* the 16 pictures into the Sub-CPU's RAM */
+        const uint32_t off = (uint32_t)e[80] << 16 | e[81], bytes = (uint32_t)e[82] << 16 | e[83];
+        if (bytes != sizeof(sky_pics) || off + bytes != len || (off & 2047))
+            return 0;
+        scd_sub_read((void *)sky_pics, (int)(lba + off / 2048), (int)(bytes / 2048));
+    }
+    else if (len != 0x40000u + SKY_EXTRA)
+        return 0;
     return 1;
 }
 static int floor_begin(int stage)
@@ -526,17 +679,13 @@ static int floor_begin(int stage)
         return 0;
     len = (uint32_t)(fi >> 32); lba = (uint32_t)(fi & 0xFFFFFFFF);
     flr_mode = stage == 9;
-    if (len != (flr_mode ? 0x40000u + TTL_EXTRA : 0x40000u))
+    if (flr_mode ? len != 0x40000u + TTL_EXTRA : len != 0x40000u + SKY_EXTRA && len != 0x40000u + SKY_EXTRA + 16 * SKY_PIC)
         return 0;
-    if (flr_mode) {                       /* R5E: the title's clouds - 112 lines, 14 cells high, the window at the top */
-        flr_lines = 112, flr_vcells = 14;
-        flr_vram[0] = 0x0020, flr_vram[1] = 0x4620;
-        flr_win[0] = 0xD000, flr_win[1] = 0xF000;
-    } else {
-        flr_lines = 104, flr_vcells = 13;
-        flr_vram[0] = 0x0020, flr_vram[1] = 0x4420;
-        flr_win[0] = 0xA000, flr_win[1] = 0xB000;
-    }
+    /* R5F: both 104 lines, 13 cells high; each image buffer after a spare cell (the DMA's first word lands there:
+       flr_dma); the window's two name tables 0xA000 / 0xB000. The title: the window at the top (rows 0-12) */
+    flr_lines = 104, flr_vcells = 13;
+    flr_vram[0] = 0x0040, flr_vram[1] = 0x4160;
+    flr_win[0] = 0xA000, flr_win[1] = flr_mode ? 0xB000 : 0xC000;   /* (R5G: a special stage - 0xC000, plane A's) */
     floor_on = 1;                         /* (from here: no green text - it would use Word RAM) */
     write_byte(0xFF8003, read_byte(0xFF8003) & 0x19);   /* MODE 0: 2 Mbit */
     while (read_byte(0xFF8003) & 4) bump_fm();          /* R5B: the mode change done (manual: before Word RAM use) */
@@ -548,10 +697,36 @@ static int floor_begin(int stage)
             return 0;
         }
     }
+    else {                                /* R5G: the sky's part, the same way */
+        scd_sub_read((void *)(FLR_SUB + FLR_IMG), (int)lba + 0x40000 / 2048, SKY_EXTRA / 2048);
+        if (!sky_extra(lba, len)) {
+            floor_end();
+            return 0;
+        }
+        {   /* its blocks' places (Word RAM is the Sub-CPU's only until flr_to_main below) */
+            const volatile uint16_t *e = (const volatile uint16_t *)(FLR_SUB + FLR_IMG + 0x100);
+            uint32_t at = 0x100;
+            sky_nblk = 0;
+            for (;;) {
+                const uint16_t a = e[0], n = e[1];
+                if (!a && !n)
+                    break;
+                if (sky_nblk == 64 || at + 4 + 2 * (uint32_t)n > SKY_EXTRA) {
+                    floor_end();
+                    return 0;
+                }
+                sky_blk[sky_nblk][0] = a, sky_blk[sky_nblk][1] = n, sky_blk[sky_nblk][2] = (uint16_t)(at + 4);
+                sky_nblk++;
+                e += 2 + n;
+                at += 4 + 2 * (uint32_t)n;
+            }
+        }
+    }
     {   /* the window name tables (the image's cells, column after column) and zeros */
         volatile uint16_t *t;
         int b;
-        const int row0 = flr_mode ? 0 : 15, pal = flr_mode ? 0x0000 : 0x6000;   /* (colours line 0 / line 3) */
+        /* (colours line 0 / line 3; R5F, the title: in front - the planet's sprites behind the clouds) */
+        const int row0 = flr_mode ? 0 : 15, pal = flr_mode ? 0x8000 : 0x6000;
         for (b = 0; b < 2; b++) {
             t = (volatile uint16_t *)(FLR_SUB + FLR_TABLE + b * 0x1000);
             for (i = 0; i < 64 * 32; i++) t[i] = 0;
@@ -559,12 +734,25 @@ static int floor_begin(int stage)
                 for (c = 0; c < 40; c++)
                     t[(row0 + r) * 64 + c] = (uint16_t)(pal | ((flr_vram[b] >> 5) + c * flr_vcells + r));
         }
-        if (flr_mode) {                   /* R5E: plane B - the planet (15 x 13 cells at x 280, y -16: colours line 1) */
+        if (flr_mode) {                   /* R5F: plane B - rows 12-27 the mountains and the water (the file's names,
+                                             its cells from TTL_SKY on); the planet's 8 sprites (TTL_PLANET) */
+            const volatile uint16_t *e = (const volatile uint16_t *)(FLR_SUB + FLR_IMG);
             t = (volatile uint16_t *)(FLR_SUB + FLR_PLANE);
             for (i = 0; i < 64 * 32; i++) t[i] = 0;
-            for (r = 0; r < 13; r++)
-                for (c = 0; c < 15; c++)
-                    t[((r + 30) & 31) * 64 + 35 + c] = (uint16_t)(0x2000 | ((0x8C20 >> 5) + r * 15 + c));
+            for (i = 0; i < 16 * 64; i++) {
+                uint16_t w = e[0x180 + i];
+                if (w & 0x07FF)
+                    t[12 * 64 + i] = (uint16_t)(w + (TTL_SKY >> 5) - 1);
+            }
+            t = (volatile uint16_t *)(FLR_SUB + FLR_PLANE + 0x1000);
+            for (i = 0; i < 8; i++) {     /* columns 0-3, then 4; rows 0-3, 4-7, 8-11, 12 (the file's order) */
+                static const uint8_t cell0[8] = { 0, 16, 32, 48, 52, 56, 60, 64 };
+                const int w = i < 4 ? 4 : 1, h = (i & 3) == 3 ? 1 : 4;
+                t[4 * i]     = (uint16_t)(128 - 16 + 32 * (i & 3));        /* y (the engine's -16: the bob from the SH2) */
+                t[4 * i + 1] = (uint16_t)(((w - 1) << 10) | ((h - 1) << 8) | (i < 7 ? i + 1 : 0));
+                t[4 * i + 2] = (uint16_t)(0x4000 | ((TTL_PLANET >> 5) + cell0[i]));   /* colours line 2, behind */
+                t[4 * i + 3] = (uint16_t)(128 + 280 + (i < 4 ? 0 : 32));
+            }
         }
         t = (volatile uint16_t *)(FLR_SUB + FLR_ZERO);
         for (i = 0; i < 0x1000; i++) t[i] = 0;
@@ -574,41 +762,46 @@ static int floor_begin(int stage)
         static const uint16_t regs[] = {
             0x8134,                       /* display off while it is set up */
             0x8004, 0x8238,               /* plane A 0xE000 (empty) */
-            0x8334, 0x8406,               /* window 0xD000, plane B 0xC000 (the planet) */
-            0x857C, 0x8D3F,               /* sprites 0xF800, h-scroll 0xFC00 */
-            0x8700, 0x8AFF, 0x8B00,       /* backdrop colour 0 (the sky), full-screen scroll */
+            0x8328, 0x8406,               /* window 0xA000, plane B 0xC000 (the mountains, the water) */
+            0x857C, 0x8D3F,               /* sprites 0xF800 (the planet), h-scroll 0xFC00 */
+            0x8700, 0x8AFF, 0x8B03,       /* backdrop colour 0, h-scroll a line at a time (the water) */
             0x8C81, 0x8E00, 0x8F02,       /* H40, no shadow / highlight, auto-increment 2 */
-            0x9001, 0x9100, 0x920E        /* planes 64 x 32; the window: rows 0-13 (lines 0-111) */
+            0x9001, 0x9100, 0x920D        /* planes 64 x 32; the window: rows 0-12 (lines 0-103) */
         };
         for (i = 0; i < (int)(sizeof(regs) / sizeof(regs[0])); i++)
             do_md_cmd1(MD_CMD_SET_VDP_REG, regs[i]);
-        for (i = 0; i < 0x8C00; i += 0x1000)                                         /* both image buffers */
+        for (i = 0; i < 0xA000; i += 0x1000)                                         /* the buffers, the cells */
             do_md_cmd3(MD_CMD_COPY_VRAM_, i, FLR_MAIN + FLR_ZERO, 0x800);
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0x8C20, FLR_MAIN + FLR_IMG + 0x400, 15 * 13 * 16); /* the planet's cells */
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xC000, FLR_MAIN + FLR_PLANE, 0x800);           /* plane B: the planet */
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xD000, FLR_MAIN + FLR_TABLE, 0x800);           /* window table 0 */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, TTL_PLANET, FLR_MAIN + FLR_IMG + 0xB00, 65 * 16);           /* the planet */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, TTL_SKY, FLR_MAIN + FLR_IMG + 0x1340, ttl_cells * 16);     /* plane B's */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xA000, FLR_MAIN + FLR_TABLE, 0x800);           /* window tables */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xB000, FLR_MAIN + FLR_TABLE + 0x1000, 0x800);
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xC000, FLR_MAIN + FLR_PLANE, 0x800);           /* plane B */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xD000, FLR_MAIN + FLR_ZERO, 0x800);
         do_md_cmd3(MD_CMD_COPY_VRAM_, 0xE000, FLR_MAIN + FLR_ZERO, 0x800);            /* plane A: empty */
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xF000, FLR_MAIN + FLR_TABLE + 0x1000, 0x400);  /* window table 1 (rows 0-15) */
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xF800, FLR_MAIN + FLR_ZERO, 0x400);            /* sprites, h-scroll */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xF000, FLR_MAIN + FLR_ZERO, 0x800);            /* sprites, h-scroll */
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xF800, FLR_MAIN + FLR_PLANE + 0x1000, 32);     /* the planet's 8 sprites */
     } else {
         static const uint16_t regs[] = {
             0x8134,                       /* display off while it is set up */
-            0x8004, 0x8230,               /* plane A 0xC000 */
-            0x8328, 0x8407,               /* window 0xA000, plane B 0xE000 */
-            0x857C, 0x8D3F,               /* sprites 0xF800, h-scroll 0xFC00 */
-            0x8700, 0x8AFF, 0x8B00,       /* backdrop colour 0, full-screen scroll */
+            0x8004, 0x8230,               /* plane A 0xC000 (R5G: the sky's layer 2) */
+            0x8328, 0x8407,               /* window 0xA000, plane B 0xE000 (the sky's layer 1 / the swirl) */
+            0x857C, 0x8D3F,               /* sprites 0xF800 (none), h-scroll 0xFC00 */
+            0x8700, 0x8AFF, 0x8B03,       /* backdrop colour 0, h-scroll a line at a time (R5G) */
             0x8C81, 0x8E00, 0x8F02,       /* H40, no shadow / highlight, auto-increment 2 */
             0x9001, 0x9100, 0x928F        /* planes 64 x 32; the window: rows 15 to the bottom */
         };
         for (i = 0; i < (int)(sizeof(regs) / sizeof(regs[0])); i++)
             do_md_cmd1(MD_CMD_SET_VDP_REG, regs[i]);
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xA000, FLR_MAIN + FLR_TABLE, 0x800);           /* window tables */
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xB000, FLR_MAIN + FLR_TABLE + 0x1000, 0x800);
-        for (i = 0; i < 0x8800; i += 0x1000)                                         /* both image buffers */
+        for (i = 0; i < 0x10000; i += 0x1000)                                        /* all of it zero */
             do_md_cmd3(MD_CMD_COPY_VRAM_, i, FLR_MAIN + FLR_ZERO, 0x800);
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xC000, FLR_MAIN + FLR_ZERO, 0x800);            /* plane A, plane B */
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xE000, FLR_MAIN + FLR_ZERO, 0x800);
-        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xF000, FLR_MAIN + FLR_ZERO, 0x800);            /* sprites, h-scroll */
+        /* R5G: the sky's blocks (its cells; plane A's, plane B's (B''s) rows 0-14) - the 68000 reads them from Word
+           RAM (it has it now: their places were found before, sky_blk); then the window's rows 15-27 into 0xA000 /
+           0xC000 (the rest of those blocks: planes) */
+        for (i = 0; i < sky_nblk; i++)
+            do_md_cmd3(MD_CMD_COPY_VRAM_, sky_blk[i][0], (int)(FLR_MAIN + FLR_IMG + sky_blk[i][2]), sky_blk[i][1]);
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xA780, FLR_MAIN + FLR_TABLE + 0x780, 13 * 64);
+        do_md_cmd3(MD_CMD_COPY_VRAM_, 0xC780, FLR_MAIN + FLR_TABLE + 0x1780, 13 * 64);
     }
     do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0x40000010);                           /* v-scroll 0 */
     do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00000, 0);
@@ -624,9 +817,22 @@ static int floor_begin(int stage)
     floor_buf = 0;
     floor_busy = 0;
     floor_pend = 0;
+    flr_flip = 0;
     flr_v32 = 0;
+    flr_v32_have = 0;
     do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8300 | (flr_win[1] >> 10));   /* (buffer 1 shown: empty) */
-    do_md_cmd1(MD_CMD_SET_VDP_REG, 0x8174);                         /* the Genesis display on */
+    flr_show = 1;                         /* R5E: the Genesis display on with the first picture (floor_step) */
+    sky_want = sky_staged = sky_cur = -1, sky_buf = 0, sky_ready = 0;
+    if (1) {
+        /* R5F: the title (R5G: and the special stages) - the SH2's records on (the listener's sgb_poll / sgb_vblank, as for an act's planes): each
+           picture it sends plane B's h-scroll (the water), the planet's sprites' heights and the colours; the 68000
+           writes them in the vertical blank.  From here on no VDP address and data from this side (flr_dma) */
+        do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_LAST_ADDR, 0);
+        do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_READY_ADDR, 0);
+        do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_BAD_ADDR, 0);
+        do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15126, 0);                 /* COMM6 = 0: no id yet */
+        do_md_cmd2(MD_CMD_WRITE_32X_16, SGB_FLAG_ADDR, 1);
+    }
     return 1;
 }
 
@@ -1051,9 +1257,11 @@ int main(void)
             print_diag(temp, "SH2 NEVER EVEN REACHED THIS FILE      ", 2, 18); 
         }
 
-        /* SONIC REV R5: a command that uses Word RAM (loads, sound banks, backup RAM ...) ends the floor first */
+        /* SONIC REV R5: a command that uses Word RAM (loads, sound banks ...) ends the floor first.  R5E: the backup-RAM
+           file (56 load, 59 save) no longer - the BIOS's own buffers, no Word RAM (the title loads it once the clouds
+           are on: the clouds ended there and the SH2 drew them) */
         if (floor_on && cmd != 0 && cmd != FLOOR_CMD && cmd != 48 && cmd != 52 && cmd != 45 && cmd != 54 &&
-            cmd != 57 && cmd != 58)
+            cmd != 56 && cmd != 57 && cmd != 58 && cmd != 59)
             floor_end();
 
         if (cmd == FLOOR_CMD) {
@@ -1065,7 +1273,9 @@ int main(void)
             else if (op >= 1 && op <= 4) {
                 int32_t v = (int32_t)do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
                 if (op == 1 && flr_mode == 1) {   /* R5E: the title's clouds - COMM8 = the scroll (v32) */
-                    flr_v32 = v & 0x7FF;
+                    flr_v32 = flr_v32_base = v & 0x7FF;
+                    flr_v32_tick = GET_TICKS;
+                    flr_v32_have = 1;
                 }
                 else if (op == 1) {       /* R5B: X << 16 | Z, 13.3 each -> 12 bits of fraction */
                     flr_x = (int32_t)(int16_t)(v >> 16) << 9;
@@ -1076,17 +1286,27 @@ int main(void)
                 else {
                     flr_sin = (int16_t)(v >> 16);
                     flr_cos = (int16_t)v;
+                    /* R5B: COMM12 1 - the floor is on; 0 - it was ended (a load ...): the SH2 draws it itself.  R5H: the
+                       answer (and COMM0 = 0) first - the SH2 goes on with its picture while the trace table (100 lines
+                       of 32-bit arithmetic on this 68000) is written and the chip started */
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, floor_on ? 1 : 0);
+                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA15120, 0);
                     if (floor_on) {
                         if (floor_busy) floor_pend = 1;
                         else floor_start();
                     }
-                    /* R5B: COMM12 1 - the floor is on; 0 - it was ended (a load ...): the SH2 draws it itself */
-                    do_md_cmd2(MD_CMD_WRITE_32X_16, 0xA1512C, floor_on ? 1 : 0);
+                    continue;             /* (answered) */
                 }
             }
-            else if (op == 5 && floor_on && (flr_mode == 1 ? hi <= 63 : hi >= 1 && hi <= 15)) {
-                /* the floor: colours k, k + 1 of line 3; R5E, the title: CRAM index k, k + 1 */
-                const int at = flr_mode == 1 ? hi : 0x30 + hi, last = flr_mode == 1 ? 63 : 0x3F;
+            else if (op == 8) {           /* R5G: special stage 1's swirl - COMM8 = its picture (0-15) for this picture */
+                int v = do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128) & 15;
+                if (floor_on && sky_swirl)
+                    sky_want = v;
+            }
+            else if (op == 5 && 0) {      /* (R5G: no more - every colour comes in the SH2's records) */
+                /* the floor: colours k, k + 1 of line 3 (R5F: the title's colours come in the SH2's records - the
+                   vertical blank's handler writes the VDP there: no VDP address and data from here) */
+                const int at = 0x30 + hi, last = 0x3F;
                 uint32_t v = (uint32_t)do_md_cmd1(MD_CMD_READ_32X_32, 0xA15128);
                 do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, 0xC0000000 | ((uint32_t)(2 * at) << 16));
                 do_md_cmd2(MD_CMD_WRITE_32X_16, 0xC00000, (int)(v >> 16));
@@ -1097,10 +1317,13 @@ int main(void)
                 /* the file's palette index of colour hi: it sits in Word RAM (0x08 + 2 hi - 2) - only the Sub-CPU's
                    while no frame is on its way */
                 int v = 0;
-                if (floor_on && hi >= 1 && hi <= 15 && floor_busy == 0)
-                    v = read_word(FLR_SUB + 8 + 2 * (hi - 1));
-                else if (floor_on && flr_mode == 1 && hi >= 17 && hi <= 31)   /* R5E: the planet's (line 1) */
-                    v = ttl_pidx[hi - 16];
+                /* R5G: COMM2 high byte = the CRAM slot. The floor's colours: the title's 1-15, a special stage's 49-63 */
+                if (floor_on && floor_busy == 0 && (flr_mode == 1 ? hi >= 1 && hi <= 15 : hi >= 49 && hi <= 63))
+                    v = read_word(FLR_SUB + 8 + 2 * ((hi & 15) - 1));
+                else if (floor_on && flr_mode == 1 && hi >= 17 && hi <= 47 && hi != 32)   /* R5F: the title's line 1 */
+                    v = ttl_pidx[hi - 16];        /* (the mountains, the water), line 2 (the planet) */
+                else if (floor_on && flr_mode == 0 && hi >= 1 && hi <= 47 && (hi & 15))   /* R5G: the sky's lines 0-2 */
+                    v = sky_pidx[hi];
                 do_md_cmd2(MD_CMD_WRITE_32X_32, 0xA15128, v);
             }
             else if (op == 7) {

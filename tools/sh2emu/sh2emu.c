@@ -1030,6 +1030,14 @@ static void fbq_commit_one(void)
         u32 o = (fbq[0].off + i) & (FB_SIZE - 1);
         if (fbq[0].ov && !fbq[0].b[i])
             continue; /* the overwrite image ignores 0 bytes */
+        if (fbq[0].n == 1 && !fbq[0].b[i]) { /* REV R5H: so does the frame buffer itself for a byte write (8 bits of 0:
+                                                 nothing written - ares m32x/bus-internal.cpp, the 32X's rule) */
+            static int told = 0;
+            if (told++ < 4)
+                printf("[f%5d] FB-BYTE0   a byte write of 0 into the frame buffer (+%05X): not written (32X rule)\n", frame_no(),
+                       (unsigned)o);
+            continue;
+        }
         fb[fbq[0].bank][o]     = fbq[0].b[i];
         fb_def[fbq[0].bank][o] = 1;
     }
@@ -1213,6 +1221,8 @@ static void bus_write(u32 p, u32 v, int size)
                 break;
             case RG_FB:
                 o &= FB_SIZE - 1;
+                if (size == 1 && !b)
+                    break; /* REV R5H: a byte write of 0: nothing written (the 32X's rule) */
                 fb[fs_bit][o]     = b;
                 fb_def[fs_bit][o] = 1;
                 break;
@@ -2185,10 +2195,22 @@ static void blob_update(void) /* REV R4: where the scene image (cart 0x080000) h
             printf("[f%5d] scene image: native scripts at %08X-%08X\n", frame_no(), lo, hi);
     }
 }
+static int flr_on, flr_file = -1;    /* SONIC REV R5: command 80's floor (sub_finish) */
+static int flr_title;                /* REV R5F: it is the title's (records on) */
+static u64 flr_frames, flr_colours;
 static void sub_finish(void)
 {
     u16 cmd = sub_cmd;
     char nm[32];
+    /* SONIC REV R5: the Sub-CPU ends the floor before a command that may use Word RAM (cd32x/sub_main.c, the list
+       there; R5E: 56 / 59, the backup-RAM file, no longer - the BIOS's own buffers) */
+    if (flr_on && cmd != 0 && cmd != 80 && (cmd & 0xFF) != 48 && cmd != 52 && cmd != 45 && cmd != 54 && cmd != 56 && cmd != 57 &&
+        cmd != 58 && cmd != 59) {
+        printf("[f%5d] SUB: CMD %d ends the floor first: %llu floor frames, %llu colour commands\n", frame_no(), cmd,
+               (unsigned long long)flr_frames, (unsigned long long)flr_colours);
+        sgb_on = 0; /* REV R5F / R5G */
+        flr_on = 0;
+    }
     if (cmd == 38) {
         int idx = COMM(2);
         cur_file = -1;
@@ -2495,8 +2517,6 @@ static void sub_finish(void)
     }
     else if (cmd == 80) { /* SONIC REV R5: the special stages' floor on the graphics chip (cd32x/sub_main.c FLOOR_CMD) -
                              the SH2's side only: the file's checks and answers (the chip's picture is not drawn here) */
-        static int flr_on, flr_file = -1;
-        static u64 flr_frames, flr_colours;
         int op = COMM(2) & 0xFF, hi = (COMM(2) >> 8) & 0xFF;
         if (op == 0) {
             char nm[16];
@@ -2505,10 +2525,19 @@ static void sub_finish(void)
                 sprintf(nm, "FLOOR%d.BIN", hi);
                 k = find_file(nm);
             }
-            if (k >= 0 && files[k].len == (hi == 9 ? 0x42000u : 0x40000u) && !memcmp(files[k].data, "FLR1", 4) &&
-                rd_be16(files[k].data + 4) <= 0x10000 / 128)
+            if (k >= 0 && !memcmp(files[k].data, "FLR1", 4) && rd_be16(files[k].data + 4) <= 0x10000 / 128 &&
+                (hi == 9 ? files[k].len == 0x44000u && !memcmp(files[k].data + 0x40000, "TTL2", 4) &&
+                               rd_be16(files[k].data + 0x40004) == 104
+                         : (files[k].len == 0x48000u || files[k].len == 0x48000u + 16 * 7680) &&
+                               !memcmp(files[k].data + 0x40000, "SKY2", 4))) /* REV R5G: the sky's part */
                 ok = 1;
-            flr_on = ok, flr_file = ok ? k : -1, flr_frames = 0, flr_colours = 0;
+            if (ok) { /* REV R5F: the title (R5G: and the special stages) - the SH2's records on (sub_main.c floor_begin) */
+                sgb_on = 1;
+                sgb_ready = sgb_bad = 0;
+                sgb_last = 0;
+                SET_COMM(6, 0);
+            }
+            flr_on = ok, flr_file = ok ? k : -1, flr_frames = 0, flr_colours = 0, flr_title = ok && hi == 9;
             printf("[f%5d] SUB: CMD 80 floor begin, %s %d -> %s\n", frame_no(), hi == 9 ? "the title's clouds" : "special stage", hi,
                    ok ? "ok" : k < 0 ? "NO FILE" : "BAD FILE");
             SET_COMM(12, ok);
@@ -2524,16 +2553,22 @@ static void sub_finish(void)
         }
         else if (op == 6) {
             u32 v = 0;
-            if (flr_on && hi >= 1 && hi <= 15)
-                v = rd_be16(files[flr_file].data + 8 + 2 * (hi - 1));
-            else if (flr_on && hi >= 17 && hi <= 31 && files[flr_file].len > 0x40000) /* REV R5E: the planet's */
-                v = rd_be16(files[flr_file].data + 0x40000 + 10 + 2 * (hi - 17));
+            /* REV R5G: COMM2 high byte = the CRAM slot: the floor's colours the title's 1-15, a special stage's 49-63 */
+            if (flr_on && (flr_title ? hi >= 1 && hi <= 15 : hi >= 49 && hi <= 63))
+                v = rd_be16(files[flr_file].data + 8 + 2 * ((hi & 15) - 1));
+            else if (flr_on && flr_title && hi >= 17 && hi <= 47 && hi != 32) /* REV R5F: the */
+                v = rd_be16(files[flr_file].data + 0x40000 + (hi < 32 ? 42 + 2 * (hi - 17) : 12 + 2 * (hi - 33)));
+                /* title's line 1 (the mountains, the water), line 2 (the planet) */
+            else if (flr_on && !flr_title && hi >= 1 && hi <= 47 && (hi & 15)) /* REV R5G: the sky's lines 0-2 */
+                v = rd_be16(files[flr_file].data + 0x40000 + 64 + 2 * hi);
             set_comm32(8, v);
         }
         else if (op == 7) {
             if (flr_on)
                 printf("[f%5d] SUB: CMD 80 floor end: %llu floor frames, %llu colour commands\n", frame_no(),
                        (unsigned long long)flr_frames, (unsigned long long)flr_colours);
+            if (flr_on)
+                sgb_on = 0; /* REV R5F / R5G */
             flr_on = 0;
         }
         SET_COMM(0, 0);

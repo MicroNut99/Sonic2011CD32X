@@ -214,7 +214,12 @@ static union {
     struct {
         int lines[SCREEN_YSIZE];      /* a tile layer's x per line (DrawHLineScrollLayer's own) */
         DrawListEntry3D list[0xA0];   /* the 3D scene's faces, sorted */
-        unsigned short fIdx[32], fGen[32], fSent[32]; /* REV R5E: the chip's picture's colours (R5: the floor's 16) */
+        unsigned short fIdx[64], fGen[64], fSent[64]; /* REV R5E: the Genesis's colours, CRAM 0-63 (R5: the floor's 16;
+                                                         R5F: the title's lines 0-2; R5G: the special stages' all 4) */
+        short sRA, sRB, sVA, sVB, sStage; /* REV R5G: the special stage's sky - h-scroll runs (planes A, B) this picture,
+                                             v-scroll, the stage (1-8) */
+        short tStrip[14], tPY, tPYSent; /* REV R5F: the title's water strips' x (lines 168-223), the planet's y */
+        int tV32;                       /* REV R5E: the clouds' scroll */
     } pm;
 } scdShared;
 #define xA scdShared.pl.xA
@@ -226,6 +231,23 @@ static union {
 #define flrIdx scdShared.pm.fIdx
 #define flrGen scdShared.pm.fGen
 #define flrSent scdShared.pm.fSent
+#define ttlStrip scdShared.pm.tStrip
+#define ttlPY scdShared.pm.tPY
+#define ttlPYSent scdShared.pm.tPYSent
+#define ttlV32 scdShared.pm.tV32
+#define skyRA scdShared.pm.sRA
+#define skyRB scdShared.pm.sRB
+#define skyVA scdShared.pm.sVA
+#define skyVB scdShared.pm.sVB
+#define skyStage scdShared.pm.sStage
+/* REV R5G: the special stage's sky's h-scroll runs ({lines, value} pairs), built while the picture is drawn, and the
+   frame buffer's first words kept while the record is there - in this buffer's pool area's unused end (the special
+   stages' layouts use 24 KB of it at most: stages_report.md) */
+#define SKY_RUNS_A ((volatile unsigned short *)(0x24000000 + 0x1F000))
+#define SKY_RUNS_B ((volatile unsigned short *)(0x24000000 + 0x1F400))
+#define SKY_SAVE ((volatile unsigned short *)(0x24000000 + 0x1D800))
+#define SKY_POOL_MAX (0x1D800 - PM_FB_POOL)
+#define SKY_ROW 120 /* the Genesis's sky: lines 0-119 (the window's rows from 15 on) */
 static unsigned short cramSent[64];
 static unsigned short recId = 0;
 /* REV R4D: the UNDERWATER switch (scdWaterSwitch) - the records' water trailer (md/sgb.h): the water colours the 68000
@@ -1075,6 +1097,9 @@ static bool floorHW = false; /* REV R5: the special stage's floor on the Sega CD
 static bool flrTitle = false;           /* REV R5E: ... the title's clouds instead (FLOOR9.BIN) */
 static unsigned int ttlSky = 0x000060u; /* REV R5E: the title's sky (its full-screen rectangle): the Genesis backdrop */
 static bool title_hw_frame(int v32);    /* REV R5E (below) */
+static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE; /* (below) */
+static void sky_hw_record();            /* REV R5G (below) */
+static void fb_picture_clear(); /* REV R5F / R5G (below) */
 /* REV R5B: the floor's first row (0 - 100 from line 124) that lies inside the floor's map from its first pixel to its
    last - from there on, the chip's floor. The rows above it (the far ones, at the horizon) reach past the map's edge,
    where the engine's floor is see-through and shows the sky behind it: those rows the SH2 still draws itself, over the
@@ -1099,16 +1124,112 @@ static int flr_first_row(const TileLayer *layer)
     }
     return 100;
 }
+/* REV R5H: the floor's first row (0 - 100 from line 124) the chip draws - the Sub-CPU's own test (cd32x/sub_main.c
+   floor_trace): a row whose positions leave the chip's 13 bits of pixels (-4096 .. 8191) or whose step leaves 16 bits is
+   see-through on the chip. Those rows (far ones, at the horizon) the SH2 still draws; from this row on the chip does,
+   past the map's edge too (see-through there, as the engine's) - the layers behind it (behind colours, pm_layer_end) */
+static int flr_chip_row(const TileLayer *layer)
+{
+    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13; /* (as sent: 13.3) */
+    fx      = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
+    fz      = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
+    const int x = fx << 9, z = fz << 9, y = layer->YPos, lo = -(4096 << 12), hi = 8192 << 12;
+    const int sn = sinMLookupTable[layer->angle & 0x1FF], cs = cosMLookupTable[layer->angle & 0x1FF];
+    for (int k = 0; k < 100; ++k) {
+        int q  = pm_div(y, (9 + 2 * k) << 8);
+        int xb = (q * -cs) >> 9, yb = (sn * q) >> 9;
+        int X = x + ((3 * sn * q) >> 2) - xb * 320 + xb, Y = z + ((3 * cs * q) >> 2) - yb * 320 + yb;
+        int X2 = X + 2 * 319 * xb, Y2 = Y + 2 * 319 * yb;
+        if (!(xb > 32767 || xb < -32768 || yb > 32767 || yb < -32768 || X < lo || X >= hi || Y < lo || Y >= hi || X2 < lo ||
+              X2 >= hi || Y2 < lo || Y2 >= hi))
+            return k;
+    }
+    return 100;
+}
 /* REV R5B: with the chip's floor, the line-scroll layers (the sky, the horizon) only down to the floor's first row: the
    rows below are colour 0 in the 32X picture (floor_hw_frame), so what the layers drew there was never seen */
+/* REV R5H: flr_first_row, and for each row above it (line 124 + k) the pixels that sample the map (PM_SKIP): there the
+   floor is the chip's (or, above flr_chip_row, the SH2's - drawn in front) and covers the layers behind it, so they are
+   not drawn. Pixel p samples X + 2 p xb (12 bits of fraction); inside: 0 <= it < the map's size, on both axes. Kept 2
+   pixels inside (the engine's four samples, the chip's one), in steps of 2 pixels. sgbB's memory (acts only, as sgbA) */
+#define PM_SKIP ((unsigned char *)&sgbB) /* [2 * 100]: line 124 + k's pixels from 2 a to 2 b not drawn (a >= b: none) */
+static inline int pm_floor_divf(int n, int d) /* floor(n / d), d > 0 */
+{
+    int q = pm_div(n, d);
+    if (q * d > n)
+        --q;
+    return q;
+}
+static void pm_axis(int A, int D, int hi, int *p0, int *p1) /* the p with 0 <= A + D p < hi, into [p0, p1) */
+{
+    int a, b;
+    if (D == 0) {
+        if (A < 0 || A >= hi)
+            *p1 = *p0;
+        return;
+    }
+    if (D > 0) /* p >= ceil(-A / D), p < ceil((hi - A) / D) */
+        a = -pm_floor_divf(A, D), b = -pm_floor_divf(A - hi, D);
+    else /* p >= floor((A - hi) / -D) + 1, p <= floor(A / -D) */
+        a = pm_floor_divf(A - hi, -D) + 1, b = pm_floor_divf(A, -D) + 1;
+    if (a > *p0)
+        *p0 = a;
+    if (b < *p1)
+        *p1 = b;
+}
+static int pm_floor_scan(const TileLayer *layer, int kmax) /* (kmax: the rows wanted - stages 2-8: lines 124-127 only) */
+{
+    static_assert(sizeof(sgbB) >= 200, "REV R5H: the skip table in sgbB");
+    const int lw = (int)layer->xsize << 19, lh = (int)layer->ysize << 19;
+    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13;
+    fx      = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
+    fz      = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
+    const int x = fx << 9, z = fz << 9, y = layer->YPos;
+    const int sn = sinMLookupTable[layer->angle & 0x1FF], cs = cosMLookupTable[layer->angle & 0x1FF];
+    unsigned char *sk = PM_SKIP;
+    for (int k = 0; k < kmax; ++k) {
+        int q  = pm_div(y, (9 + 2 * k) << 8);
+        int xb = (q * -cs) >> 9, yb = (sn * q) >> 9;
+        int X = x + ((3 * sn * q) >> 2) - xb * 320 + xb, Y = z + ((3 * cs * q) >> 2) - yb * 320 + yb;
+        int p0 = 0, p1 = 320;
+        if (xb > 32767 || xb < -32768 || yb > 32767 || yb < -32768)
+            p1 = 0; /* (far: as flr_first_row) */
+        else {
+            pm_axis(X, 2 * xb, lw, &p0, &p1);
+            pm_axis(Y, 2 * yb, lh, &p0, &p1);
+        }
+        if (p0 <= 0 && p1 >= 320 && p1 > p0)
+            return k; /* (the whole row inside: from here on the chip's floor - the layers stop above it) */
+        p0 += 2, p1 -= 2;
+        const int a = (p0 + 1) >> 1, b = p1 >> 1;
+        sk[2 * k] = (unsigned char)(a > 0 ? (a < 164 ? a : 164) : 0), sk[2 * k + 1] = (unsigned char)(b > a && b > 0 ? (b < 164 ? b : 164) : 0);
+    }
+    return kmax;
+}
+static short pmRow0 = -1; /* REV R5H: pm_hline_lines' answer for this engine frame (-1: not yet - pm_present) */
+/* REV R5H: command 80 without waiting - op 1 (the floor's X, Z) sent at the picture's first draw (the logic is done),
+   op 4 (its angle: the chip starts) sent and left: its answer (COMM12) read before the next command (comm_idle) or at the
+   picture's end (pm_present). Bit 0: op 1 sent this frame, bit 1: op 4's answer not read yet */
+static unsigned char flrPost;
+static void comm_idle();
+static void flr_post_xz(const TileLayer *layer);
 static int pm_hline_lines()
 {
     if (!floorHW)
         return SCREEN_YSIZE;
+    if (pmRow0 >= 0)
+        return pmRow0;
+    int r = SCREEN_YSIZE;
     for (int s = 0; s < 4; ++s)
-        if (activeTileLayers[s] < LAYER_COUNT && stageLayouts[activeTileLayers[s]].type == LAYER_3DSKY)
-            return (SCREEN_YSIZE / 2) + 12 + flr_first_row(&stageLayouts[activeTileLayers[s]]);
-    return SCREEN_YSIZE;
+        if (activeTileLayers[s] < LAYER_COUNT && stageLayouts[activeTileLayers[s]].type == LAYER_3DSKY) {
+            const TileLayer *layer = &stageLayouts[activeTileLayers[s]];
+            if (!flrTitle && !(flrPost & 1))
+                flr_post_xz(layer); /* (REV R5H: the Sub-CPU has it while the SH2 draws) */
+            r = (SCREEN_YSIZE / 2) + 12 + (flrTitle ? flr_first_row(layer) : pm_floor_scan(layer, skyStage == 1 ? 100 : 4));
+            break;
+        }
+    pmRow0 = (short)r;
+    return r;
 }
 #define PM_HLINE_LINES pm_hline_lines()
 #define PM_VERTS ((Vertex *)(0x24000000 + PM_FB_VERTS))
@@ -1174,6 +1295,48 @@ static bool slave_ready()
         else                                                                                                            \
             fn(job, 0, 1);                                                                                              \
     } while (0)
+/* REV R5H: THE PICTURE CLEARED WHERE IT WAS DRAWN (the title, the special stages: the 32X draws only what is in front
+   of the Genesis's picture, mostly see-through). Each frame buffer keeps, past its pools (PM_DIRTY_AT), what its last
+   picture drew: for each band of 4 lines the x range drawn (in 4-pixel steps), and for each line two flags - bit 0: a
+   layer wrote every pixel of it, bit 1: the clear before that picture left it (bit 0 of the picture before predicted
+   it). A picture's first draw (PM_FRESH) clears what the buffer's record names, then starts a new record. The lines a
+   layer will cover again (lines 120 to the floor's first in-map row, every pixel written last time) are not cleared;
+   if the layer does not cover one after all, the picture's end (pm_dirty_check) puts that line in the record - it is
+   cleared next time. Pool past PM_DIRTY_AT (not in the special stages: SKY_POOL_MAX): every picture cleared whole */
+#define PM_DIRTY_AT 0x1F800
+#define PM_BANDS (PM_LINES / 4)
+/* (16-bit words: a byte write of 0 into the frame buffer does not happen - the 32X's rule, ares m32x/bus-internal.cpp)
+   [0, 56) each band's x0 / 4 << 8 | x1 / 4 (0xFF00: none), [56, 280) each line's flags: bit 0 a layer wrote every pixel
+   it covers (all but the floor's in-map part, pm_floor_scan), bit 1 the clear left it to the layer, bit 2 a layer drew */
+#define PM_DB ((volatile unsigned short *)(0x24000000 + PM_DIRTY_AT))
+#define PM_DB_NONE 0xFF00
+static unsigned char pmDirtyOn, pmFresh, pmFullClears; /* the record kept; the picture not yet cleared; whole clears left */
+#define PM_RM ((unsigned char *)&sgbA) /* REV R5H: [256] each colour's behind colour (itself: none) - pm_behind_init */
+#define PM_RMSRC (PM_RM + 256)         /* [61] each slot's colour */
+#define PM_RM_SLOTS 61
+static unsigned char pmBehindOn, pmBehindN;
+static unsigned char pmRowLo[4], pmRowHi[4]; /* REV R5H: each slot's layer: its tile rows (16 lines) with a pixel, lo - hi */
+static unsigned char pmFloorOpaque; /* REV R5H: no see-through pixel in the floor's tiles: its in-map part hides the layers */
+static void pm_behind_add(unsigned char c);
+static void pm_behind_init();
+static void pm_dirty(int x0, int y0, int x1, int y1);
+static void pm_fresh_clear();
+static void pm_dirty_reset();
+#define PM_DIRTY(x0, y0, x1, y1)          \
+    do {                                  \
+        if (pmDirtyOn)                    \
+            pm_dirty(x0, y0, x1, y1);     \
+    } while (0)
+#define PM_LINE_DREW(y, full)                                              \
+    do {                                                                   \
+        if (pmDirtyOn)                                                     \
+            PM_DB[PM_BANDS + (y)] |= (unsigned short)((full) ? 5 : 4);     \
+    } while (0)
+#define PM_FRESH()                        \
+    do {                                  \
+        if (pmFresh)                      \
+            pm_fresh_clear();             \
+    } while (0)
 #include "scd_pm.h"
 static void pad_service(); /* REV R4D: the pad during a long picture (below) */
 void scd_pm_clear(int index)
@@ -1186,8 +1349,20 @@ void scd_pm_sprite(int XPos, int YPos, int width, int height, int sprX, int sprY
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
-    if (floorHW && flrTitle && sprX == 257 && sprY == 146 && width == 120 && height == 104)
-        return; /* REV R5E: the title's planet - on the Genesis plane behind the clouds (FLOOR9.BIN) */
+    if (floorHW && flrTitle) { /* REV R5F: the title's planet (its sprites), mountains and water (plane B) - the Genesis's */
+        if (sprX == 257 && sprY == 146 && width == 120 && height == 104) {
+            ttlPY = (short)YPos;
+            return;
+        }
+        if ((sprX == 256 && sprY == 4 && width == 176 && height == 68) || (sprX == 256 && sprY == 77 && width == 124 && height == 68))
+            return;
+        if (sprX == 0 && sprY >= 447 && sprY < 511 && width == 512 && height == 4) { /* a water strip at x, x - 512 */
+            int k = (YPos - 168) >> 2;
+            if (k >= 0 && k < 14 && YPos == 168 + 4 * k)
+                ttlStrip[k] = (short)(XPos & 511);
+            return;
+        }
+    }
     pm_sprite(XPos, YPos, width, height, sprX, sprY, direction, sheetID, alpha);
 }
 void scd_pm_sprite_scaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX,
@@ -1208,15 +1383,13 @@ void scd_pm_rect(int XPos, int YPos, int width, int height, int R, int G, int B,
 {
     pmDrew = true;
     pad_service(); /* REV R4D */
-    if (floorHW && flrTitle && XPos <= 0 && YPos <= 0 && XPos + width >= SCREEN_XSIZE && YPos + height >= SCREEN_YSIZE && A >= 0xFF) {
+    if (floorHW && flrTitle && XPos <= 0 && YPos <= 0 && XPos + width >= SCREEN_XSIZE && YPos + height == 100 && A >= 0xFF) {
         /* REV R5E: the title's sky - the Genesis backdrop shows it (behind the chip's clouds and the planet); the 32X
-           picture colour 0 (see-through) where the rectangle was */
+           picture colour 0 (see-through) where the rectangle was, and down to the clouds' last line (112: the engine's
+           clouds covered lines 100-111 below the clouds object's rectangle, 320 x 100) */
         ttlSky = (unsigned int)(R & 0xFF) << 16 | (unsigned int)(G & 0xFF) << 8 | (unsigned int)(B & 0xFF);
-        PM_FLUSH();
-        if (pmSkip)
-            return;
-        volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
-        for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; ++i) p[i] = 0;
+        /* (REV R5F: the picture was cleared when it began - pm_present, fb_picture_clear; the engine's full-screen
+           rectangles of the same colour, its fades, are drawn as they are) */
         return;
     }
     pm_rect(XPos, YPos, width, height, R, G, B, A);
@@ -1241,9 +1414,62 @@ void scd_pm_draw3dscene(int sheetID)
         for (int y = 0; y < 4; ++y)
             for (int x = 0; x < 4; ++x) matFinal.values[y][x] = matWorld.values[y][x];
         MatrixMultiply(&matFinal, &matView);
+        ttlV32 = (-matWorld.values[3][2]) & 2047; /* (REV R5F: sent with the picture - pm_present, title_hw_frame) */
+        return;
+    }
+    if (floorHW && skyStage == 1) { /* REV R5G: special stage 1's swirl - plane B, sheared a line at a time (its quads' left
+                                       edges: vertex 0 at line 0, vertex 2 at line 128), its picture from the u, v */
         PM_FLUSH();
-        if (pmSkip || title_hw_frame((-matWorld.values[3][2]) & 2047))
+        if (pmSkip)
             return;
+        const int x0 = vertexBuffer[0].x, x2 = vertexBuffer[2].x;
+        int n = 0;
+        for (int y = 0; y < 120; ++y) {
+            const unsigned short v = (unsigned short)((x0 + (x2 - x0) * y / 128) & 0x3FF);
+            if (n && SKY_RUNS_B[2 * n - 1] == v)
+                SKY_RUNS_B[2 * n - 2]++;
+            else
+                SKY_RUNS_B[2 * n] = 1, SKY_RUNS_B[2 * n + 1] = v, ++n;
+        }
+        SKY_RUNS_B[2 * n] = (unsigned short)(SCREEN_YSIZE - 120), SKY_RUNS_B[2 * n + 1] = 0, ++n;
+        skyRB = (short)n, skyVB = 0;
+        { /* lines 120 to the floor's first row: the 32X draws them (its picture's row y: the texture's row v0 + y from x
+             x_left(y) on, 128 wide, side by side) */
+            const int rows = PM_HLINE_LINES, u0 = vertexBuffer[0].u, v0 = vertexBuffer[0].v;
+            const unsigned char *sheet = &PM_GFX[gfxSurface[sheetID].dataPosition];
+            const int rb = pm_opaque(1 << gfxSurface[sheetID].widthShifted);
+            const int ye = rows < 128 ? rows : 128;
+            if (!pmBehindOn)
+                PM_DIRTY(0, SKY_ROW, PM_STRIDE, ye);
+            for (int y = SKY_ROW; y < ye; ++y) {
+                const int xl = x0 + (x2 - x0) * y / 128;
+                const unsigned char *t = sheet + (v0 + y) * rb + u0;
+                int c = (-xl) & 127, x = 0, zero = 0;
+                if (pmBehindOn) /* REV R5H: behind colours (as the layers below line 120) - its colours added as met */
+                    for (int i = 0; i < 128; ++i) {
+                        const unsigned char p = t[i];
+                        if (p >= 128 && PM_RM[p] == p)
+                            pm_behind_add(p);
+                    }
+                while (x < SCREEN_XSIZE) {
+                    int k = 128 - c;
+                    if (k > SCREEN_XSIZE - x)
+                        k = SCREEN_XSIZE - x;
+                    if (pmBehindOn)
+                        pm_remap_row((unsigned int)(PM_STRIDE * y + x), t + c, k, 1, PM_RM, &zero);
+                    else
+                        pm_sprite_row((unsigned int)(PM_STRIDE * y + x), t + c, k, 1);
+                    x += k, c = 0;
+                }
+                if (pmBehindOn)
+                    PM_LINE_DREW(y, !zero);
+            }
+        }
+        comm_idle();
+        SC_COMM2    = 8;
+        SC_COMM8_32 = (unsigned int)(((vertexBuffer[0].u >> 7) & 3) | ((vertexBuffer[0].v >> 5) & 12));
+        sd_cmd(80);
+        return;
     }
     pm_draw3dscene(sheetID);
 }
@@ -1257,6 +1483,7 @@ static int sd_cmd(unsigned short cmd) SCD_HOT_NOINLINE;
 static int sd_cmd_long(unsigned short cmd) SCD_HOT_NOINLINE;
 static int flrYSent; /* REV R5B: the height the Sub-CPU has */
 static bool name_is(const char *a, const char *b); /* (below) */
+static unsigned int pm_pool_used(); /* (below) */
 static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
 {
     floorHW  = false;
@@ -1272,15 +1499,19 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
         stage = 9; /* REV R5E: the title - its clouds */
     if (!stage)
         return;
+    if (stage != 9 && pm_pool_used() > SKY_POOL_MAX)
+        return; /* REV R5G: (not the case for any of the 8: the sky's runs would not fit) the SH2 draws it all */
     comm_idle();
+    SC_COMM4 = 0; /* REV R5F: the records (R5G: the special stages' too) - COMM4 may still hold the start-up check's
+                     0x1234: the 68000 would take it for a record's id the moment the Sub-CPU turns records on (R1S) */
     SC_COMM2  = (unsigned short)(stage << 8 | 0);
     SC_COMM12 = 0xFFFF;
     sd_cmd_long(80);
     if (SC_COMM12 != 1)
         return;
-    for (int k = 0; k < 32; ++k) {
+    for (int k = 0; k < 64; ++k) {
         flrIdx[k] = 0;
-        if ((k >= 1 && k < 16) || (stage == 9 && k >= 17)) { /* (the title: the planet's colours 17-31 too) */
+        if ((k & 15) && (stage != 9 || k < 48)) { /* (R5G: COMM2 high byte = the CRAM slot) */
             SC_COMM2  = (unsigned short)(k << 8 | 6);
             flrIdx[k] = sd_cmd(80) < 0 ? 0 : (unsigned short)(SC_COMM8_32 & 0xFF);
         }
@@ -1289,19 +1520,60 @@ static void floor_hw_begin() /* (pm_begin) a special stage: the chip's floor */
     }
     flrTitle = stage == 9;
     flrYSent = (int)0x80000000; /* (none sent yet) */
+    skyStage = (short)stage, skyRA = skyRB = 0, skyVA = skyVB = 0;
+    if (flrTitle) {             /* REV R5F: the water at rest, the planet at its start; the 68000 gets them first time */
+        for (int k = 0; k < 14; ++k) ttlStrip[k] = 0;
+        ttlPY = -16, ttlPYSent = 0x7FFF, ttlV32 = 0;
+    }
     floorHW    = true;
     genesisOff = false; /* (the Sub-CPU switched the Genesis display on) */
+    /* REV R5H: each buffer cleared whole at its first picture, then where its pictures drew (PM_DIRTY_AT) */
+    pmDirtyOn    = (unsigned char)(PM_FB_POOL + pm_pool_used() <= PM_DIRTY_AT);
+    pmFullClears = 1; /* (the other buffer: after the first picture, pm_present) */
+    pmFresh      = 0;
+    fb_picture_clear(); /* (this one now, as R5G) */
+    if (pmDirtyOn)
+        pm_dirty_reset();
+    pmBehindOn   = 0;
+    if (!flrTitle) {
+        pm_behind_init(); /* (the layers' rows; stage 1: their behind colours, the floor's see-through) */
+        pmBehindOn = (unsigned char)(stage == 1); /* REV R5H: stages 2-8 - layer 1 below line 120 is plane B's */
+    }
 }
 static void floor_hw_end() /* (pm_end) */
 {
     if (!floorHW)
         return;
     comm_idle();
+    SC_COMM4 = 0; /* REV R5F: the records' last id - the Sub-CPU would take it for a start-up fault and print it */
     SC_COMM2 = 7;
     sd_cmd_long(80);
     floorHW    = false;
     flrTitle   = false;
-    genesisOff = false; /* (R5B: the Sub-CPU's set-up after it - command 68's off - leaves the display on, blank) */
+    genesisOff = true; /* (REV R5F: the Sub-CPU leaves the Genesis display off - its text layer stays dark) */
+    pmDirtyOn = pmFresh = pmBehindOn = 0; /* REV R5H */
+}
+static void flr_post_xz(const TileLayer *layer) /* REV R5H: op 1, not waited for */
+{
+    comm_idle();
+    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13;
+    fx = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
+    fz = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
+    SC_COMM2    = 1;
+    SC_COMM8_32 = (unsigned int)(fx << 16) | ((unsigned int)fz & 0xFFFF);
+    SC_COMM0    = 80;
+    flrPost |= 1;
+}
+static void flr_answer() /* REV R5H: (COMM0 free) op 4's answer - 0: the floor was ended on the Sub-CPU's side (another
+                            command): from the next picture on the SH2 draws it (R5B) */
+{
+    flrPost &= (unsigned char)~2;
+    if (floorHW && SC_COMM12 == 0) {
+        floorHW    = false;
+        genesisOff = true;
+        SC_COMM4   = 0; /* REV R5F: (the records' last id: the Sub-CPU would print a start-up fault) */
+        pmDirtyOn = pmFresh = pmBehindOn = 0;
+    }
 }
 static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values to the Sub-CPU, its rows see-through;
                                            false (R5B): the Sub-CPU ended the floor - pm_sky draws it */
@@ -1312,25 +1584,10 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
     if (!layer->xsize || !layer->ysize)
         return true;
-    comm_idle();
-    for (int k = 1; k < 16; k += 2) /* the colours that changed (pm_colours: flrGen), two a command */
-        if (flrGen[k] != flrSent[k] || (k < 15 && flrGen[k + 1] != flrSent[k + 1])) {
-            SC_COMM2    = (unsigned short)(k << 8 | 5);
-            SC_COMM8_32 = (unsigned int)flrGen[k] << 16 | (k < 15 ? flrGen[k + 1] : 0);
-            if (sd_cmd(80) == 0) {
-                flrSent[k] = flrGen[k];
-                if (k < 15)
-                    flrSent[k + 1] = flrGen[k + 1];
-            }
-        }
-    /* REV R5B: X and Z in one command (13.3 each: the chip's own precision), the height only when it changed */
-    int fx = layer->XPos >> 13, fz = layer->ZPos >> 13;
-    fx = fx < -32768 ? -32768 : fx > 32767 ? 32767 : fx;
-    fz = fz < -32768 ? -32768 : fz > 32767 ? 32767 : fz;
-    SC_COMM2    = 1;
-    SC_COMM8_32 = (unsigned int)(fx << 16) | ((unsigned int)fz & 0xFFFF);
-    sd_cmd(80);
-    if (layer->YPos != flrYSent) {
+    if (!(flrPost & 1))
+        flr_post_xz(layer); /* REV R5B: X and Z in one command (13.3 each: the chip's own precision) */
+    comm_idle();            /* (REV R5G: the colours go in the picture's record - sky_hw_record; R5H: op 1 done) */
+    if (layer->YPos != flrYSent) { /* (the height only when it changed) */
         SC_COMM2    = 3;
         SC_COMM8_32 = (unsigned int)layer->YPos;
         if (sd_cmd(80) == 0)
@@ -1339,33 +1596,27 @@ static bool floor_hw_frame(int layerID) /* instead of pm_sky: the floor's values
     SC_COMM2    = 4;
     SC_COMM8_32 = (unsigned int)(sinMLookupTable[layer->angle & 0x1FF] << 16) | (cosMLookupTable[layer->angle & 0x1FF] & 0xFFFF);
     SC_COMM12   = 0xFFFF;
-    if (sd_cmd(80) == 0 && SC_COMM12 == 0) { /* R5B: ended on the Sub-CPU's side (another command): the SH2's floor */
-        floorHW    = false;
-        genesisOff = false;
-        return false;
-    }
-    /* the floor's rows (124-223, pm_sky_part's) colour 0 in the SH2's buffer (the frame buffer itself: the overwrite
-       image skips 0) */
-    const int row0 = (PM_LINES / 2) + 12 + flr_first_row(layer); /* REV R5B: the rows the chip draws */
-    if (row0 > (PM_LINES / 2) + 12)
-        pm_sky_rows(layerID, row0); /* REV R5B: the rows past the map's edge, as before (after the colours: no pmSkip) */
-    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS + PM_STRIDE * row0);
-    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * (PM_LINES - row0)) / 4; ++i) p[i] = 0;
+    SC_COMM0    = 80; /* REV R5H: not waited for - the answer read later (flr_answer) */
+    flrPost |= 2;
+    /* the whole picture colour 0 in the SH2's buffer (the frame buffer itself: the overwrite image skips 0) - REV R5G:
+       the sky is the Genesis's planes now, the floor its window; the SH2 draws what is in front */
+    /* REV R5H: the SH2 draws only the rows the chip cannot (flr_chip_row) - before, every row reaching past the map's
+       edge (flr_first_row): there the layers showed through, drawn by the 32X in front of the Genesis */
+    const int k = flr_chip_row(layer);
+    if (k > 0)
+        pm_sky_rows(layerID, (PM_LINES / 2) + 12 + k);
     return true;
 }
-/* REV R5E: THE TITLE'S CLOUDS ON THE CHIP - each picture: the colours that changed (CRAM 0-31: the sky, the clouds' line
-   0, the planet's line 1), the scroll (the clouds object's Draw3DScene: its world translation's z is -scroll), then the
-   chip draws. false: the Sub-CPU ended it - the SH2 draws the clouds itself */
+/* REV R5E: THE TITLE'S CLOUDS ON THE CHIP - each picture the scroll (the clouds object's Draw3DScene: its world
+   translation's z is -scroll), then the chip draws. REV R5F: the rest of the title's picture is the Genesis's too (the
+   mountains and the water on plane B, the planet as 8 sprites: FLOOR9.BIN); each picture a record to the 68000 (the
+   acts' planes' way: md/sgb.h, rec_handover) with plane B's h-scroll (the water's 14 strips), the planet's height (its
+   sprites' y, when it moved) and the colours that changed (CRAM 0-47). The record goes where the buffer's line table
+   is (the 68000 reads it at the frame buffer's start); the line table is written again after. false: the Sub-CPU
+   ended the floor, or the 68000 did not take the record - the SH2 draws it all itself */
 static bool title_hw_frame(int v32)
 {
     comm_idle();
-    for (int k = 0; k < 32; k += 2)
-        if (flrGen[k] != flrSent[k] || flrGen[k + 1] != flrSent[k + 1]) {
-            SC_COMM2    = (unsigned short)(k << 8 | 5);
-            SC_COMM8_32 = (unsigned int)flrGen[k] << 16 | flrGen[k + 1];
-            if (sd_cmd(80) == 0)
-                flrSent[k] = flrGen[k], flrSent[k + 1] = flrGen[k + 1];
-        }
     SC_COMM2    = 1;
     SC_COMM8_32 = (unsigned int)v32;
     sd_cmd(80);
@@ -1375,10 +1626,269 @@ static bool title_hw_frame(int v32)
     if (sd_cmd(80) == 0 && SC_COMM12 == 0) {
         floorHW    = false;
         flrTitle   = false;
-        genesisOff = false;
+        genesisOff = true;
+        SC_COMM4   = 0; /* REV R5F */
+        pmDirtyOn = pmFresh = pmBehindOn = 0; /* REV R5H */
         return false;
     }
+    volatile unsigned short *w = SC_FB;
+    int n = 2, g = 0;
+    if (ttlPY != ttlPYSent)
+        for (int i = 0; i < 8; ++i) { /* the sprites' y (cd32x/sub_main.c floor_begin: rows 0-3, 4-7, 8-11, 12) */
+            w[n++] = (unsigned short)(0xF800 + 8 * i);
+            w[n++] = 1;
+            w[n++] = (unsigned short)(128 + ttlPY + 32 * (i & 3));
+            g++;
+        }
+    w[1]   = (unsigned short)g;
+    w[n++] = 0; /* v-scroll A, B */
+    w[n++] = 0;
+    w[n++] = 1; /* h-scroll A: 224 lines 0 */
+    w[n++] = 224;
+    w[n++] = 0;
+    w[n++] = 15; /* h-scroll B: lines 0-167 0, then the strips */
+    w[n++] = 168;
+    w[n++] = 0;
+    for (int k = 0; k < 14; ++k) {
+        w[n++] = 4;
+        w[n++] = (unsigned short)ttlStrip[k];
+    }
+    int at = n++, c = 0;
+    for (int k = 0; k < 48; ++k)
+        if (flrGen[k] != flrSent[k]) {
+            w[n++] = (unsigned short)k;
+            w[n++] = flrGen[k];
+            c++;
+        }
+    w[at] = (unsigned short)c;
+    w[0]  = (unsigned short)(n - 1);
+    recId = (unsigned short)(recId + 1);
+    if (!recId)
+        recId = 1;
+    sgb_give_fb();
+    SC_COMM4       = recId;
+    unsigned int t = 0;
+    for (; t < 400000u; ++t) { /* the same answer twice: a read during the 68000's write is undefined */
+        if (SC_COMM6 == recId && SC_COMM6 == recId)
+            break;
+        sgb_pause();
+    }
+    sgb_take_fb();
+    for (int y = 0; y < n; ++y) w[y] = (unsigned short)(PM_FB_PIXELS / 2 + y * (PM_STRIDE / 2)); /* (the line table) */
+    if (t >= 400000u) {
+        floor_hw_end();
+        return false;
+    }
+    for (int k = 0; k < 48; ++k) flrSent[k] = flrGen[k];
+    ttlPYSent = ttlPY;
     return true;
+}
+/* REV R5G: the special stage's picture's record to the 68000 (as the title's, title_hw_frame): planes A and B's v-scroll
+   and h-scroll (the runs the sky layers left - pm_layer_end; the swirl's - scd_pm_draw3dscene), the colours that
+   changed (CRAM 0-63: the sky's lines 0-2, the floor's line 3). The words it covers at the frame buffer's start are kept
+   (SKY_SAVE) and written back after. The 68000 does not take it: the SH2 draws it all again */
+static void fb_picture_clear() /* REV R5F / R5G: the SH2's buffer all colour 0 (the title, a special stage: the 32X draws
+                                  only what is in front of the Genesis's picture) */
+{
+    volatile unsigned int *p = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
+    for (unsigned int i = 0; i < (unsigned int)(PM_STRIDE * PM_LINES) / 4; i += 4) p[i] = p[i + 1] = p[i + 2] = p[i + 3] = 0;
+}
+/* REV R5H: the record (PM_DIRTY_AT) */
+static void pm_dirty(int x0, int y0, int x1, int y1)
+{
+    if (x0 < 0)
+        x0 = 0;
+    if (x1 > PM_STRIDE)
+        x1 = PM_STRIDE;
+    if (y0 < 0)
+        y0 = 0;
+    if (y1 > PM_LINES)
+        y1 = PM_LINES;
+    if (x0 >= x1 || y0 >= y1)
+        return;
+    const unsigned int a = (unsigned int)x0 >> 2, b = ((unsigned int)x1 + 3) >> 2;
+    volatile unsigned short *t = PM_DB;
+    for (unsigned int k = (unsigned int)y0 >> 2, e = (unsigned int)(y1 - 1) >> 2; k <= e; ++k) {
+        const unsigned int v = t[k], lo = v >> 8, hi = v & 0xFF;
+        if (a < lo || b > hi)
+            t[k] = (unsigned short)((a < lo ? a : lo) << 8 | (b > hi ? b : hi));
+    }
+}
+static void pm_dirty_reset()
+{
+    volatile unsigned short *t = PM_DB;
+    for (int k = 0; k < PM_BANDS; ++k) t[k] = PM_DB_NONE;
+    for (int y = 0; y < PM_LINES; ++y) t[PM_BANDS + y] = 0;
+}
+static void pm_fresh_clear() /* (PM_FRESH: the picture's first draw) */
+{
+    if (pmSkip)
+        return; /* (nothing is drawn: the picture is not shown - the same buffer next time) */
+    pmFresh = 0;
+    const int row0             = floorHW && !flrTitle ? pm_hline_lines() : SKY_ROW; /* (lines a layer covers: to row0) */
+    volatile unsigned short *t = PM_DB;
+    volatile unsigned int *px  = (volatile unsigned int *)(0x24000000u + PM_FB_PIXELS);
+    for (int k = 0; k < PM_BANDS; ++k) {
+        const unsigned int v = t[k], lo = v >> 8, hi = v & 0xFF;
+        if (v != PM_DB_NONE)
+            t[k] = PM_DB_NONE;
+        for (int y = 4 * k; y < 4 * k + 4; ++y) {
+            const unsigned int f = t[PM_BANDS + y];
+            const bool pred      = y >= SKY_ROW && y < row0 && (f & 1); /* (the layer writes those pixels again) */
+            volatile unsigned int *q = px + (PM_STRIDE / 4) * y;
+            if (!pred && (f & 4))
+                for (unsigned int i = 0; i < PM_STRIDE / 4; ++i) q[i] = 0; /* (a layer's pixels: the whole line) */
+            else if (hi > lo)
+                for (unsigned int i = lo; i < hi; ++i) q[i] = 0; /* (the rectangles drawn) */
+            const unsigned int nf = pred ? 2 : 0;
+            if (f != nf)
+                t[PM_BANDS + y] = (unsigned short)nf;
+        }
+    }
+}
+static void pm_dirty_check() /* (pm_present: the picture's end) a line left uncleared that no layer covered: in the record */
+{
+    if (!pmDirtyOn || pmFresh)
+        return;
+    volatile unsigned short *t = PM_DB;
+    for (int y = SKY_ROW; y < PM_LINES; ++y)
+        if ((t[PM_BANDS + y] & 3) == 2)
+            t[PM_BANDS + y] = 4; /* (left to the layer, which did not cover it: the whole line next time) */
+}
+/* REV R5H: THE BEHIND COLOURS - a 32X colour without its through bit shows only where the Genesis shows its backdrop
+   (ares m32x/vdp.cpp plot: PRI 0, the 32X pixel shown if its through bit is set or the Genesis pixel is the backdrop). The
+   special stages' layers below line 120 (where the floor is see-through - past the map's edge - they show) are drawn by
+   the 32X in such colours: the chip's floor (the Genesis window) in front of them, the sprites (through bit) in front of
+   both. Each colour the layers use gets a CRAM slot no special stage sprite uses (63-95, 100-127: no picture of
+   Sprites/Special, Global or Players has those - tools scan), its colour without the bit (pm_colours). The table is
+   sgbA's memory: the Genesis planes' (acts only) - md_plane_reset sets it up again for an act */
+static inline unsigned char pm_behind_slot(int n) { return (unsigned char)(n < 33 ? 63 + n : 100 + (n - 33)); }
+static void pm_behind_add(unsigned char c) /* (c >= 128, not yet in the table) */
+{
+    if (pmBehindN >= PM_RM_SLOTS)
+        return;
+    const unsigned char k = pm_behind_slot(pmBehindN);
+    PM_RM[c]               = k;
+    PM_RMSRC[pmBehindN++]  = c;
+}
+static void pm_behind_init() /* (floor_hw_begin) the colours of the stage's line-scroll layers' tiles */
+{
+    static_assert(sizeof(sgbA) >= 256 + PM_RM_SLOTS, "REV R5H: the behind table in sgbA");
+    for (int i = 0; i < 256; ++i) PM_RM[i] = (unsigned char)i;
+    pmBehindN = 0;
+    for (int s = 0; s < 4; ++s) {
+        pmRowLo[s] = 0, pmRowHi[s] = 255; /* (unknown: every row) */
+        const int L = activeTileLayers[s];
+        if (L <= 0 || L >= LAYER_COUNT || stageLayouts[L].type != LAYER_HSCROLL)
+            continue;
+        const TileLayer *layer = &stageLayouts[L];
+        int lo = 255, hi = -1;
+        for (int cy = 0; cy < layer->ysize; ++cy)
+            for (int cx = 0; cx < layer->xsize; ++cx) {
+                const int chunk = layer->tiles[cx + (cy << 8)];
+                for (int t = 0; t < 64; ++t) {
+                    const int entry       = (chunk << 6) + t;
+                    const unsigned int *w = (const unsigned int *)(PM_TILES + ((unsigned int)pmTileMap[PM_CHUNK_TILE(entry) & (TILE_COUNT - 1)] << 8));
+                    unsigned int any      = 0;
+                    for (int i = 0; i < 64; ++i) {
+                        unsigned int v = w[i];
+                        any |= v;
+                        for (; v; v <<= 8) {
+                            const unsigned char c = (unsigned char)(v >> 24);
+                            if (c >= 128 && PM_RM[c] == c)
+                                pm_behind_add(c);
+                        }
+                    }
+                    if (any) { /* (the tile row of 16 lines: cy * 8 + t / 8) */
+                        const int r = cy * 8 + (t >> 3);
+                        if (r < lo)
+                            lo = r;
+                        if (r > hi)
+                            hi = r;
+                    }
+                }
+            }
+        if (hi < 0)
+            pmRowLo[s] = 1, pmRowHi[s] = 0; /* (nothing) */
+        else if (hi < 255)
+            pmRowLo[s] = (unsigned char)lo, pmRowHi[s] = (unsigned char)hi;
+    }
+    /* the floor (layer 0's layout, as pm_sky_fill): any see-through pixel in the tiles its chunks use? (special stage 6:
+       three quarters of it - the layers show through there, so they are drawn under all of it) */
+    pmFloorOpaque = 1;
+    {
+        unsigned int seen[TILE_COUNT / 32];
+        for (unsigned int i = 0; i < TILE_COUNT / 32; ++i) seen[i] = 0;
+        const TileLayer *f = &stageLayouts[0];
+        for (int cy = 0; cy < f->ysize && pmFloorOpaque; ++cy)
+            for (int cx = 0; cx < f->xsize && pmFloorOpaque; ++cx) {
+                const int chunk = f->tiles[cx + (cy << 8)];
+                for (int t = 0; t < 64; ++t) {
+                    const unsigned int tile = (unsigned int)PM_CHUNK_TILE((chunk << 6) + t) & (TILE_COUNT - 1);
+                    if (seen[tile >> 5] & (1u << (tile & 31)))
+                        continue;
+                    seen[tile >> 5] |= 1u << (tile & 31);
+                    const unsigned int *w = (const unsigned int *)(PM_TILES + ((unsigned int)pmTileMap[tile] << 8));
+                    for (int i = 0; i < 64; ++i) {
+                        const unsigned int v = w[i];
+                        if ((v - 0x01010101u) & ~v & 0x80808080u) { /* (a 0 byte) */
+                            pmFloorOpaque = 0;
+                            break;
+                        }
+                    }
+                    if (!pmFloorOpaque)
+                        break;
+                }
+            }
+    }
+}
+static void sky_hw_record()
+{
+    volatile unsigned short *w = SC_FB;
+    const int ra = skyRA > 0 ? skyRA : 1, rb = skyRB > 0 ? skyRB : 1;
+    const int len = 6 + 2 * ra + 2 * rb + 1 + 2 * 64; /* (at most) */
+    for (int i = 0; i < len; ++i) SKY_SAVE[i] = w[i];
+    int n = 1;
+    w[n++] = 0; /* no name-table groups */
+    w[n++] = (unsigned short)skyVA;
+    w[n++] = (unsigned short)skyVB;
+    w[n++] = (unsigned short)ra;
+    if (skyRA > 0)
+        for (int i = 0; i < 2 * skyRA; ++i) w[n++] = SKY_RUNS_A[i];
+    else
+        w[n++] = SCREEN_YSIZE, w[n++] = 0;
+    w[n++] = (unsigned short)rb;
+    if (skyRB > 0)
+        for (int i = 0; i < 2 * skyRB; ++i) w[n++] = SKY_RUNS_B[i];
+    else
+        w[n++] = SCREEN_YSIZE, w[n++] = 0;
+    int at = n++, c = 0;
+    for (int k = 0; k < 64; ++k)
+        if (flrGen[k] != flrSent[k]) {
+            w[n++] = (unsigned short)k;
+            w[n++] = flrGen[k];
+            c++;
+        }
+    w[at] = (unsigned short)c;
+    w[0]  = (unsigned short)(n - 1);
+    recId = (unsigned short)(recId + 1);
+    if (!recId)
+        recId = 1;
+    sgb_give_fb();
+    SC_COMM4       = recId;
+    unsigned int t = 0;
+    for (; t < 400000u; ++t) { /* the same answer twice: a read during the 68000's write is undefined */
+        if (SC_COMM6 == recId && SC_COMM6 == recId)
+            break;
+        sgb_pause();
+    }
+    sgb_take_fb();
+    for (int i = 0; i < len; ++i) w[i] = SKY_SAVE[i];
+    if (t >= 400000u) {
+        floor_hw_end();
+        return;
+    }
+    for (int k = 0; k < 64; ++k) flrSent[k] = flrGen[k];
 }
 void scd_pm_sky(int layerID)
 {
@@ -1404,11 +1914,75 @@ void scd_pm_stage_new()
     aniDirtyAny = false;
 }
 static void pm_layer_end(int slot) __attribute__((noinline)); /* cart code (plat_layer_end) */
+/* REV R5H: a special stage's layer, lines y0 - y1, only where its rows have pixels (pm_behind_init: in tile rows of 16) */
+static void pm_layer_range(int slot, int y0, int y1, const unsigned char *rm)
+{
+    const TileLayer *layer = &stageLayouts[activeTileLayers[slot]];
+    const int fullH = layer->ysize << 7, ty = pmTileY[slot];
+    if (pmRowLo[slot] > pmRowHi[slot])
+        return; /* (no pixel at all) */
+    if (fullH > 0 && ty >= 0 && ty + y1 <= fullH) { /* (no wrap on the screen: line y = layer row ty + y) */
+        const int lo = 16 * pmRowLo[slot] - ty, hi = 16 * (pmRowHi[slot] + 1) - ty;
+        if (y0 < lo)
+            y0 = lo;
+        if (y1 > hi)
+            y1 = hi;
+        if (y0 >= y1)
+            return;
+    }
+    pm_hline_lines(); /* (pm_floor_scan: the skip table for this frame) */
+    /* (behind colours: the floor's in-map pixels left out only if it has no see-through pixel; in front - stages 2-8's
+       layer 2, lines 120-127 - always: the floor in front of it in the engine) */
+    const bool skip = y1 > (PM_LINES / 2) + 12 && (rm ? pmFloorOpaque : true);
+    pm_hline_range(slot, ty, pmLines, y0, y1, rm, skip ? PM_SKIP : 0, (PM_LINES / 2) + 12);
+}
+/* REV R5G: a run list ({lines, value} pairs) of the h-scroll the Genesis needs to show a layer with these x per line */
+static int sky_runs(volatile unsigned short *r, const int *lines)
+{
+    int n = 0;
+    for (int y = 0; y < SCREEN_YSIZE;) {
+        const unsigned short v = (unsigned short)(-lines[y] & 0x3FF);
+        int k = y + 1;
+        while (k < SCREEN_YSIZE && (unsigned short)(-lines[k] & 0x3FF) == v) ++k;
+        r[2 * n] = (unsigned short)(k - y), r[2 * n + 1] = v, ++n;
+        y = k;
+    }
+    return n;
+}
 static void pm_layer_end(int slot)
 {
     if (slot >= 0 && slot < 4) {
         pmDrew = true;
         pad_service(); /* REV R4D */
+        if (pmSkip)
+            return; /* REV R5H: (nothing is drawn - no lines either, plat_layer_lines) */
+        if (floorHW && !flrTitle && !pmSkip) { /* REV R5G: the special stage's sky layers are the Genesis's planes */
+            const int L = activeTileLayers[slot];
+            /* (lines 120 to the floor's first row: the 32X's, as before - the window's rows start at 120, the floor at
+               124 or below: there the layers show, which plane A cannot under the window) */
+            /* (REV R5H: in behind colours - the chip's floor in front of them, also past the map's edge) */
+            const unsigned char *rm = pmBehindOn ? PM_RM : 0;
+            if (L == 2) { /* layer 2: plane A (under the window, lines 120 on: the 32X's - REV R5H: special stages 2-8 in
+                             front, plane B shows layer 1 there; its pixels the floor covers left out) */
+                skyRA = (short)sky_runs(SKY_RUNS_A, pmLines);
+                skyVA = (short)pmTileY[slot];
+                pm_layer_range(slot, SKY_ROW, PM_LINES, rm);
+                return;
+            }
+            if (L == 1) { /* layer 1: plane B (special stage 1: the swirl covers it - its own runs). REV R5H: all of it -
+                             plane B's rows 15-27 too (tools/build_floor.py): nothing for the 32X */
+                if (skyStage != 1) {
+                    skyRB = (short)sky_runs(SKY_RUNS_B, pmLines);
+                    skyVB = (short)pmTileY[slot];
+                }
+                return;
+            }
+            /* REV R5H: another layer (special stage 1's layer 3, the water below the swirl): above line 120 as it is,
+               below in behind colours */
+            pm_layer_range(slot, 0, SKY_ROW, 0);
+            pm_layer_range(slot, SKY_ROW, PM_LINES, rm);
+            return;
+        }
         pm_hline(slot, pmTileY[slot], pmLines);
     }
 }
@@ -1526,30 +2100,38 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
             b = (ia * b >> 8) + (a * fb >> 8);
         }
         unsigned short w = (unsigned short)(0x8000 | b << 10 | g << 5 | r); /* bit 15: in front of the Genesis */
-        cram[i]          = w == 0x8000 ? 0x8400 : w;                         /* (as the loading picture: never 0x8000) */
+        if (i || !floorHW) /* (REV R5F: colour 0 below, once - a passing wrong value showed on the top lines) */
+            cram[i] = w == 0x8000 ? 0x8400 : w; /* (as the loading picture: never 0x8000) */
+        if (pmBehindOn && PM_RM[i] != i) /* REV R5H: its behind colour (the slot is lower: written already) */
+            cram[PM_RM[i]] = (unsigned short)(w & 0x7FFF);
     }
     if (floorHW) { /* REV R5: colour 0 see-through (the Genesis floor shows); the floor's colours for the Genesis */
-        cram[0] = 0x0000;
+        if (!flrTitle)
+            cram[0] = 0x0000;
         /* REV R5D: the floor's lines' palette (the title: line 0's) */
         const unsigned short *fpal = flrTitle ? pal : fullPalette[gfxLineBuffer[(SCREEN_YSIZE / 2) + 12]];
-        const int n = flrTitle ? 32 : 16;
+        const int n = flrTitle ? 48 : 64; /* (REV R5G: CRAM 0-63 - the sky's lines 0-2 from line 0's palette, the floor's
+                                             line 3 from its own lines') */
         for (int k = 0; k < n; ++k) {
             unsigned int c;
-            if (k == 0 || k == 16) { /* (the title: CRAM 0 the sky - its rectangle's colour; 16 unused) */
-                if (!flrTitle || k == 16) {
+            if (!(k & 15)) { /* (the title: CRAM 0 the sky - its rectangle's colour; 16, 32 unused) */
+                if (!flrTitle || k) {
                     flrGen[k] = 0;
                     continue;
                 }
                 c = ((ttlSky >> 19) & 31) << 11 | ((ttlSky >> 10) & 63) << 5 | ((ttlSky >> 3) & 31);
             }
             else
-                c = fpal[flrIdx[k]];
+                c = (flrTitle || k >= 48 ? fpal : pal)[flrIdx[k]];
             int r = (int)(c >> 11), g = (int)((c >> 6) & 31), b = (int)(c & 31);
             if (a > 0) {
                 r = (ia * r >> 8) + (a * fr >> 8);
                 g = (ia * (int)((c & 0x7E0) >> 6) >> 8) + (a * fg >> 8);
                 b = (ia * b >> 8) + (a * fb >> 8);
             }
+            if (k == 0) /* REV R5E: the title's sky - the 32X's colour 0 itself (no through bit): the 32X shows its colour 0
+                           wherever the Genesis shows its backdrop (the clouds' gaps), the Genesis where it has a pixel */
+                cram[0] = (unsigned short)(b << 10 | g << 5 | r);
             flrGen[k] = (unsigned short)((b >> 2) << 9 | (g >> 2) << 5 | (r >> 2) << 1);
         }
     }
@@ -1557,6 +2139,10 @@ static void pm_colours() /* the frame's palette with its fade (the engine's arit
 static void pm_present() __attribute__((noinline)); /* cart code: plat_present (SDRAM) calls it */
 static void pm_present()
 {
+    pmRow0 = -1; /* REV R5H: (the next frame's floor: its own first row) */
+    if (flrPost & 2)
+        comm_idle(); /* (op 4's answer) */
+    flrPost = 0;
     pm_frame_end();
     pmLogic++;
     bool flip = !pmSkip && (pmShown || pmDrew); /* nothing drawn yet: the display waits, the same buffer again */
@@ -1570,8 +2156,25 @@ static void pm_present()
         if (layoutQLost) /* more changes in one frame than the queue holds: all the layouts into the other buffer -
                             from this one (the newest), so before the swap (the review: after it, the old ones won) */
             pm_mirror(PM_FB_POOL, pm_pool_used());
+        if (floorHW)
+            pm_dirty_check(); /* REV R5H */
+        if (floorHW && flrTitle)
+            title_hw_frame(ttlV32); /* REV R5F: the Genesis's part of the title's picture, for this vertical blank */
+        else if (floorHW)
+            sky_hw_record(); /* REV R5G: the special stage's sky's scroll and the colours, for this vertical blank */
         flip_wait(); /* the frame is shown from this vertical blank */
         pm_colours();
+        if (floorHW) { /* REV R5H: the next picture cleared at its first draw, where this buffer's last one drew */
+            if (pmFullClears || !pmDirtyOn) { /* (the first picture of this buffer, or no record: all of it now, as R5G) */
+                if (pmFullClears)
+                    --pmFullClears;
+                fb_picture_clear();
+                if (pmDirtyOn)
+                    pm_dirty_reset();
+            }
+            else
+                pmFresh = 1;
+        }
         if (!pmShown) {
             MARS_VDP_DISPMODE = (unsigned short)((MARS_VDP_DISPMODE & 0x8000) | MARS_VDP_MODE_256);
             pmShown           = true;
@@ -1788,6 +2391,8 @@ static bool musicInFlight = false; /* REV R4: a music command (45 / 54) sent, no
 static void comm_idle()                                             /* COMM0 free for another command */
 {
     for (unsigned int n = 0; n < 2000000u && !comm0_free(); ++n) sgb_pause();
+    if (flrPost & 2)
+        flr_answer(); /* REV R5H */
     if (padPending)
         pad_take();
     musicInFlight = false;
@@ -2273,7 +2878,8 @@ int *plat_layer_lines(int slot) SCD_HOT; /* R1W: SDRAM */
 int *plat_layer_lines(int slot) /* R1T: as plat_layer_line - layer 0 into xA, the frame's background layer into xB */
 {
     if (scdPicture)
-        return pmLines; /* REV R4C: the 32X picture mode's (plat_layer_end) */
+        return pmSkip ? 0 : pmLines; /* REV R4C: the 32X picture mode's (plat_layer_end); R5H: none in a frame not drawn
+                                        (the engine then skips the lines' arithmetic) */
     if (slot < 0 || slot >= 4)
         return 0;
     if (slotLayer[slot] == 0)

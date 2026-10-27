@@ -52,6 +52,17 @@
 #ifndef PM_APPROX
 #define PM_APPROX(off, n) ((void)0) /* the PC check: n pixels from off are an approximation (dither, nearest colour) */
 #endif
+/* REV R5H: what the includer keeps of a picture - the rectangle drawn (x0, y0 to x1, y1, exclusive; clipped), a line
+   whose every pixel a layer wrote (behind colours: pm_hline_range), the first draw of a picture (PM_FRESH) */
+#ifndef PM_DIRTY
+#define PM_DIRTY(x0, y0, x1, y1) ((void)0)
+#endif
+#ifndef PM_LINE_DREW
+#define PM_LINE_DREW(y, full) ((void)0) /* a layer drew line y (in behind colours); full: every pixel it covers */
+#endif
+#ifndef PM_FRESH
+#define PM_FRESH() ((void)0)
+#endif
 #ifndef PM_BE16 /* a big-endian 16-bit word at an even address (the SH2: one read; the PC check: two) */
 #define PM_BE16(p) ((unsigned short)((p)[0] << 8 | (p)[1]))
 #endif
@@ -98,6 +109,7 @@ static int pmPendR = 0, pmPendG = 0, pmPendB = 0, pmPendA = 0;
 static void pm_pending_draw();
 #define PM_FLUSH()             \
     do {                       \
+        PM_FRESH();            \
         if (pmPend)            \
             pm_pending_draw(); \
     } while (0)
@@ -304,6 +316,7 @@ static void pm_clear(int index) /* ClearScreen */
     if (pmSkip)
         return;
     unsigned short w = (unsigned short)((index & 0xFF) << 8 | (index & 0xFF));
+    PM_DIRTY(0, 0, PM_STRIDE, PM_LINES);
     for (unsigned int o = 0; o < PM_STRIDE * PM_LINES; o += 2) PM_W16(o, w);
 }
 /* DrawSprite / DrawSpriteFlipped (dir: FLIP_NONE .. FLIP_XY), and the blended kinds (alpha < 255: dithered) */
@@ -357,6 +370,7 @@ static void pm_sprite(int XPos, int YPos, int width, int height, int sprX, int s
         return;
     if (alpha > 0xFF)
         alpha = 0xFF;
+    PM_DIRTY(XPos, YPos, XPos + width, YPos + height);
     GFXSurface *surface = &gfxSurface[sheetID];
     const unsigned char *g;
     int dx, rowStep;
@@ -457,6 +471,7 @@ static void pm_sprite_scaled(int direction, int XPos, int YPos, int pivotX, int 
     }
     if (width <= 0 || height <= 0)
         return;
+    PM_DIRTY(trueXPos, trueYPos, trueXPos + width, trueYPos + height);
     GFXSurface *surface      = &gfxSurface[sheetID];
     int gfxwidth             = surface->width;
     const unsigned char *gfx = &PM_GFX[sprX + surface->width * sprY + surface->dataPosition];
@@ -558,6 +573,7 @@ static void pm_sprite_rotozoom(int direction, int XPos, int YPos, int pivotX, in
     int maxX = right - left, maxY = bottom - top;
     if (maxX <= 0 || maxY <= 0)
         return;
+    PM_DIRTY(left, top, right, bottom);
     GFXSurface *surface = &gfxSurface[sheetID];
     int rowBytes        = pm_opaque(1 << surface->widthShifted); /* (a multiply, not a shift) */
     unsigned int off    = (unsigned int)(left + PM_STRIDE * top);
@@ -625,6 +641,7 @@ static void pm_rect(int XPos, int YPos, int width, int height, int R, int G, int
     }
     if (width <= 0 || height <= 0)
         return;
+    PM_DIRTY(XPos, YPos, XPos + width, YPos + height);
     unsigned char c  = (unsigned char)pm_nearest(R, G, B);
     unsigned int off = (unsigned int)(XPos + PM_STRIDE * YPos);
     if (A == 0xFF)
@@ -646,6 +663,7 @@ static void pm_pending_draw() /* the waiting whole-screen rectangle, dithered: s
     unsigned char c  = (unsigned char)pm_nearest(pmPendR, pmPendG, pmPendB);
     int a16          = pm_alpha16(pmPendA);
     unsigned int off = 0;
+    PM_DIRTY(0, 0, PM_STRIDE, PM_LINES);
     for (int r = 0; r < PM_LINES; ++r, off += PM_STRIDE) pm_dither_span(off, 0, r, PM_STRIDE, c, a16);
 }
 static void pm_frame_end() /* the frame's fade: its last whole-screen rectangle, or none */
@@ -852,6 +870,7 @@ static void pm_face(void *v, unsigned int colour) /* DrawFace */
         faceTop = 0;
     if (faceBottom > PM_LINES)
         faceBottom = PM_LINES;
+    PM_DIRTY(0, faceTop, PM_STRIDE, faceBottom + 1);
     for (int i = faceTop; i <= faceBottom && i < PM_LINES; ++i) { /* (and the row below: the scan edges look at it) */
         pmLineStart[i] = 100000;
         pmLineEnd[i]   = -100000;
@@ -1001,6 +1020,7 @@ static void pm_tex_face(void *v, int sheetID) /* DrawTexturedFace */
         faceTop = 0;
     if (faceBottom > PM_LINES)
         faceBottom = PM_LINES;
+    PM_DIRTY(0, faceTop, PM_STRIDE, faceBottom + 1);
     for (int i = faceTop; i <= faceBottom && i < PM_LINES; ++i) { /* (and the row below: the scan edges look at it) */
         pmLineStart[i] = 100000;
         pmLineEnd[i]   = -100000;
@@ -1127,15 +1147,69 @@ struct PmHlineJob {
     unsigned int ly0;
     const int *lines;
     int ylim; /* REV R5B: the lines drawn (the chip's floor covers the rest: PM_HLINE_LINES) */
+    int y0;   /* REV R5G: ... from this one (the Genesis's sky above it) */
+    const unsigned char *remap; /* REV R5H: each pixel's colour through this table (the behind colours), or none */
+    const unsigned char *skip;  /* REV R5H: lines skipY0 - ylim: the pixels x0 / 2 - x1 / 2 not drawn (2 bytes a line) */
+    int skipY0;
 };
+/* REV R5H: a layer's row with its colours through rm (rm[0] = 0); *zero = 1 where a pixel stays see-through */
+static inline void pm_remap_row(unsigned int off, const unsigned char *s, int n, int dir, const unsigned char *rm, int *zero)
+{
+    if (n <= 0)
+        return;
+    if (off & 1) {
+        unsigned char c = rm[*s];
+        if (c)
+            PM_O8(off, c);
+        else
+            *zero = 1;
+        s += dir, ++off, --n;
+    }
+    if (dir > 0 && !((unsigned long)s & 1)) /* (a pair in one 16-bit read) */
+        for (; n >= 2; n -= 2, off += 2, s += 2) {
+            const unsigned int v = PM_BE16(s);
+            const unsigned char a = rm[v >> 8], b = rm[v & 0xFF];
+            if (!a || !b)
+                *zero = 1;
+            const unsigned short w = (unsigned short)(a << 8 | b);
+            if (w)
+                PM_O16(off, w);
+        }
+    else if (dir < 0 && ((unsigned long)s & 1)) /* (flipped: s[-1] s[0] one read, the other way round) */
+        for (; n >= 2; n -= 2, off += 2, s -= 2) {
+            const unsigned int v = PM_BE16(s - 1);
+            const unsigned char a = rm[v & 0xFF], b = rm[v >> 8];
+            if (!a || !b)
+                *zero = 1;
+            const unsigned short w = (unsigned short)(a << 8 | b);
+            if (w)
+                PM_O16(off, w);
+        }
+    for (; n >= 2; n -= 2, off += 2, s += 2 * dir) {
+        unsigned char a = rm[s[0]], b = rm[s[dir]];
+        if (!a || !b)
+            *zero = 1;
+        unsigned short w = (unsigned short)(a << 8 | b);
+        if (w)
+            PM_O16(off, w);
+    }
+    if (n) {
+        unsigned char c = rm[*s];
+        if (c)
+            PM_O8(off, c);
+        else
+            *zero = 1;
+    }
+}
 static void pm_hline_part(const PmHlineJob *j, int part, int parts)
 {
     const TileLayer *layer = j->layer;
     const int fullW = j->fullW, fullH = j->fullH, plane = j->plane, mask = parts - 1;
     const int *lines = j->lines;
-    unsigned int ly = j->ly0, uW = (unsigned int)fullW; /* (unsigned: no library shifts on the SH2) */
+    unsigned int ly = j->ly0 + (unsigned int)j->y0, uW = (unsigned int)fullW; /* (unsigned: no library shifts on the SH2) */
     const int ylim = j->ylim;
-    for (int y = 0; y < ylim; ++y, ++ly) {
+    while (ly >= (unsigned int)fullH) ly -= (unsigned int)fullH;
+    for (int y = j->y0; y < ylim; ++y, ++ly) {
         if (ly >= (unsigned int)fullH)
             ly -= (unsigned int)fullH;
         if ((y & mask) != part)
@@ -1149,10 +1223,27 @@ static void pm_hline_part(const PmHlineJob *j, int part, int parts)
         const unsigned short *row = &layer->tiles[chunkY << 8];
         int x                     = 0, chunkBase = 0;
         unsigned int chunkCol     = ~0u;
+        int zero                  = 0; /* REV R5H: a pixel of the line left see-through */
+        int sa = PM_STRIDE, sb = PM_STRIDE; /* REV R5H: pixels sa - sb not drawn (the chip's floor covers them) */
+        if (j->skip && y >= j->skipY0) {
+            sa = 2 * j->skip[2 * (y - j->skipY0)], sb = 2 * j->skip[2 * (y - j->skipY0) + 1];
+            if (sb <= sa)
+                sa = sb = PM_STRIDE;
+        }
         while (x < PM_STRIDE) {
+            if (x == sa) {
+                unsigned int d = (unsigned int)(sb - x);
+                x = sb, sa = PM_STRIDE;
+                cx += d;
+                while (cx >= uW)
+                    cx -= uW;
+                continue;
+            }
             int px = (int)(cx & 15), n = 16 - px;
             if (n > PM_STRIDE - x)
                 n = PM_STRIDE - x;
+            if (x < sa && x + n > sa)
+                n = sa - x;
             if ((cx >> 7) != chunkCol) { /* (the layout is in the frame buffer: one read per chunk, not per tile) */
                 chunkCol  = cx >> 7;
                 chunkBase = (row[chunkCol] << 6) + 8 * (int)tileY;
@@ -1164,20 +1255,41 @@ static void pm_hline_part(const PmHlineJob *j, int part, int parts)
                 /* REV R5D: a tile row with no pixel (the sky layers are mostly see-through): nothing to write - its 16
                    bytes as four words (tile rows are 16-byte aligned in the image's tiles) */
                 const unsigned int *w4 = (const unsigned int *)(dx > 0 ? s : s - 15);
-                if (w4[0] | w4[1] | w4[2] | w4[3])
+                if (!(w4[0] | w4[1] | w4[2] | w4[3]))
+                    zero = 1;
+                else if (j->remap)
+                    pm_remap_row(off + x, s + px * dx, n, dx, j->remap, &zero);
+                else
                     pm_sprite_row(off + x, s + px * dx, n, dx);
             }
+            else
+                zero = 1;
             x += n;
             cx += (unsigned int)n;
             if (cx >= uW)
                 cx -= uW;
         }
+        if (j->remap)
+            PM_LINE_DREW(y, !zero);
     }
 }
 PM_SPLIT_FN(pm_hline_part, PmHlineJob)
 /* DrawHLineScrollLayer's pixels: lines[] holds each line's x (the engine's own scroll arithmetic), tileYPos the layer
    row at the screen's top - every line of the layer, its tiles of this half (visualPlane == aboveMidPoint) */
-static void pm_hline(int layerID, int tileYPos, const int *lines)
+static void pm_hline_range(int layerID, int tileYPos, const int *lines, int y0, int y1, const unsigned char *remap,
+                           const unsigned char *skip, int skipY0);
+static void pm_hline_from(int layerID, int tileYPos, const int *lines, int y0) /* REV R5G: from line y0 */
+{
+#ifdef PM_HLINE_LINES
+    pm_hline_range(layerID, tileYPos, lines, y0, PM_HLINE_LINES, 0, 0, 0);
+#else
+    pm_hline_range(layerID, tileYPos, lines, y0, PM_LINES, 0, 0, 0);
+#endif
+}
+/* REV R5H: lines y0 - y1 (y1: at most PM_HLINE_LINES), the colours through remap (or none): those are not in the drawn
+   rectangles (PM_DIRTY) - each line says what it drew (PM_LINE_DREW); from line skipY0 on, skip's pixels left out */
+static void pm_hline_range(int layerID, int tileYPos, const int *lines, int y0, int y1, const unsigned char *remap,
+                           const unsigned char *skip, int skipY0)
 {
     PM_FLUSH();
     if (pmSkip)
@@ -1198,8 +1310,19 @@ static void pm_hline(int layerID, int tileYPos, const int *lines)
 #else
     j.ylim = PM_LINES;
 #endif
+    if (y1 < j.ylim)
+        j.ylim = y1;
+    j.y0     = y0;
+    j.remap  = remap;
+    j.skip   = skip;
+    j.skipY0 = skipY0;
+    if (j.y0 >= j.ylim)
+        return;
+    if (!remap)
+        PM_DIRTY(0, j.y0, PM_STRIDE, j.ylim);
     PM_SPLIT(pm_hline_part, &j); /* REV R4D */
 }
+static void pm_hline(int layerID, int tileYPos, const int *lines) { pm_hline_from(layerID, tileYPos, lines, 0); }
 /* Draw3DSkyLayer (the special stages' floor): rows (SCREEN_YSIZE / 2) + 12 on, 100 of them; the engine samples each
    pixel four times (two rows of samples, two samples a pixel, the later visible one wins) - here the last sample first,
    the others only where it is see-through */
@@ -1344,6 +1467,7 @@ static void pm_sky_rows(int layerID, int rowEnd) /* REV R5B: the floor's rows do
         return;
     PmSkyJob j;
     j.rowEnd    = rowEnd;
+    PM_DIRTY(0, (PM_LINES / 2) + 12, PM_STRIDE, rowEnd + 1); /* (REV R5H: + 1 - a row drawn twice) */
     j.floor     = &stageLayouts[0];
     j.lw        = (unsigned int)layer->xsize << 7;
     j.lh        = (unsigned int)layer->ysize << 7;
