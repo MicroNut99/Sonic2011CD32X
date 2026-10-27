@@ -220,6 +220,44 @@ static void flip_wait(void) /* the other frame buffer shown from the next vertic
     }
 }
 static uint16_t fb16(uint32_t at) { return (uint16_t)(SC_FB[at] << 8 | SC_FB[at + 1]); }
+#if defined(CART_ED)
+/* EDCD: "LOADING GAME" under the loading picture's bar (rows 212-221), as the engine's splash_note draws its lines:
+   Kobo's 3 x 5 font, each pixel 2 x 2, the picture's lightest colour on its darkest (not the bar's colours) */
+static void splash_ed_text(void)
+{
+    static const char text[] = "LOADING GAME";
+    static const unsigned char rows[][5] = { /* L O A D I N G (space) M E - font3x5 (cd32x/engine/plat_mars.cpp) */
+        { 4, 4, 4, 4, 7 }, { 7, 5, 5, 5, 7 }, { 2, 5, 7, 5, 5 }, { 6, 5, 5, 5, 6 }, { 7, 2, 2, 2, 7 },
+        { 5, 7, 7, 5, 5 }, { 7, 4, 5, 5, 7 }, { 0, 0, 0, 0, 0 }, { 5, 7, 7, 5, 5 }, { 7, 4, 7, 4, 7 } };
+    static const char order[] = "LOADINGXME"; /* 'X' = the space's row */
+    volatile uint16_t *line = (volatile uint16_t *)SC_FB + 0x100;
+    int hi = 1, lo = 1, hv = -1, lv = 1 << 30, i, k, r, c, x, y;
+    const int n = (int)sizeof text - 1, x0 = ((320 - n * 8) / 2) & ~1, y0 = 212;
+    for (i = 1; i < 256; i++) {
+        uint16_t col;
+        int v;
+        if (i >= barFirst && i < barFirst + barSegs)
+            continue;
+        col = fb16(0x200 + SPL_PIXELS + 2 * i);
+        v   = (col & 31) + (col >> 5 & 31) + (col >> 10 & 31);
+        if (v > hv)
+            hv = v, hi = i;
+        if (v < lv)
+            lv = v, lo = i;
+    }
+    for (y = y0 - 2; y < y0 + 12; y++)
+        for (x = x0 - 4; x < x0 + n * 8 + 4; x += 2) line[y * 160 + x / 2] = (uint16_t)(lo << 8 | lo);
+    for (k = 0; k < n; k++) {
+        const char ch = text[k] == ' ' ? 'X' : text[k];
+        int g = 0;
+        while (order[g] && order[g] != ch) g++;
+        for (r = 0; r < 10; r++)
+            for (c = 0; c < 3; c++)
+                if (rows[g][r / 2] & (4 >> c))
+                    line[(y0 + r) * 160 + (x0 + k * 8 + 2 * c) / 2] = (uint16_t)(hi << 8 | hi);
+    }
+}
+#endif
 static void splash_show(void)
 {
     uint32_t len, c;
@@ -249,6 +287,9 @@ static void splash_show(void)
         ((volatile uint16_t *)SC_FB)[i] = (uint16_t)(0x100 + (i < 224 ? i : 223) * 160);
     for (i = 0; i < 256; i++)
         SC_CRAM[i] = fb16(0x200 + SPL_PIXELS + 2 * i);
+#if defined(CART_ED)
+    splash_ed_text(); /* EDCD: LOADING GAME under the bar */
+#endif
     flip_wait();             /* the picture is the shown buffer; the engine takes the other one */
     SC_VDP_DISPMODE = 0x0001; /* 256 colours, priority bit clear: the picture's colours (bit 15 set) in front */
     SC_COMM2        = 0;

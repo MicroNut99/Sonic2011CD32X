@@ -160,7 +160,7 @@ $(B)/SCDCART.cue: $(B)/SCDCART.iso
 STAGE_IMAGE ?= ../cart_images/R11A_1.bin
 STAGE_PACK  ?= ../stage_packs/R11A_1.rsdk
 $(B)/sh2_engboot.o: sh2_engboot.c ../md/cart_verify.h | $(B)
-	$(SH)gcc $(SH2FLAGS) -I../md $< -o $@
+	$(SH)gcc $(SH2FLAGS) $(if $(CART_ED),-DCART_ED,) -I../md $< -o $@
 # REV R1: PLANES=1 (default) - the Genesis draws the level (md/sgb.h): the engine without its renderer
 # (SCD32X_SH2, 224 lines), the act's G<list>S<pos>.MDG files from GAME_DATA on the disc.
 # START=1 0: start straight in list 1 scene 0 (Palmtree Panic 1 Present); DEMO_PAD=1: the PC check's

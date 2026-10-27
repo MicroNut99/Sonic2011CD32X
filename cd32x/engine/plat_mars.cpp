@@ -519,6 +519,9 @@ static const unsigned char *splash_image() /* the picture after the data pack (c
         return 0;
     return CART_PACK + off;
 }
+#if defined(CART_ED)
+static void splash_ed_note(); /* (below splash_note) */
+#endif
 static void splash_show() __attribute__((noinline));
 static void splash_show()
 {
@@ -553,6 +556,9 @@ static void splash_show()
     splashLit         = 0;
     splashFrom        = 0;
     splashTo          = splashSegs;
+#if defined(CART_ED)
+    splash_ed_note(); /* EDCD: the loading picture says LOADING GAME */
+#endif
 }
 static void splash_part(int from, int to) /* the bar's share of the next file: segments from - to of 32 */
 {
@@ -616,6 +622,9 @@ static void splash_note(const char *t, const char *above)
     flip_wait(); /* the picture shown again */
     MARS_VDP_DISPMODE = d;
 }
+#if defined(CART_ED)
+static void splash_ed_note() { splash_note("LOADING GAME"); }
+#endif
 static void splash_fail() /* a file did not load: the picture off, the Genesis display on - line 10 shows the STATE */
 {
     splashUp          = false;
@@ -3708,6 +3717,12 @@ static void big_boot_preload()
 }
 static void big_detect() /* (the first scene load after power-on) MicroNut99's page mapper, 16 or 8 MB - read only */
 {
+#if BIG_ED
+    bigN = 0; /* EDCD: no pages and no preloads (they are the 16 MB cart's) - every scene loads from the CD into page 0,
+                 as on the 4 MB cart. The EverDrive wipes its RAM whenever its menu runs: nothing kept there would
+                 be seen again. */
+    return;
+#endif
     comm_idle();
     if (sd_page(1, 0) < 0)
         return;
@@ -3755,6 +3770,9 @@ int plat_big_cart(int set) /* the Options Menu's BIG CART: -1 asks; 0 off; 8 or 
     if (set >= 0) {
         if (bigN)
             big_show(-1); /* page 0 and page 1 again */
+#if BIG_ED
+        set = 0; /* EDCD: no pages, no preloads */
+#endif
         bigN     = set == 16 ? BIG_MAX : set == 8 ? 1 : 0;
         bigKnown = false;
         bigGroup = 0;

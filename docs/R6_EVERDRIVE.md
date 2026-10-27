@@ -134,3 +134,21 @@ ares v148 with the CD32X BootCamp's EverDrive PRO board (the launcher path: a `S
 - ares does not model the EverDrive's write-enable bit, so it cannot prove the `m1_cpy_w` W-toggle or the
   RV-garbage rule; those, and the whole boot, still need the console. But the boot no longer stops at the
   splash, and the page switch - the specific thing that was broken - is exercised.
+
+## R6ED: no preloads, LOADING GAME, saves in bank 31 (27 Oct 2026)
+
+- **No preloads on EDCD.** Preloads are the 16 MB cart's only; the EverDrive wipes its RAM whenever its menu runs.
+  Under `CART_ED` the engine sees no page mapper (`big_detect`: `bigN = 0`), so there is no boot preload, no act-start
+  preload and no "FIRST TIME SETTING UP THE CART" screen: every scene loads from the CD into page 0, as on the 4 MB
+  cart. The Options Menu's BIG CART stays off.
+- **LOADING GAME** under the loading picture's bar - the boot loader's picture at power-on (`sh2_engboot.c`) and the
+  engine's between scenes (`plat_mars.cpp`). `CART_ED` only.
+- **Saves in the EverDrive's bank 31.** In the cartridge boot the Sega CD BIOS's backup-RAM calls fail (ares: no
+  `SONICCD32X_` file ever written). Under `SCD_MODE1` (the launcher's Sub-CPU program only) commands 56 / 59 keep the
+  save in bank 31 (window 7 = bank 31 for the copy, then bank 7 again): file f at bank 31 + f * 512. The Sub-CPU keeps
+  the save in its own RAM: read from bank 31 before the first floor begins, written back when no floor runs - the
+  copies use Word RAM, which belongs to the graphics chip while the title's clouds or a special stage run (a copy then
+  hung the title). Build the launcher with `EDCD_SAVE=1`, so the EverDrive OS keeps bank 31 on the SD card.
+- **Tested in ares:** boot (LOADING GAME, no setup screen) -> title -> main menu -> Save Select -> Player Select ->
+  Palmtree Panic 1, played; the save written to bank 31; after a relaunch Save Select shows slot 1 PALMTREE PANIC 1.
+- The normal disc is byte for byte R5H's (`APP.BIN` 46cf93bc..., `engine.bin` = R5H's `SONICCD.PAK`).
