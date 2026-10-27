@@ -473,7 +473,16 @@ static void floor_start(void)             /* the chip: this frame's floor into t
 static void flr_vdp2(uint16_t a, uint16_t b) { do_md_cmd2(MD_CMD_WRITE_32X_32, 0xC00004, ((uint32_t)a << 16) | b); }
 static void flr_dma(uint32_t dst, uint32_t src, int n, int first)   /* src: the 68000's address of dst + 2's word */
 {
+#ifdef SCD_MODE1
+    /* EDCD (the launcher's program): in the cartridge boot the 68000 sees Word RAM at 0x600000, and 0x200000 is the
+       EverDrive.  The listener moves its commands' address arguments there itself (m1_arg), but this source goes
+       to the VDP's DMA registers as a value, which it does not touch - so the chip's floor, the special stages' sky
+       and the title's clouds were copied from the cart: a black special stage on the console (27 Oct 2026), the
+       title without its clouds in ares. */
+    const uint32_t s = (src + 0x400000) >> 1;
+#else
     const uint32_t s = src >> 1;
+#endif
     if (first)
         flr_vdp2(0x8F02, 0x9700 | ((s >> 16) & 0x7F));         /* auto-increment 2; the source (bits 6-7 0: the */
     flr_vdp2(0x9500 | (s & 0xFF), 0x9600 | ((s >> 8) & 0xFF));  /* 68000's side) */
