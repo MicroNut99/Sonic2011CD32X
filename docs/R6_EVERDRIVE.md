@@ -128,6 +128,9 @@ ares v148 with the CD32X BootCamp's EverDrive PRO board (the launcher path: a `S
   loader copies the engine into the EverDrive, the **title renders** (clouds on the floor chip), and the R4G
   first-time preload runs ("SETTING UP THE CART") - i.e. the `m1_page`/`m1_regcpy` page switches work, which
   is the fix the console flagged as the reason paged games "loaded everything and then found nothing".
+- a 60,000-frame run (1,000 s emulated) gets through the preload and plays the title's attract demos -
+  special stage 3 and regular acts, each from its own page of the EverDrive - and back to the title: the
+  scenes the preload put into pages 1-6 are found and played.
 - ares does not model the EverDrive's write-enable bit, so it cannot prove the `m1_cpy_w` W-toggle or the
   RV-garbage rule; those, and the whole boot, still need the console. But the boot no longer stops at the
   splash, and the page switch - the specific thing that was broken - is exercised.
